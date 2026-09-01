@@ -410,13 +410,14 @@ describe("fulfillImageCall", () => {
     expect(xaiCalls[0]!.n).toBe(2);
   });
 
-  test("clamps n > 4 down to 4", async () => {
+  test("rejects n > 4 before provider dispatch", async () => {
     reset();
-    await fulfillImageCall(
+    const result = await fulfillImageCall(
       { id: "c1", name: "image_gen", arguments: JSON.stringify({ prompt: "x", n: 100 }) },
       plan, { spent: 0 },
     );
-    expect(xaiCalls[0]!.n).toBe(4);
+    expect(result).toMatchObject({ ok: false, count: 0, error: "image count must be an integer from 1 through 4" });
+    expect(xaiCalls).toHaveLength(0);
   });
 
   test("image_url edit input is rejected before xAI dispatch", async () => {

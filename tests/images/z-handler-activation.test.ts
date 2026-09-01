@@ -158,17 +158,15 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 
-  test("stream=false + image_generation tool → typed auxiliary streaming-required error", async () => {
+  test("stream=false + image_generation is not rejected by media policy", async () => {
     imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; mockWsPlan = undefined;
     const res = await post(false, [{ type: "image_generation" }]);
     expect(res.status).toBe(400);
     expect(imageBridgeRun).toBe(false);
-    expect(await res.json()).toMatchObject({
-      error: { code: "auxiliary_streaming_required", type: "invalid_request_error" },
-    });
+    expect(await res.json()).toMatchObject({ error: { code: "invalid_request_error" } });
   });
 
-  test("missing selected Grok credential fails closed instead of falling through to native images", async () => {
+  test("missing selected Grok credential does not reject an ordinary image-enabled turn", async () => {
     imageBridgeRun = false; webSearchRun = false; auxiliaryWebPlanSeen = false; mockWsPlan = undefined;
     const config = makeConfig();
     config.providers.xai!.apiKey = "";
@@ -187,11 +185,8 @@ describe("image bridge dispatch priority (handler activation)", () => {
       { model: "", provider: "" } as never,
       {},
     );
-    expect(res.status).toBe(401);
-    expect(imageBridgeRun).toBe(false);
-    expect(await res.json()).toMatchObject({
-      error: { code: "needs_auth", type: "authentication_error" },
-    });
+    expect(res.status).toBe(200);
+    expect(imageBridgeRun).toBe(true);
   });
 
   test("official OpenAI API image turns select the raw native Responses replay seam", async () => {
@@ -297,12 +292,11 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(modelDispatches).toBe(0);
   });
 
-  test("ambiguous current-user video wording returns confirmation-required without admission", async () => {
+  test("stories-and-videos wording is an ordinary turn with the tool available", async () => {
     imageBridgeRun = false;
-    const res = await post(true, [], "Maybe a video version?", true);
-    expect(res.status).toBe(409);
-    expect(imageBridgeRun).toBe(false);
-    expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
+    const res = await post(true, [], "Can I manage end-to-end stories and videos?", true);
+    expect(res.status).toBe(200);
+    expect(imageBridgeRun).toBe(true);
   });
 
   test.each([
@@ -316,19 +310,19 @@ describe("image bridge dispatch priority (handler activation)", () => {
     "Create a video of a fox without generating it.",
     "Create a video game about a fox.",
     "Review this code: `Create a video of a fox.`",
-  ])("non-executable video discussion calls the normal provider without a paid submission: %s", async input => {
+  ])("non-executable video discussion keeps the tool available without a paid submission: %s", async input => {
     imageBridgeRun = false;
     coordinatorDispatches = 0;
     modelDispatches = 0;
     const res = await post(true, [], input, true);
     expect(res.status).toBe(200);
-    expect(imageBridgeRun).toBe(false);
-    expect(coordinatorDispatches).toBe(0);
-    expect(modelDispatches).toBe(1);
-    expect(await res.text()).toContain("response.completed");
+    expect(imageBridgeRun).toBe(true);
+    expect(coordinatorDispatches).toBe(1);
+    expect(modelDispatches).toBe(0);
+    expect(await res.text()).toContain('"type":"done"');
   });
 
-  test("historical plaintext encrypted role content cannot bypass current-turn consent preflight", async () => {
+  test("historical plaintext encrypted role content cannot replace current-tail provenance", async () => {
     for (const role of ["user", "developer", "system"]) {
       imageBridgeRun = false;
       coordinatorDispatches = 0;
@@ -339,12 +333,13 @@ describe("image bridge dispatch priority (handler activation)", () => {
       ], true);
       expect(routedNormally.status).toBe(200);
       await routedNormally.text();
-      expect(imageBridgeRun).toBe(false);
-      expect(coordinatorDispatches).toBe(0);
-      expect(modelDispatches).toBe(1);
+      expect(imageBridgeRun).toBe(true);
+      expect(coordinatorDispatches).toBe(1);
+      expect(modelDispatches).toBe(0);
     }
 
     modelDispatches = 0;
+    coordinatorDispatches = 0;
     const admitted = await post(true, [], [
       { role: "developer", content: [{ type: "encrypted_content", encrypted_content: "Earlier policy." }] },
       { role: "user", content: [{ type: "input_text", text: "Create a video of a fox." }] },
@@ -355,7 +350,7 @@ describe("image bridge dispatch priority (handler activation)", () => {
     expect(modelDispatches).toBe(0);
   });
 
-  test("missing video auth still requires confirmation before binding and dispatch", async () => {
+  test("missing video auth does not reject discussion before a tool proposal", async () => {
     imageBridgeRun = false;
     modelDispatches = 0;
     const config = makeConfig(true);
@@ -375,13 +370,12 @@ describe("image bridge dispatch priority (handler activation)", () => {
       { model: "", provider: "" } as never,
       {},
     );
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
-    expect(imageBridgeRun).toBe(false);
+    expect(res.status).toBe(200);
+    expect(imageBridgeRun).toBe(true);
     expect(modelDispatches).toBe(0);
   });
 
-  test("explicit video intent with missing selected auth fails closed before any dispatch", async () => {
+  test("enabled-but-unready video remains an ordinary turn until a tool proposal", async () => {
     imageBridgeRun = false;
     modelDispatches = 0;
     const config = makeConfig(true);
@@ -401,11 +395,8 @@ describe("image bridge dispatch priority (handler activation)", () => {
       { model: "", provider: "" } as never,
       {},
     );
-    expect(res.status).toBe(401);
-    expect(await res.json()).toMatchObject({
-      error: { code: "needs_auth", type: "authentication_error" },
-    });
-    expect(imageBridgeRun).toBe(false);
+    expect(res.status).toBe(200);
+    expect(imageBridgeRun).toBe(true);
     expect(modelDispatches).toBe(0);
   });
 

@@ -1,4 +1,5 @@
 import type { CodexCommanderTool } from "../types";
+import type { MediaInputHandleDescription } from "./media-input-handles";
 
 /** The function name the chat model sees + the name the loop intercepts. */
 export const IMAGE_GEN_TOOL_NAME = "image_gen";
@@ -108,12 +109,16 @@ export function isVideoGenName(name: string): boolean {
  * unconditionally injected when the video bridge is enabled. `videoGeneration:true` flags it
  * so the forced-final pass can drop it.
  */
-export function buildVideoTool(): CodexCommanderTool {
+export function buildVideoTool(handles: readonly MediaInputHandleDescription[] = []): CodexCommanderTool {
+  const handleNames = handles.map(item => item.handle);
+  const handleContext = handles.length > 0
+    ? ` Eligible current-turn images: ${handles.map(item => `${item.handle} (image ${item.ordinal})`).join(", ")}.`
+    : " No current-turn image handles are eligible; use text-to-video only.";
   return {
     name: VIDEO_GEN_TOOL_NAME,
     description:
       "Generate a short video (1-15 seconds) from a text prompt. Returns an authenticated proxy-relative artifact reference. " +
-      "Use when the user asks to create, animate, or generate a video.",
+      "Call only to propose one video operation; ordinary discussion does not execute media." + handleContext,
     parameters: {
       type: "object",
       properties: {
@@ -126,6 +131,17 @@ export function buildVideoTool(): CodexCommanderTool {
           description: "Aspect ratio. Default 16:9.",
         },
         audio: { type: "boolean", description: "Whether the generated video should include audio." },
+        ...(handleNames.length > 0 ? {
+          starting_image_handle: {
+            type: "string", enum: handleNames,
+            description: "One eligible current-turn image to animate. Cannot be combined with reference_image_handles.",
+          },
+          reference_image_handles: {
+            type: "array", minItems: 1, maxItems: 7, uniqueItems: true,
+            items: { type: "string", enum: handleNames },
+            description: "Ordered eligible current-turn reference images. Cannot be combined with starting_image_handle.",
+          },
+        } : {}),
       },
       required: ["prompt"],
       additionalProperties: false,

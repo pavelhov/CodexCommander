@@ -79,25 +79,29 @@ describe("planImageBridge", () => {
     expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
   });
 
-  test("_imageGeneration not set → undefined", async () => {
-    expect(await planImageBridge(makeConfig({ test: routed }, { bridgeEnabled: true }), makeParsed(false), routed)).toBeUndefined();
+  test("selected image capability plans the stable tool without client media wording or declaration", async () => {
+    const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai", apiKey: "test-token" } }, { bridgeEnabled: true });
+    const plan = await planImageBridge(cfg, makeParsed(false), routed);
+    expect(plan?.toolNames.has("image_gen")).toBe(true);
   });
 
   test("native api.openai.com route is eligible when the image opt-in is on", async () => {
     const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai", apiKey: "test-token" } }, { bridgeEnabled: true });
     const plan = await planImageBridge(cfg, makeParsed(true), openaiRouted);
     expect(plan).toBeDefined();
-    expect(plan!.auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
+    expect(plan!.bindAuth!()).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
   });
 
   test("no xAI provider → undefined", async () => {
     expect(await planImageBridge(makeConfig({ test: routed }, { bridgeEnabled: true }), makeParsed(true), routed)).toBeUndefined();
   });
 
-  test("xAI provider but apiKey empty and no OAuth → undefined", async () => {
+  test("xAI provider but apiKey empty remains advertised and binds only on proposal", async () => {
     tokenResult = null;
     const cfg = makeConfig({ xai: { baseUrl: "https://api.x.ai", apiKey: "" } }, { bridgeEnabled: true });
-    expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
+    const plan = await planImageBridge(cfg, makeParsed(true), routed);
+    expect(plan).toBeDefined();
+    expect(() => plan!.bindAuth!()).toThrow();
   });
 
   test("xAI provider with API key → returns plan with correct model", async () => {
@@ -105,9 +109,10 @@ describe("planImageBridge", () => {
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
     expect(plan).toBeDefined();
     expect(plan!.model).toBe("grok-imagine-image-2.0");
-    expect(plan!.auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
-    expect(plan!.auth).not.toHaveProperty("token");
-    expect(plan!.auth).not.toHaveProperty("baseUrl");
+    const auth = plan!.bindAuth!();
+    expect(auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
+    expect(auth).not.toHaveProperty("token");
+    expect(auth).not.toHaveProperty("baseUrl");
   });
 
   test("subscription OAuth binds the canonical xAI slot without consulting an API key", async () => {
@@ -124,9 +129,10 @@ describe("planImageBridge", () => {
         }],
       } as never),
     });
-    expect(plan?.auth).toMatchObject({ authSource: "subscription_oauth", providerKind: "canonical" });
-    expect(JSON.stringify(plan?.auth)).not.toContain("must-not-be-used");
-    expect(JSON.stringify(plan?.auth)).not.toContain("ephemeral");
+    const auth = plan!.bindAuth!();
+    expect(auth).toMatchObject({ authSource: "subscription_oauth", providerKind: "canonical" });
+    expect(JSON.stringify(auth)).not.toContain("must-not-be-used");
+    expect(JSON.stringify(auth)).not.toContain("ephemeral");
   });
 
   test("custom-named provider with api.x.ai baseUrl cannot arm paid media", async () => {
@@ -179,8 +185,9 @@ describe("planImageBridge", () => {
     );
     const plan = await planImageBridge(cfg, makeParsed(true), routed);
     expect(plan).toBeDefined();
-    expect(plan!.auth).not.toHaveProperty("baseUrl");
-    expect(JSON.stringify(plan!.auth)).not.toContain("evil.example.com");
+    const auth = plan!.bindAuth!();
+    expect(auth).not.toHaveProperty("baseUrl");
+    expect(JSON.stringify(auth)).not.toContain("evil.example.com");
   });
 
   test("custom-named provider with api.x.ai baseUrl does NOT get built-in OAuth token", async () => {
@@ -202,7 +209,9 @@ describe("planImageBridge", () => {
       { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "stale-key", authMode: "oauth" } },
       { bridgeEnabled: true, authSource: "subscription_oauth" },
     );
-    expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
+    const plan = await planImageBridge(cfg, makeParsed(true), routed);
+    expect(plan).toBeDefined();
+    expect(() => plan!.bindAuth!()).toThrow();
     tokenResult = null;
   });
 
@@ -212,7 +221,9 @@ describe("planImageBridge", () => {
       { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "", authMode: "key" } },
       { bridgeEnabled: true },
     );
-    expect(await planImageBridge(cfg, makeParsed(true), routed)).toBeUndefined();
+    const plan = await planImageBridge(cfg, makeParsed(true), routed);
+    expect(plan).toBeDefined();
+    expect(() => plan!.bindAuth!()).toThrow();
     tokenResult = null;
   });
 });

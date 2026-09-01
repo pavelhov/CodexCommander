@@ -302,7 +302,10 @@ export async function fulfillImageCall(
     return { ok: false, model: plan.model, prompt: "", files: [], count: 0, error: "missing prompt" };
   }
 
-  const n = typeof obj.n === "number" ? Math.max(1, Math.min(4, Math.floor(obj.n))) : 1;
+  const n = obj.n === undefined ? 1 : obj.n;
+  if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > 4) {
+    return { ok: false, model: plan.model, prompt, files: [], count: 0, error: "image count must be an integer from 1 through 4" };
+  }
   const imageUrl =
     typeof obj.image_url === "string" ? obj.image_url : typeof obj.image === "string" ? obj.image : undefined;
   if (imageUrl) {
@@ -321,8 +324,8 @@ export async function fulfillImageCall(
   let result;
   try {
     result = await callXaiImages(
-      { prompt, model: plan.model, n, imageUrl, size, quality },
-      plan.auth,
+      { prompt, model: plan.model, n: n as number, imageUrl, size, quality },
+      plan.auth!,
       signal,
       plan.timeoutMs,
     );

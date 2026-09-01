@@ -34,8 +34,8 @@ import {
   type ModelVideoRuntime,
 } from "../../images/media-runtime";
 import type { VideoOperationIdentity } from "../../images/video-operation-key";
-import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images/synthetic-tool";
-import type { ImageBridgePlan, VideoBridgePlan } from "../../images/types";
+import { buildVideoTool, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images/synthetic-tool";
+import type { ImageBridgePlan, MediaCredentialBinding, VideoBridgePlan } from "../../images/types";
 import { runWebSearch, type SidecarOutcome } from "../../web-search/executor";
 import { runAnthropicWebSearch } from "../../web-search/anthropic-executor";
 import { formatWebSearchResults } from "../../web-search/format-result";
@@ -116,12 +116,54 @@ function imageArgumentError(raw: string): string | undefined {
   const obj = args as Record<string, unknown>;
   const prompt = typeof obj.prompt === "string" ? obj.prompt : typeof obj.input === "string" ? obj.input : "";
   if (!prompt) return "missing prompt";
+  if (obj.n !== undefined && (!Number.isInteger(obj.n) || (obj.n as number) < 1 || (obj.n as number) > 4)) {
+    return "image count must be an integer from 1 through 4";
+  }
   const imageUrl = typeof obj.image_url === "string"
     ? obj.image_url
     : typeof obj.image === "string"
       ? obj.image
       : undefined;
   return imageUrl ? "grok_image_edits_unsupported" : undefined;
+}
+
+function imageRequestedCount(raw: string): number {
+  try {
+    const args = JSON.parse(raw || "{}") as { n?: unknown };
+    return typeof args?.n === "number" && Number.isInteger(args.n) ? args.n : 1;
+  } catch {
+    return 1;
+  }
+}
+
+function bindPlanAuth(plan: ImageBridgePlan | VideoBridgePlan): MediaCredentialBinding {
+  const binding = plan.auth ?? plan.bindAuth?.();
+  if (!binding) throw new Error("needs_auth");
+  return binding;
+}
+
+/** Add request-local handle context to the canonical tool created by the native rewrite. */
+function rewriteNativeVideoHandleContext(body: unknown, videoPlan: VideoBridgePlan): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const source = body as Record<string, unknown>;
+  const { videoGeneration: _marker, ...tool } = buildVideoTool(videoPlan.mediaInputs?.descriptions ?? []);
+  const replacement = { type: "function", ...tool };
+  const rewriteTools = (value: unknown): unknown => Array.isArray(value)
+    ? value.map(item => item && typeof item === "object" && !Array.isArray(item)
+      && (item as Record<string, unknown>).type === "function"
+      && (item as Record<string, unknown>).name === VIDEO_GEN_TOOL_NAME
+      ? replacement
+      : item)
+    : value;
+  const tools = rewriteTools(source.tools);
+  const input = Array.isArray(source.input) ? source.input.map(item => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+    const record = item as Record<string, unknown>;
+    return record.type === "additional_tools" && Array.isArray(record.tools)
+      ? { ...record, tools: rewriteTools(record.tools) }
+      : item;
+  }) : source.input;
+  return { ...source, ...(tools !== undefined ? { tools } : {}), ...(input !== undefined ? { input } : {}) };
 }
 
 function parsedAuxiliaryCallArguments(raw: string): Record<string, unknown> {
@@ -548,6 +590,8 @@ export interface ResponsesAuxiliaryLoopDeps {
   videoTimeoutMs?: number;
   /** Paired private retry identity derived only after authenticated request admission. */
   videoOperationIdentity?: VideoOperationIdentity;
+  /** Lazy durable identity derivation, invoked only for a locally valid video proposal. */
+  resolveVideoOperationIdentity?: () => VideoOperationIdentity | undefined;
   /** Server-owned durable video runtime. Tests may inject the same narrow contract. */
   videoRuntime?: ModelVideoRuntime;
   /** Headers forwarded from the original request (e.g. Codex auth). Cloned per iteration. */
@@ -641,7 +685,10 @@ async function runNativeResponsesMediaLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
   }, failurePhase: AuxiliaryFailurePhase, onHeartbeat?: () => void): Promise<Response> => {
     let rawBody = replayBody;
     if (plan) rawBody = rewriteHostedImageGenerationForBridge(rawBody, modes.image);
-    if (videoPlan) rawBody = rewriteVideoGenerationForBridge(rawBody, modes.video, videoPlan.toolNames);
+    if (videoPlan) {
+      rawBody = rewriteVideoGenerationForBridge(rawBody, modes.video, videoPlan.toolNames);
+      if (modes.video === "synthetic") rawBody = rewriteNativeVideoHandleContext(rawBody, videoPlan);
+    }
     const iterParsed: CodexCommanderParsedRequest = {
       ...parsed,
       stream: true,
@@ -840,7 +887,7 @@ async function runNativeResponsesMediaLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
             const argumentErrors = new Map<string, string>();
             for (const call of inspection.auxiliaryCalls) {
               if (videoPlan && call.name === VIDEO_GEN_TOOL_NAME) {
-                const args = parseVideoCallArgs(call.arguments);
+                const args = parseVideoCallArgs(call.arguments, videoPlan.mediaInputs);
                 if (args.ok) videoArguments.set(call.callId, args);
                 else argumentErrors.set(call.callId, args.error);
               } else if (plan && call.name === IMAGE_GEN_TOOL_NAME) {
@@ -853,9 +900,10 @@ async function runNativeResponsesMediaLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
             const videoBatchError = videoCallCount > MAX_VIDEO_CALLS_PER_TURN
               ? `video call batch exceeds the per-turn maximum of ${MAX_VIDEO_CALLS_PER_TURN}`
               : undefined;
-            const imageCallCount = inspection.auxiliaryCalls.filter(call =>
-              plan !== undefined && call.name === IMAGE_GEN_TOOL_NAME).length;
-            const imageBatchBudgetError = imageCallCount > MAX_IMAGE_CALLS_PER_TURN - paidCalls
+            const imageRequestedTotal = inspection.auxiliaryCalls
+              .filter(call => plan !== undefined && call.name === IMAGE_GEN_TOOL_NAME)
+              .reduce((sum, call) => sum + imageRequestedCount(call.arguments), 0);
+            const imageBatchBudgetError = imageRequestedTotal > MAX_IMAGE_CALLS_PER_TURN - paidCalls
               ? `image call batch exceeds the remaining per-turn budget of ${Math.max(0, MAX_IMAGE_CALLS_PER_TURN - paidCalls)}`
               : undefined;
             const videoBatchBudgetError = videoCallCount > 0
@@ -894,8 +942,17 @@ async function runNativeResponsesMediaLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
                     };
                   } else {
                     const args = videoArguments.get(call.callId)!;
+                      let operationIdentity = deps.videoOperationIdentity;
+                      if (!operationIdentity && deps.resolveVideoOperationIdentity) {
+                        try { operationIdentity = deps.resolveVideoOperationIdentity(); } catch { /* typed denial below */ }
+                      }
                       const runtime = deps.videoRuntime ?? getDefaultModelVideoRuntime();
-                      if (!runtime) {
+                      if (deps.resolveVideoOperationIdentity && !operationIdentity) {
+                        result = {
+                          ok: false, model: videoPlan.model, prompt: "", files: [], count: 0,
+                          error: "video retry protection is unavailable",
+                        };
+                      } else if (!runtime) {
                         result = {
                           ok: false,
                           model: videoPlan.model,
@@ -911,13 +968,17 @@ async function runNativeResponsesMediaLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
                         videoSubmissionBudgetUsed += 1;
                         const deliveryRuntime: ModelVideoRuntime = runtime;
                         try {
+                          const binding = bindPlanAuth(videoPlan);
                           const submission = await runtime.submitVideo({
-                            binding: videoPlan.auth,
+                            binding,
                             deadlineAt: Date.now() + (videoTimeoutMs ?? 300_000),
-                            ...(deps.videoOperationIdentity ?? {}),
+                            ...(operationIdentity ?? {}),
                             request: {
                               prompt: args.prompt,
                               model: videoPlan.model,
+                              ...(args.mode !== "text" ? { mode: args.mode } : {}),
+                              ...(args.startingImage ? { startingImage: args.startingImage } : {}),
+                              ...(args.referenceImages ? { referenceImages: args.referenceImages } : {}),
                               duration: args.duration,
                               resolution: args.resolution,
                               aspectRatio: args.aspectRatio,
@@ -1101,14 +1162,19 @@ async function runNativeResponsesMediaLoop(deps: ResponsesAuxiliaryLoopDeps): Pr
                   error: `image call budget exhausted (max ${MAX_IMAGE_CALLS_PER_TURN} per turn)`,
                 };
               } else {
-                paidCalls += 1;
-                result = await fulfillImageCall(
-                  { id: call.callId, name: call.name, arguments: call.arguments },
-                  plan,
-                  imageBudget,
-                  signal,
-                  imageArtifacts,
-                );
+                paidCalls += imageRequestedCount(call.arguments);
+                try {
+                  const binding = bindPlanAuth(plan);
+                  result = await fulfillImageCall(
+                    { id: call.callId, name: call.name, arguments: call.arguments },
+                    { ...plan, auth: binding },
+                    imageBudget,
+                    signal,
+                    imageArtifacts,
+                  );
+                } catch {
+                  result = { ok: false, model: plan.model, prompt: "", files: [], count: 0, error: "needs_auth" };
+                }
                 if (result.dispatchCertainty === "ambiguous") {
                   imageSubmissionOutcomeUnknown = true;
                 }
@@ -1809,7 +1875,7 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                 mediaArgumentErrors.set(call, "video generation is not authorized for this turn");
                 continue;
               }
-              const args = parseVideoCallArgs(call.args);
+              const args = parseVideoCallArgs(call.args, videoPlan.mediaInputs);
               if (args.ok) videoArguments.set(call, args);
               else mediaArgumentErrors.set(call, args.error);
               continue;
@@ -1826,8 +1892,9 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
           const videoBatchError = videoCallCount > MAX_VIDEO_CALLS_PER_TURN
             ? `video call batch exceeds the per-turn maximum of ${MAX_VIDEO_CALLS_PER_TURN}`
             : undefined;
-          const imageCallCount = split.calls.filter(call => call.handler === "image").length;
-          const imageBatchBudgetError = imageCallCount > MAX_IMAGE_CALLS_PER_TURN - paidImageCalls
+          const imageRequestedTotal = split.calls.filter(call => call.handler === "image")
+            .reduce((sum, call) => sum + imageRequestedCount(call.args), 0);
+          const imageBatchBudgetError = imageRequestedTotal > MAX_IMAGE_CALLS_PER_TURN - paidImageCalls
             ? `image call batch exceeds the remaining per-turn budget of ${Math.max(0, MAX_IMAGE_CALLS_PER_TURN - paidImageCalls)}`
             : undefined;
           const videoBatchBudgetError = videoCallCount > 0
@@ -1885,8 +1952,17 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
               const videoTimeout = videoTimeoutMs ?? 300_000;
               try {
                   const videoDeadline = Date.now() + videoTimeout;
+                  let operationIdentity = deps.videoOperationIdentity;
+                  if (!operationIdentity && deps.resolveVideoOperationIdentity) {
+                    try { operationIdentity = deps.resolveVideoOperationIdentity(); } catch { /* typed denial below */ }
+                  }
                   const runtime = deps.videoRuntime ?? getDefaultModelVideoRuntime();
-                  if (!runtime) {
+                  if (deps.resolveVideoOperationIdentity && !operationIdentity) {
+                    vResult = {
+                      ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
+                      error: "video retry protection is unavailable",
+                    };
+                  } else if (!runtime) {
                     vResult = {
                       ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0,
                       error: "video recovery is unavailable (recovery_blocked)",
@@ -1896,13 +1972,17 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                     // concurrently and release durable admission, but it must not reopen this
                     // turn's one-submission allowance. Busy is the only proven no-dispatch result.
                     videoSubmissionBudgetUsed += 1;
+                    const binding = bindPlanAuth(videoPlan!);
                     const submission = await runtime.submitVideo({
-                      binding: videoPlan!.auth,
+                      binding,
                       deadlineAt: videoDeadline,
-                      ...(deps.videoOperationIdentity ?? {}),
+                      ...(operationIdentity ?? {}),
                       request: {
                         prompt: vArgs.prompt,
                         model: videoPlan!.model,
+                        ...(vArgs.mode !== "text" ? { mode: vArgs.mode } : {}),
+                        ...(vArgs.startingImage ? { startingImage: vArgs.startingImage } : {}),
+                        ...(vArgs.referenceImages ? { referenceImages: vArgs.referenceImages } : {}),
                         duration: vArgs.duration,
                         resolution: vArgs.resolution,
                         aspectRatio: vArgs.aspectRatio,
@@ -2071,11 +2151,16 @@ export async function runResponsesAuxiliaryLoop(deps: ResponsesAuxiliaryLoopDeps
                   error: `image call budget exhausted (max ${MAX_IMAGE_CALLS_PER_TURN} per turn)`,
                 };
               } else {
-                paidImageCalls += 1;
-                result = await fulfillImageCall(
-                  { id: call.id, name: call.name, arguments: call.args },
-                  plan, budget, signal, imageArtifacts,
-                );
+                paidImageCalls += imageRequestedCount(call.args);
+                try {
+                  const binding = bindPlanAuth(plan);
+                  result = await fulfillImageCall(
+                    { id: call.id, name: call.name, arguments: call.args },
+                    { ...plan, auth: binding }, budget, signal, imageArtifacts,
+                  );
+                } catch {
+                  result = { ok: false, model: plan.model, prompt: "", files: [], count: 0, error: "needs_auth" };
+                }
                 if (result.dispatchCertainty === "ambiguous") {
                   imageSubmissionOutcomeUnknown = true;
                 }

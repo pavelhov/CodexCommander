@@ -201,7 +201,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
   });
 
   test.each(UNCONFIRMED_VIDEO_INPUTS)(
-    "video confirmation blocks passthrough before any upstream call: %s",
+    "video wording remains ordinary chat without a tool proposal: %s",
     async input => {
       let upstreamHits = 0;
       upstream = serveUpstream(() => { upstreamHits += 1; });
@@ -218,9 +218,9 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       const server = startServer(0);
       try {
         const res = await postResponses(server.url, { model: "passthrough/model", input, stream: false });
-        expect(res.status).toBe(409);
-        expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
-        expect(upstreamHits).toBe(0);
+        expect(res.status).toBe(200);
+        await res.text();
+        expect(upstreamHits).toBe(1);
         expect(videoSubmissionAttempts).toBe(0);
       } finally {
         await server.stop(true);
@@ -277,7 +277,10 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     try {
       const res = await postResponses(server.url, {
         model: "passthrough/model",
-        input: "Create a six second video of a paper boat at sea.",
+        input: [{ type: "message", role: "user", content: [
+          { type: "input_text", text: "Create a six second video of a paper boat at sea." },
+          { type: "input_image", image_url: PNG_DATA_URL },
+        ] }],
         stream: true,
         tools: [{ type: "web_search" }],
       });
@@ -286,12 +289,16 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(upstreamHits).toBe(1);
       expect(upstreamBody).toContain('"name":"video_gen"');
       expect(upstreamBody).toContain('"type":"web_search"');
+      const wire = JSON.parse(upstreamBody) as { tools?: Array<Record<string, unknown>> };
+      const videoTool = wire.tools?.find(tool => tool.name === "video_gen");
+      expect(JSON.stringify(videoTool)).toContain("current_user_image_1");
+      expect(JSON.stringify(videoTool)).not.toContain(PNG_DATA_URL);
     } finally {
       await server.stop(true);
     }
   });
 
-  test("type-less and plaintext encrypted-content user messages share the early consent gate", async () => {
+  test("type-less and plaintext encrypted-content user messages share structural current-tail provenance", async () => {
     let upstreamHits = 0;
     const upstreamBodies: string[] = [];
     upstream = serveSidecar((_req, body) => {
@@ -315,7 +322,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(routedNormally.status).toBe(200);
       await routedNormally.text();
       expect(upstreamHits).toBe(1);
-      expect(upstreamBodies[0]).not.toContain('"name":"video_gen"');
+      expect(upstreamBodies[0]).toContain('"name":"video_gen"');
 
       const admitted = await postResponses(server.url, {
         model: "passthrough/model",
@@ -352,7 +359,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     }
   });
 
-  test("video confirmation blocks both the vision sidecar and routed provider", async () => {
+  test("video wording does not block the vision sidecar or routed provider", async () => {
     let upstreamHits = 0;
     let sidecarHits = 0;
     upstream = serveUpstream(() => { upstreamHits += 1; });
@@ -406,10 +413,10 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
           ] }],
         }),
       });
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({ error: { code: "video_confirmation_required" } });
-      expect(sidecarHits).toBe(0);
-      expect(upstreamHits).toBe(0);
+      expect(res.status).toBe(200);
+      await res.text();
+      expect(sidecarHits).toBe(1);
+      expect(upstreamHits).toBe(1);
     } finally {
       await server.stop(true);
     }

@@ -44,9 +44,10 @@ describe("planVideoBridge", () => {
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeDefined();
     expect(plan!.model).toBe("grok-imagine-video-1.5");
-    expect(plan!.auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
-    expect(plan!.auth).not.toHaveProperty("token");
-    expect(plan!.auth).not.toHaveProperty("baseUrl");
+    const auth = plan!.bindAuth!();
+    expect(auth).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
+    expect(auth).not.toHaveProperty("token");
+    expect(auth).not.toHaveProperty("baseUrl");
     expect(plan!.toolNames.has(VIDEO_GEN_TOOL_NAME)).toBe(true);
   });
 

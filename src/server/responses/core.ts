@@ -65,6 +65,7 @@ import {
   type VideoOperationIdentity,
 } from "../../images/video-operation-key";
 import { deriveCurrentUserVideoIntent, runResponsesAuxiliaryLoop, type CurrentUserVideoIntent } from "../../responses/auxiliary";
+import { buildMediaInputHandleTable, type MediaInputHandleTable } from "../../images/media-input-handles";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -622,6 +623,8 @@ export interface HandleResponsesOptions {
   comboAttempt?: boolean;
   /** Internal combo handoff: preserve the one current-user video-intent decision. */
   currentUserVideoIntent?: CurrentUserVideoIntent;
+  /** Internal combo handoff: immutable handles from the original authenticated current-user tail. */
+  mediaInputHandles?: MediaInputHandleTable;
   /** Internal combo handoff: allow a later same-provider model after a reset-derived 429/402. */
   deferCodexResetDerivedCooldown?: boolean;
   /** 030-owned handoff when a child consumed the original failure under bounds. */
@@ -1403,11 +1406,11 @@ async function handleResponsesInner(
       );
     }
   };
-  // Video enablement is not spend consent. Resolve the current user's wording once, before the
-  // combo handoff or any provider-capable sidecar/adapter path. Compaction keeps its existing
-  // routing contract even when retained payload text mentions video.
+  // Resolve structural current-user provenance once, before replay expansion or combo handoff.
+  // Wording is never spend authority; only an intercepted tool proposal can consume allowance.
   let videoIntent = options.currentUserVideoIntent;
-  if (videoIntent === undefined && config.images?.videoBridgeEnabled === true) {
+  if (videoIntent === undefined
+    && (config.images?.videoBridgeEnabled === true || config.images?.bridgeEnabled === true)) {
     // Build a preflight-only semantic view with parser parity. The full spawn compatibility sanitizer
     // also reclassifies plaintext agent_message items as user messages; doing that before consent
     // derivation would let delegated task text authorize paid media. Clone and sanitize every other
@@ -1447,39 +1450,21 @@ async function handleResponsesInner(
         : deriveCurrentUserVideoIntent(intentBody);
     }
   }
-  if (videoIntent?.state === "confirmation_required") {
-    return auxiliaryPolicyErrorResponse(
-      409,
-      "video_confirmation_required",
-      "Confirm an explicit text-to-video generation request before video submission",
-    );
-  }
+  const mediaInputHandles = options.mediaInputHandles ?? buildMediaInputHandleTable(body);
   let videoOperationIdentity = options.videoOperationIdentity;
   const clientVideoRetryId = req.headers.get("x-client-request-id");
-  if (videoOperationIdentity === undefined
-    && videoIntent?.state === "explicit"
+  const resolveVideoOperationIdentity = videoOperationIdentity === undefined
+    && videoIntent?.state === "eligible"
     && options.inboundTransport !== "websocket"
-    && isValidVideoClientRequestId(clientVideoRetryId)) {
-    try {
-      videoOperationIdentity = options.deriveVideoOperationIdentity?.(clientVideoRetryId, body);
-    } catch {
-      // Store corruption/closure must not silently degrade an advertised exact retry
-      // into another paid submission. The public error deliberately carries no details.
-    }
-    if (!videoOperationIdentity) {
-      return auxiliaryPolicyErrorResponse(
-        503,
-        "video_retry_protection_unavailable",
-        "Video retry protection is temporarily unavailable",
-        "server_error",
-      );
-    }
-  }
+    && isValidVideoClientRequestId(clientVideoRetryId)
+    ? () => options.deriveVideoOperationIdentity?.(clientVideoRetryId, body)
+    : undefined;
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, {
       ...options,
       ...(videoIntent ? { currentUserVideoIntent: videoIntent } : {}),
+      mediaInputHandles,
       ...(videoOperationIdentity ? { videoOperationIdentity } : {}),
     });
   }
@@ -1803,7 +1788,7 @@ async function handleResponsesInner(
   logCtx.providerAdapter = adapter.name;
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
-  const explicitVideoIntent = parsed._compactionRequest !== true && videoIntent?.state === "explicit";
+  const mediaToolEligible = parsed._compactionRequest !== true && videoIntent?.state === "eligible";
 
   if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
     return formatErrorResponse(
@@ -1909,7 +1894,7 @@ async function handleResponsesInner(
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
 
-  if ("passthrough" in adapter && adapter.passthrough && !routedCompaction && !explicitVideoIntent) {
+  if ("passthrough" in adapter && adapter.passthrough && !routedCompaction && !mediaToolEligible) {
     const imageGenCallAliases = route.provider.authMode === "forward"
       ? new Map<string, { namespace: string; name: string }>()
       : imageGenToolCallAliases(toolBridgeMaps.toolNsMap, translatorBudget);
@@ -2541,38 +2526,22 @@ async function handleResponsesInner(
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, isPassthrough, route.provider, route.modelId, openAiSidecar)
     : undefined;
-  const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
-  if (!routedCompaction && config.images?.bridgeEnabled === true && parsed._imageGeneration && !imgPlan) {
-    return auxiliaryPolicyErrorResponse(
-      401,
-      "needs_auth",
-      "The selected Grok image credential needs authentication",
-      "authentication_error",
-    );
-  }
-  const videoEnabled = !routedCompaction && config.images?.videoBridgeEnabled === true;
-  const videoPlanCandidate = videoEnabled && videoIntent?.state === "explicit"
+  // The auxiliary coordinator is streaming-only today. Non-streaming requests remain ordinary
+  // chat instead of being rejected merely because media is enabled.
+  const mediaCoordinatorEligible = mediaToolEligible && parsed.stream;
+  const imgPlan = mediaCoordinatorEligible && config.images?.bridgeEnabled === true
+    ? await planImageBridge(config, parsed, route.provider)
+    : undefined;
+  const videoEnabled = mediaCoordinatorEligible && config.images?.videoBridgeEnabled === true;
+  const videoPlanCandidate = videoEnabled
     ? await planVideoBridge(config, parsed, route.provider)
     : undefined;
-  if (videoEnabled && videoIntent?.state === "explicit" && !videoPlanCandidate) {
-    return auxiliaryPolicyErrorResponse(
-      401,
-      "needs_auth",
-      "The selected Grok video credential needs authentication",
-      "authentication_error",
-    );
-  }
-  const vidPlan = videoIntent?.state === "explicit" ? videoPlanCandidate : undefined;
+  const vidPlan = videoPlanCandidate
+    ? { ...videoPlanCandidate, mediaInputs: mediaInputHandles }
+    : undefined;
   if (imgPlan || vidPlan || wsPlan) {
     // Auxiliary media depends on renderer-safe incremental events. Both handlers expose the same
     // typed failure; the standalone Images API remains an independent non-streaming route.
-    if ((imgPlan || vidPlan) && !parsed.stream) {
-      return auxiliaryPolicyErrorResponse(
-        400,
-        "auxiliary_streaming_required",
-        "Responses auxiliary media requires stream=true",
-      );
-    }
     // Replace any pre-existing image_gen/video_gen aliases instead of appending duplicate wire names.
     const priorTools = parsed.context.tools ?? [];
     const bridgeTools = [...priorTools.filter(t => {
@@ -2587,7 +2556,7 @@ async function handleResponsesInner(
     })];
     const existingNames = new Set(bridgeTools.filter(t => !t.namespace).map(t => t.name));
     if (imgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) bridgeTools.push(buildImageTool());
-    if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool());
+    if (vidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) bridgeTools.push(buildVideoTool(mediaInputHandles.descriptions));
     if (wsPlan && !existingNames.has("web_search")) bridgeTools.push(buildWebSearchTool());
     parsed.context.tools = bridgeTools;
     // Hosted image_generation tool_choice / allowed_tools must target the synthetic function name.
@@ -2614,6 +2583,7 @@ async function handleResponsesInner(
       ...(imgPlan ? { plan: imgPlan } : {}),
       ...(vidPlan ? { videoPlan: vidPlan } : {}),
       ...(vidPlan && videoOperationIdentity ? { videoOperationIdentity } : {}),
+      ...(vidPlan && resolveVideoOperationIdentity ? { resolveVideoOperationIdentity } : {}),
       ...(wsPlan ? {
         webSearchPlan: {
           backend: wsPlan.backend,

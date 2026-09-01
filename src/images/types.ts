@@ -1,5 +1,6 @@
 import type { MediaAuthSource } from "../types";
 import type { ProviderMediaDescriptor } from "../providers/registry";
+import type { MediaInputHandleTable } from "./media-input-handles";
 
 export type MediaCredentialObservationState = "ready" | "missing" | "reauthentication_required";
 
@@ -130,7 +131,9 @@ export interface MediaCredentialBinding {
 
 export interface ImageBridgePlan {
   /** Private request-bound credential selector; the bearer is resolved only at dispatch. */
-  auth: MediaCredentialBinding;
+  auth?: MediaCredentialBinding;
+  /** Binds the selected credential only after a model tool proposal passes local policy. */
+  bindAuth?: () => MediaCredentialBinding;
   model: string;
   toolNames: Set<string>;
   /** Per-call xAI deadline (ms). Defaults inside callXaiImages when omitted. */
@@ -156,7 +159,11 @@ export interface ImageCallResult {
 /** Plan for the video bridge. Same auth/provider shape as image, without image-specific defaults. */
 export interface VideoBridgePlan {
   /** Exact credential source/slot/digest bound before any paid action. */
-  auth: MediaCredentialBinding;
+  auth?: MediaCredentialBinding;
+  /** Binds the selected credential only after a model tool proposal passes local policy. */
+  bindAuth?: () => MediaCredentialBinding;
+  /** Private current-turn handle table; never serialized or persisted. */
+  mediaInputs?: MediaInputHandleTable;
   model: string;
   toolNames: Set<string>;
   /** Per-call xAI deadline (ms) for submit + poll. */

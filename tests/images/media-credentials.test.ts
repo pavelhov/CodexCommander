@@ -249,9 +249,8 @@ describe("media credential binding", () => {
     const binding = bindMediaCredential(canonical);
     expect(binding).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
     expect(JSON.stringify(binding)).not.toContain("alias-managed-key");
-    expect(await planImageBridge(canonical, parsed, canonical.providers.xai!)).toMatchObject({
-      auth: { authSource: "api_key", providerKind: "canonical" },
-    });
+    const plan = await planImageBridge(canonical, parsed, canonical.providers.xai!);
+    expect(plan?.bindAuth?.()).toMatchObject({ authSource: "api_key", providerKind: "canonical" });
   });
 
   test("an already-durable legacy alias binding may resolve only its exact prior key slot", async () => {

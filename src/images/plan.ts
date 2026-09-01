@@ -46,20 +46,11 @@ export async function planImageBridge(
 ): Promise<ImageBridgePlan | undefined> {
   const route = resolveMediaRoute(config, "image");
   if (route.state !== "selected" || route.descriptor?.executor !== "xai-media-v1") return undefined;
-  if (!parsed._imageGeneration) return undefined;
-  let auth: ImageBridgePlan["auth"];
-  try {
-    auth = bindMediaCredential(config, credentialDeps);
-  } catch {
-    // An enabled-but-unready bridge is fail-closed. The existing/native tool remains
-    // unavailable for this opted-in request rather than consulting another source.
-    return undefined;
-  }
   // The synthetic tool injected into the conversation is named IMAGE_GEN_TOOL_NAME,
   // which is what the model will actually call. Merge it with any original hosted tool names.
-  const toolNames = new Set(parsed._imageGeneration.toolNames);
+  const toolNames = new Set(parsed._imageGeneration?.toolNames ?? []);
   toolNames.add(IMAGE_GEN_TOOL_NAME);
-  const original = parsed._imageGeneration.originalTool;
+  const original = parsed._imageGeneration?.originalTool;
   const hostedSize = typeof original?.size === "string" ? original.size : undefined;
   const hostedQuality = typeof original?.quality === "string" ? original.quality : undefined;
   const timeoutMs = clampImageTimeoutMs(config.images?.timeoutMs);
@@ -67,7 +58,7 @@ export async function planImageBridge(
   const artifactsKeepCount =
     typeof keepRaw === "number" && Number.isFinite(keepRaw) ? Math.floor(keepRaw) : undefined;
   return {
-    auth,
+    bindAuth: () => bindMediaCredential(config, credentialDeps),
     model: config.images?.bridgeModel ?? route.descriptor.operations.image!.model,
     toolNames,
     ...(hostedSize ? { defaultSize: hostedSize } : {}),
@@ -94,12 +85,6 @@ export async function planVideoBridge(
 ): Promise<VideoBridgePlan | undefined> {
   const route = resolveMediaRoute(config, "video");
   if (route.state !== "selected" || route.descriptor?.executor !== "xai-media-v1") return undefined;
-  let auth: VideoBridgePlan["auth"];
-  try {
-    auth = bindMediaCredential(config, credentialDeps);
-  } catch {
-    return undefined;
-  }
   const toolNames = new Set<string>();
   toolNames.add(VIDEO_GEN_TOOL_NAME);
   // Collect any existing function tools whose name matches a video_gen alias
@@ -118,7 +103,7 @@ export async function planVideoBridge(
   const artifactsKeepCount =
     typeof keepRaw === "number" && Number.isFinite(keepRaw) ? Math.floor(keepRaw) : undefined;
   return {
-    auth,
+    bindAuth: () => bindMediaCredential(config, credentialDeps),
     // V1 is one audited wire contract. A legacy configurable slug cannot retarget paid work.
     model: route.descriptor.operations.video!.model,
     toolNames,

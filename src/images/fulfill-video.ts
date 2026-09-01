@@ -1,5 +1,7 @@
 import type { VideoCallResult } from "./types";
 import { artifactHttpUrl } from "./artifacts";
+import { snapshotAuthorizedMediaInputs, type MediaInputSnapshot } from "./media-input-snapshot";
+import type { MediaInputHandleTable } from "./media-input-handles";
 
 export const DEFAULT_VIDEO_DURATION_SECONDS = 6;
 export const DEFAULT_VIDEO_RESOLUTION = "720p" as const;
@@ -9,7 +11,10 @@ export type VideoResolution = "480p" | "720p" | "1080p";
 
 const VIDEO_RESOLUTIONS = new Set<VideoResolution>(["480p", "720p", "1080p"]);
 const VIDEO_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]);
-const VIDEO_ARGUMENTS = new Set(["prompt", "input", "duration", "resolution", "aspect_ratio", "audio"]);
+const VIDEO_ARGUMENTS = new Set([
+  "prompt", "input", "duration", "resolution", "aspect_ratio", "audio",
+  "starting_image_handle", "reference_image_handles",
+]);
 
 /** Validated v1 text-to-video arguments. Defaults are explicit before submission. */
 export interface ParsedVideoArgs {
@@ -19,6 +24,9 @@ export interface ParsedVideoArgs {
   resolution: VideoResolution;
   aspectRatio: string;
   audio?: boolean;
+  mode: "text" | "starting_image" | "reference_images";
+  startingImage?: MediaInputSnapshot;
+  referenceImages?: readonly MediaInputSnapshot[];
 }
 
 export type ParsedVideoCallArgs = ParsedVideoArgs | { ok: false; error: string };
@@ -27,7 +35,7 @@ export type ParsedVideoCallArgs = ParsedVideoArgs | { ok: false; error: string }
  * Parse the exact v1 text-to-video schema. Unknown/media-input fields and invalid
  * values are rejected rather than silently dropped or clamped.
  */
-export function parseVideoCallArgs(raw: string): ParsedVideoCallArgs {
+export function parseVideoCallArgs(raw: string, handles?: MediaInputHandleTable): ParsedVideoCallArgs {
   let args: unknown;
   try {
     args = JSON.parse(raw || "{}");
@@ -70,12 +78,51 @@ export function parseVideoCallArgs(raw: string): ParsedVideoCallArgs {
     return { ok: false, error: "audio must be a boolean" };
   }
 
+  if (obj.starting_image_handle !== undefined && obj.reference_image_handles !== undefined) {
+    return { ok: false, error: "starting_image_handle and reference_image_handles cannot both be supplied" };
+  }
+  let mode: ParsedVideoArgs["mode"] = "text";
+  let startingImage: MediaInputSnapshot | undefined;
+  let referenceImages: readonly MediaInputSnapshot[] | undefined;
+  try {
+    if (obj.starting_image_handle !== undefined) {
+      if (typeof obj.starting_image_handle !== "string" || !obj.starting_image_handle) {
+        return { ok: false, error: "invalid starting_image_handle" };
+      }
+      const input = handles?.resolve(obj.starting_image_handle);
+      if (!input) return { ok: false, error: "unknown or stale starting_image_handle" };
+      [startingImage] = snapshotAuthorizedMediaInputs([input]);
+      mode = "starting_image";
+    } else if (obj.reference_image_handles !== undefined) {
+      if (!Array.isArray(obj.reference_image_handles)
+        || obj.reference_image_handles.length < 1
+        || obj.reference_image_handles.length > 7
+        || obj.reference_image_handles.some(value => typeof value !== "string" || !value)) {
+        return { ok: false, error: "reference_image_handles must contain one through seven handles" };
+      }
+      const labels = obj.reference_image_handles as string[];
+      if (new Set(labels).size !== labels.length) {
+        return { ok: false, error: "reference_image_handles cannot repeat a handle" };
+      }
+      const inputs = labels.map(label => handles?.resolve(label));
+      if (inputs.some(input => !input)) return { ok: false, error: "unknown or stale reference_image_handle" };
+      referenceImages = snapshotAuthorizedMediaInputs(inputs as NonNullable<(typeof inputs)[number]>[]);
+      mode = "reference_images";
+      if (resolution === "1080p") return { ok: false, error: "reference-image video does not support 1080p" };
+    }
+  } catch {
+    return { ok: false, error: "invalid current-turn image input" };
+  }
+
   return {
     ok: true,
     prompt,
     duration: duration as number,
     resolution: resolution as VideoResolution,
     aspectRatio,
+    mode,
+    ...(startingImage ? { startingImage } : {}),
+    ...(referenceImages ? { referenceImages } : {}),
     ...(typeof obj.audio === "boolean" ? { audio: obj.audio } : {}),
   };
 }

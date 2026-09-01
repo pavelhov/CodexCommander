@@ -16,6 +16,7 @@ describe("parseVideoCallArgs", () => {
       resolution: "1080p",
       aspectRatio: "16:9",
       audio: true,
+      mode: "text",
     });
   });
 
@@ -26,6 +27,7 @@ describe("parseVideoCallArgs", () => {
       duration: 6,
       resolution: "720p",
       aspectRatio: "16:9",
+      mode: "text",
     });
   });
 
