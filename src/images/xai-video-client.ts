@@ -1,6 +1,13 @@
 /** xAI video submit/poll request shaping over the shared fixed-origin media transport. */
 import type { MediaCredentialBinding } from "./types";
-import { ambiguousMediaSuccess, mediaError } from "./media-errors";
+import type { MediaInputSnapshot } from "./media-input-snapshot";
+import {
+  ambiguousMediaSuccess,
+  mediaError,
+  type MediaErrorCode,
+  type MediaFailureCategory,
+  type MediaFailureRecovery,
+} from "./media-errors";
 import {
   requestXaiMediaJson,
   type XaiMediaTransportDeps,
@@ -9,6 +16,9 @@ import {
 export interface XaiVideoSubmitRequest {
   prompt: string;
   model?: string;
+  mode?: "text" | "starting_image" | "reference_images";
+  startingImage?: MediaInputSnapshot;
+  referenceImages?: readonly MediaInputSnapshot[];
   duration?: number;
   resolution?: string;
   aspectRatio?: string;
@@ -37,10 +47,29 @@ const POLL_TIMEOUT_MS = 30_000;
 export const XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
 const VIDEO_RESOLUTIONS = new Set(["480p", "720p", "1080p"]);
 const VIDEO_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3"]);
-const VIDEO_REQUEST_KEYS = new Set(["prompt", "model", "duration", "resolution", "aspectRatio", "audio"]);
+const VIDEO_REQUEST_KEYS = new Set([
+  "prompt", "model", "mode", "startingImage", "referenceImages",
+  "duration", "resolution", "aspectRatio", "audio",
+]);
+const SNAPSHOT_KEYS = new Set(["mimeType", "dataUri", "digest", "byteLength", "width", "height"]);
 
 function invalidVideoRequest(): never {
   throw mediaError({ code: "invalid_request", phase: "pre_dispatch", certainty: "definite" });
+}
+
+function validSnapshot(value: unknown): value is MediaInputSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  if (Object.keys(snapshot).some(key => !SNAPSHOT_KEYS.has(key))) return false;
+  if (snapshot.mimeType !== "image/png" && snapshot.mimeType !== "image/jpeg" && snapshot.mimeType !== "image/webp") {
+    return false;
+  }
+  if (typeof snapshot.dataUri !== "string"
+    || !snapshot.dataUri.startsWith(`data:${snapshot.mimeType};base64,`)
+    || snapshot.dataUri.length > 72 * 1024 * 1024) return false;
+  if (typeof snapshot.digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(snapshot.digest)) return false;
+  return [snapshot.byteLength, snapshot.width, snapshot.height]
+    .every(item => typeof item === "number" && Number.isSafeInteger(item) && item > 0);
 }
 
 function normalizedSubmitBody(req: XaiVideoSubmitRequest): Record<string, unknown> {
@@ -49,11 +78,25 @@ function normalizedSubmitBody(req: XaiVideoSubmitRequest): Record<string, unknow
   }
   if (typeof req.prompt !== "string" || !req.prompt.trim()) return invalidVideoRequest();
   if (req.model !== undefined && req.model !== XAI_VIDEO_MODEL) return invalidVideoRequest();
+  const mode = req.mode ?? "text";
+  if (mode !== "text" && mode !== "starting_image" && mode !== "reference_images") return invalidVideoRequest();
+  if (mode === "text") {
+    if (req.startingImage !== undefined || req.referenceImages !== undefined) return invalidVideoRequest();
+  } else if (mode === "starting_image") {
+    if (!validSnapshot(req.startingImage) || req.referenceImages !== undefined) return invalidVideoRequest();
+  } else {
+    if (req.startingImage !== undefined
+      || !Array.isArray(req.referenceImages)
+      || req.referenceImages.length < 1
+      || req.referenceImages.length > 7
+      || req.referenceImages.some(item => !validSnapshot(item))) return invalidVideoRequest();
+  }
   const duration = req.duration ?? 6;
   const resolution = req.resolution ?? "720p";
   const aspectRatio = req.aspectRatio ?? "16:9";
   if (!Number.isInteger(duration) || duration < 1 || duration > 15) return invalidVideoRequest();
   if (!VIDEO_RESOLUTIONS.has(resolution)) return invalidVideoRequest();
+  if (mode === "reference_images" && resolution === "1080p") return invalidVideoRequest();
   if (!VIDEO_ASPECT_RATIOS.has(aspectRatio)) return invalidVideoRequest();
   if (req.audio !== undefined && typeof req.audio !== "boolean") return invalidVideoRequest();
   return {
@@ -62,6 +105,10 @@ function normalizedSubmitBody(req: XaiVideoSubmitRequest): Record<string, unknow
     duration,
     resolution,
     aspect_ratio: aspectRatio,
+    ...(mode === "starting_image" ? { image: { url: req.startingImage!.dataUri } } : {}),
+    ...(mode === "reference_images"
+      ? { reference_images: req.referenceImages!.map(image => ({ url: image.dataUri })) }
+      : {}),
     ...(req.audio !== undefined ? { audio: req.audio } : {}),
   };
 }
@@ -74,6 +121,47 @@ function safeRequestId(value: unknown): string | undefined {
     && !/[\x00-\x1f\x7f]/.test(value)
     ? value
     : undefined;
+}
+
+function terminalProviderCode(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const error = (value as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && code.length <= 64 && /^[a-z][a-z0-9_]*$/.test(code)
+    ? code
+    : undefined;
+}
+
+function throwTerminalProviderFailure(code: string): void {
+  const allowed: Record<string, {
+    code: MediaErrorCode;
+    category: MediaFailureCategory;
+    recovery: MediaFailureRecovery;
+  }> = {
+    permission_denied: { code: "entitlement_denied", category: "permission", recovery: "check_permission" },
+    failed_precondition: { code: "policy_rejected", category: "capability_mismatch", recovery: "fix_request" },
+    service_unavailable: { code: "upstream_failed", category: "outage", recovery: "request_new_operation" },
+    internal_error: { code: "upstream_failed", category: "outage", recovery: "request_new_operation" },
+    expired: { code: "timeout", category: "expired", recovery: "request_new_operation" },
+  };
+  const mapped = allowed[code];
+  if (!mapped) return;
+  throw mediaError({
+    code: mapped.code,
+    phase: "poll",
+    certainty: "definite",
+    reason: "http_status",
+    failure: {
+      version: 1,
+      origin: "provider",
+      stage: "provider_processing",
+      category: mapped.category,
+      retry: "fresh_authorization_required",
+      recovery: mapped.recovery,
+      submissionCertainty: "accepted",
+    },
+  });
 }
 
 export async function submitVideoJob(
@@ -147,6 +235,10 @@ export async function pollVideoJob(
   }
 
   const normalized = raw.toLowerCase();
+  if (normalized === "failed" || normalized === "error" || normalized === "expired" || normalized === "timeout") {
+    const code = terminalProviderCode(value);
+    if (code) throwTerminalProviderFailure(code);
+  }
   let status: XaiVideoPollResult["status"];
   if (normalized === "done" || normalized === "completed" || normalized === "succeeded") status = "done";
   else if (normalized === "failed" || normalized === "error") status = "failed";

@@ -12,6 +12,8 @@ import {
   mediaError,
   type MediaErrorPhase,
   type MediaErrorReason,
+  type MediaFailureCategory,
+  type MediaSafeFailureDetails,
 } from "./media-errors";
 
 export const XAI_MEDIA_API_ROOT = "https://api.x.ai/v1";
@@ -44,11 +46,13 @@ interface OperationSpec {
   phase: MediaErrorPhase;
   method: "GET" | "POST";
   url: (request: XaiMediaTransportRequest) => string;
+  maxRequestBytes: number;
   maxResponseBytes: number;
   defaultTimeoutMs: number;
 }
 
 const MAX_REQUEST_BYTES = 1024 * 1024;
+const MAX_VIDEO_SUBMIT_REQUEST_BYTES = 72 * 1024 * 1024;
 const MAX_ERROR_BYTES = 64 * 1024;
 const IMAGE_RESPONSE_BYTES = 64 * 1024 * 1024;
 const VIDEO_RESPONSE_BYTES = 1024 * 1024;
@@ -67,6 +71,7 @@ function operationSpec(request: XaiMediaTransportRequest): OperationSpec {
         phase: "submit",
         method: "POST",
         url: () => `${XAI_MEDIA_API_ROOT}/images/generations`,
+        maxRequestBytes: MAX_REQUEST_BYTES,
         maxResponseBytes: IMAGE_RESPONSE_BYTES,
         defaultTimeoutMs: 60_000,
       };
@@ -75,6 +80,7 @@ function operationSpec(request: XaiMediaTransportRequest): OperationSpec {
         phase: "submit",
         method: "POST",
         url: () => `${XAI_MEDIA_API_ROOT}/images/edits`,
+        maxRequestBytes: MAX_REQUEST_BYTES,
         maxResponseBytes: IMAGE_RESPONSE_BYTES,
         defaultTimeoutMs: 60_000,
       };
@@ -83,6 +89,7 @@ function operationSpec(request: XaiMediaTransportRequest): OperationSpec {
         phase: "submit",
         method: "POST",
         url: () => `${XAI_MEDIA_API_ROOT}/videos/generations`,
+        maxRequestBytes: MAX_VIDEO_SUBMIT_REQUEST_BYTES,
         maxResponseBytes: VIDEO_RESPONSE_BYTES,
         defaultTimeoutMs: 60_000,
       };
@@ -99,6 +106,7 @@ function operationSpec(request: XaiMediaTransportRequest): OperationSpec {
         phase: "poll",
         method: "GET",
         url: () => `${XAI_MEDIA_API_ROOT}/videos/${encodeURIComponent(id)}`,
+        maxRequestBytes: 0,
         maxResponseBytes: VIDEO_RESPONSE_BYTES,
         defaultTimeoutMs: 30_000,
       };
@@ -142,7 +150,7 @@ function requestBody(request: XaiMediaTransportRequest, spec: OperationSpec): st
   } catch {
     throw invalidRequest();
   }
-  if (!body || new TextEncoder().encode(body).byteLength > MAX_REQUEST_BYTES) throw invalidRequest();
+  if (!body || new TextEncoder().encode(body).byteLength > spec.maxRequestBytes) throw invalidRequest();
   return body;
 }
 
@@ -214,12 +222,28 @@ async function readResponse(
   });
 }
 
-function postAmbiguous(reason: MediaErrorReason, status?: number): MediaTransportError {
+function failureDetails(input: Omit<MediaSafeFailureDetails, "version">): MediaSafeFailureDetails {
+  return Object.freeze({ version: 1, ...input });
+}
+
+function postAmbiguous(
+  reason: MediaErrorReason,
+  status?: number,
+  category: MediaFailureCategory = reason === "timeout" ? "timeout" : "unknown_upstream",
+): MediaTransportError {
   return mediaError({
     code: "ambiguous_submission",
     phase: "submit",
     certainty: "ambiguous",
     reason,
+    failure: failureDetails({
+      origin: "transport",
+      stage: "submission",
+      category,
+      retry: "fresh_authorization_required",
+      recovery: "acknowledge_outcome_unknown",
+      submissionCertainty: "outcome_unknown",
+    }),
     ...(status !== undefined ? { status } : {}),
   });
 }
@@ -235,6 +259,14 @@ function pollRetryable(
     certainty: "definite",
     retryable: true,
     reason,
+    failure: failureDetails({
+      origin: "transport",
+      stage: "polling",
+      category: reason === "timeout" ? "timeout" : status !== undefined && status >= 500 ? "outage" : "unknown_upstream",
+      retry: "retry_same_operation",
+      recovery: "resume_existing_operation",
+      submissionCertainty: "accepted",
+    }),
     ...(status !== undefined ? { status } : {}),
     ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
   });
@@ -263,12 +295,79 @@ function incompleteError(spec: OperationSpec, body: BoundedBodyResult, status?: 
   return spec.method === "POST" ? postAmbiguous(reason, status) : pollRetryable(reason, status);
 }
 
+type StructuredProviderCodeField = "error.code" | "code";
+
+interface StructuredProviderCode {
+  field: StructuredProviderCodeField;
+  code: string;
+}
+
+function structuredProviderCode(text: string): StructuredProviderCode | undefined {
+  let parsed: unknown;
+  try { parsed = JSON.parse(text) as unknown; } catch { return undefined; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const record = parsed as Record<string, unknown>;
+  const top = typeof record.code === "string" ? record.code : undefined;
+  const error = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : undefined;
+  const nested = typeof error?.code === "string" ? error.code : undefined;
+  if (top !== undefined && nested !== undefined && top !== nested) return undefined;
+  const code = nested ?? top;
+  if (!code || code.length > 64 || !/^[a-z][a-z0-9_]*$/.test(code)) return undefined;
+  return { field: nested !== undefined ? "error.code" : "code", code };
+}
+
 function completeHttpError(
+  operation: XaiMediaOperation,
   spec: OperationSpec,
   status: number,
   retryAfter: string | null,
   now: number,
+  responseText: string,
 ): MediaTransportError {
+  const evidence = structuredProviderCode(responseText);
+  const submit = operation === "image_generation" || operation === "image_edit" || operation === "video_submit";
+  // This allowlist is intentionally keyed by operation lifecycle, status, exact field, and
+  // normalized code. Free-form messages and deferred-job codes cannot specialize submission.
+  if (submit && status === 429 && evidence?.field === "error.code"
+    && ["insufficient_quota", "usage_limit_exceeded", "credits_exhausted"].includes(evidence.code)) {
+    return mediaError({
+      code: "usage_exhausted", phase: "submit", certainty: "definite", status, reason: "http_status",
+      failure: failureDetails({
+        origin: "provider", stage: "submission", category: "usage_exhausted",
+        retry: "retry_after_change", recovery: "request_new_operation", submissionCertainty: "definite_rejection",
+      }),
+    });
+  }
+  if (submit && status === 400 && evidence?.field === "error.code" && evidence.code === "invalid_api_key") {
+    return mediaError({
+      code: "needs_auth", phase: "submit", certainty: "definite", status, reason: "credential_unavailable",
+      failure: failureDetails({
+        origin: "provider", stage: "submission", category: "authentication",
+        retry: "retry_after_change", recovery: "reauthenticate", submissionCertainty: "definite_rejection",
+      }),
+    });
+  }
+  if (submit && status === 400 && evidence?.field === "error.code"
+    && (evidence.code === "content_moderation" || evidence.code === "safety_violation")) {
+    return mediaError({
+      code: "policy_rejected", phase: "submit", certainty: "definite", status, reason: "http_status",
+      failure: failureDetails({
+        origin: "provider", stage: "submission", category: "safety",
+        retry: "not_retryable", recovery: "fix_request", submissionCertainty: "definite_rejection",
+      }),
+    });
+  }
+  if (submit && status === 400 && evidence?.field === "error.code" && evidence.code === "invalid_argument") {
+    return mediaError({
+      code: "policy_rejected", phase: "submit", certainty: "definite", status, reason: "http_status",
+      failure: failureDetails({
+        origin: "provider", stage: "submission", category: "validation",
+        retry: "not_retryable", recovery: "fix_request", submissionCertainty: "definite_rejection",
+      }),
+    });
+  }
   if (status >= 300 && status < 400) {
     return spec.method === "POST"
       ? postAmbiguous("redirect", status)
@@ -281,20 +380,36 @@ function completeHttpError(
       certainty: "definite",
       status,
       reason: "credential_unavailable",
+      failure: failureDetails({
+        origin: "provider", stage: spec.phase === "submit" ? "submission" : "polling", category: "authentication",
+        retry: "retry_after_change", recovery: "reauthenticate",
+        submissionCertainty: spec.phase === "submit" ? "definite_rejection" : "accepted",
+      }),
     });
   }
   if (status === 400) {
     return mediaError({ code: "policy_rejected", phase: spec.phase, certainty: "definite", status, reason: "http_status" });
   }
   if (status === 403) {
-    return mediaError({ code: "entitlement_denied", phase: spec.phase, certainty: "definite", status, reason: "http_status" });
+    return mediaError({
+      code: "entitlement_denied", phase: spec.phase, certainty: "definite", status, reason: "http_status",
+      failure: failureDetails({
+        origin: "provider", stage: spec.phase === "submit" ? "submission" : "polling", category: "permission",
+        retry: "retry_after_change", recovery: "check_permission",
+        submissionCertainty: spec.phase === "submit" ? "definite_rejection" : "accepted",
+      }),
+    });
   }
   if (status === 429) {
     return spec.method === "POST"
       ? mediaError({ code: "rate_limited", phase: "submit", certainty: "definite", status, reason: "http_status" })
       : pollRetryable("http_status", status, safePollRetryDelay(retryAfter, now));
   }
-  if (spec.method === "POST") return postAmbiguous("http_status", status);
+  if (spec.method === "POST") {
+    const outage = status >= 500 && (evidence === undefined
+      || evidence.code === "service_unavailable" || evidence.code === "internal_error");
+    return postAmbiguous("http_status", status, outage ? "outage" : "unknown_upstream");
+  }
   if (status >= 500) return pollRetryable("http_status", status, safePollRetryDelay(retryAfter, now));
   // Poll GET is safe to issue again, but only its explicit table is retryable.
   return mediaError({ code: "upstream_failed", phase: "poll", certainty: "definite", status, reason: "http_status" });
@@ -302,9 +417,8 @@ function completeHttpError(
 
 function afterDispatchFailure(spec: OperationSpec, signal: AbortSignal, deadlineExpired: boolean): MediaTransportError {
   if (spec.method === "POST") {
-    return postAmbiguous(
-      deadlineExpired ? "timeout" : signal.aborted ? "cancelled" : "network",
-    );
+    const reason = deadlineExpired ? "timeout" : signal.aborted ? "cancelled" : "network";
+    return postAmbiguous(reason, undefined, deadlineExpired ? "timeout" : signal.aborted ? "cancelled" : "outage");
   }
   if (signal.aborted && !deadlineExpired) {
     return mediaError({ code: "cancelled", phase: "poll", certainty: "definite", reason: "cancelled" });
@@ -439,10 +553,12 @@ export async function requestXaiMediaJson(
           continue;
         }
         throw completeHttpError(
+          request.operation,
           spec,
           response.status,
           response.headers.get("retry-after"),
           (deps.now ?? Date.now)(),
+          observed.text,
         );
       }
 

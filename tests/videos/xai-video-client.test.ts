@@ -24,6 +24,89 @@ function json(body: unknown, status = 200, headers?: HeadersInit): Response {
 }
 
 describe("submitVideoJob", () => {
+  test("serializes exactly one starting image without an intermediate provider call", async () => {
+    let credentialCalls = 0;
+    let submissions = 0;
+    let captured: Record<string, unknown> | undefined;
+    const snapshot = {
+      mimeType: "image/png" as const,
+      dataUri: "data:image/png;base64,aW1hZ2U=",
+      digest: `sha256:${"a".repeat(64)}`,
+      byteLength: 5,
+      width: 1,
+      height: 1,
+    };
+    await submitVideoJob({
+      prompt: "animate",
+      mode: "starting_image",
+      startingImage: snapshot,
+      duration: 8,
+      resolution: "1080p",
+    }, keyBinding, undefined, {
+      lease: {
+        resolve: async () => { credentialCalls += 1; return { bearer: "bound" }; },
+        refreshAfterRejectedOAuth: async () => { throw new Error("unexpected"); },
+      },
+      fetchFn: (async (_url, init) => {
+        submissions += 1;
+        captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return json({ request_id: "start-1" });
+      }) as typeof fetch,
+    });
+    expect(credentialCalls).toBe(1);
+    expect(submissions).toBe(1);
+    expect(captured).toMatchObject({
+      duration: 8,
+      resolution: "1080p",
+      image: { url: snapshot.dataUri },
+    });
+    expect(captured).not.toHaveProperty("reference_images");
+  });
+
+  test("serializes seven ordered references and rejects mixed/eighth/1080p before binding", async () => {
+    const references = Array.from({ length: 7 }, (_, index) => ({
+      mimeType: "image/png" as const,
+      dataUri: `data:image/png;base64,${Buffer.from(String(index)).toString("base64")}`,
+      digest: `sha256:${String(index).repeat(64)}`,
+      byteLength: 1,
+      width: 1,
+      height: 1,
+    }));
+    let captured: Record<string, unknown> | undefined;
+    await submitVideoJob({
+      prompt: "reference",
+      mode: "reference_images",
+      referenceImages: references,
+      resolution: "720p",
+    }, keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async (_url, init) => {
+        captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return json({ request_id: "refs-1" });
+      }) as typeof fetch,
+    });
+    expect(captured?.reference_images).toEqual(references.map(item => ({ url: item.dataUri })));
+    expect(captured).not.toHaveProperty("image");
+
+    for (const request of [
+      { prompt: "mixed", mode: "starting_image", startingImage: references[0], referenceImages: references },
+      { prompt: "eight", mode: "reference_images", referenceImages: [...references, references[0]] },
+      { prompt: "1080", mode: "reference_images", referenceImages: references, resolution: "1080p" },
+    ]) {
+      let leaseCalls = 0;
+      let fetchCalls = 0;
+      await expect(submitVideoJob(request as never, keyBinding, undefined, {
+        lease: {
+          resolve: async () => { leaseCalls += 1; return { bearer: "unexpected" }; },
+          refreshAfterRejectedOAuth: async () => { throw new Error("unexpected"); },
+        },
+        fetchFn: (async () => { fetchCalls += 1; return json({ request_id: "unexpected" }); }) as typeof fetch,
+      })).rejects.toMatchObject({ code: "invalid_request", phase: "pre_dispatch" });
+      expect(leaseCalls).toBe(0);
+      expect(fetchCalls).toBe(0);
+    }
+  });
+
   test("serializes the stable 1.5 text-to-video contract including 1080p and audio", async () => {
     let capturedUrl = "";
     let capturedBody = "";
@@ -221,6 +304,37 @@ describe("pollVideoJob", () => {
       });
       expect(result.status).toBe(status);
     }
+  });
+
+  test("specializes only allowlisted deferred error.code values at provider-processing stage", async () => {
+    const rows = [
+      ["permission_denied", "permission"],
+      ["failed_precondition", "capability_mismatch"],
+      ["service_unavailable", "outage"],
+      ["internal_error", "outage"],
+      ["expired", "expired"],
+    ] as const;
+    for (const [code, category] of rows) {
+      await expect(pollVideoJob("accepted", keyBinding, undefined, {
+        lease: keyLease(),
+        fetchFn: (async () => json({ status: code === "expired" ? "expired" : "failed", error: { code } })) as typeof fetch,
+      })).rejects.toMatchObject({
+        failure: {
+          origin: "provider",
+          stage: "provider_processing",
+          category,
+          submissionCertainty: "accepted",
+        },
+      });
+    }
+    const undifferentiated = await pollVideoJob("accepted", keyBinding, undefined, {
+      lease: keyLease(),
+      fetchFn: (async () => json({
+        status: "failed",
+        error: { message: "permission_denied and safety prose must not specialize" },
+      })) as typeof fetch,
+    });
+    expect(undifferentiated).toEqual({ status: "failed" });
   });
 
   test("uses a fixed encoded GET URL and rejects redirects", async () => {

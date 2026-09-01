@@ -86,6 +86,9 @@ export interface SubmitRuntimeVideoInput {
   binding: MediaCredentialBinding;
   deadlineAt: number;
   request: XaiVideoSubmitRequest;
+  /** Selected provider/executor are immutable retry semantics; no fallback occurs. */
+  providerId?: string;
+  executor?: string;
   /** Private digest derived from a validated client retry identity. */
   operationKey?: string;
   /** Private keyed digest of the complete admitted request body. */
@@ -373,7 +376,10 @@ export class MediaRuntime implements ServerMediaRuntime {
       ...(input.operationKey ? {
         operationKey: input.operationKey,
         requestSemanticsDigest: input.requestSemanticsDigest
-          ?? deriveVideoRequestSemanticsDigest(input.request),
+          ?? deriveVideoRequestSemanticsDigest(input.request, {
+            providerId: input.providerId ?? "xai",
+            executor: input.executor ?? "xai-media-v1",
+          }),
       } : {}),
       ...(input.probeOperationId ? { probeOperationId: input.probeOperationId } : {}),
       ...(input.confirmationRevision !== undefined ? { confirmationRevision: input.confirmationRevision } : {}),

@@ -17,6 +17,7 @@ import {
   deriveVideoOperationKey,
   deriveVideoRequestBodyDigest,
   deriveVideoRequestSemanticsDigest,
+  canonicalVideoRequestSemantics,
 } from "../../src/images/video-operation-key";
 import { MediaRuntime } from "../../src/images/media-runtime";
 import { openVideoJobStore } from "../../src/images/video-job-store";
@@ -93,6 +94,48 @@ describe("video retry operation identity", () => {
     expect(digest).not.toContain("private prompt");
     expect(digest).not.toContain("account@example.test");
     expect(digest).not.toContain("private-account-a");
+  });
+
+  test("canonical submit identity binds routing, prompt, mode, ordered snapshots, and settings without raw bytes", () => {
+    const snapshot = (digest: string) => ({
+      mimeType: "image/png" as const,
+      dataUri: `data:image/png;base64,${Buffer.from(digest).toString("base64")}`,
+      digest: `sha256:${digest.repeat(64).slice(0, 64)}`,
+      byteLength: digest.length,
+      width: 1,
+      height: 1,
+    });
+    const request = {
+      prompt: "private prompt",
+      mode: "reference_images" as const,
+      referenceImages: [snapshot("a"), snapshot("b")],
+      duration: 8,
+      resolution: "720p",
+      aspectRatio: "9:16",
+      audio: true,
+    };
+    const secret = "stable-private-semantics-secret";
+    const binding = { providerId: "xai", executor: "xai-media-v1" };
+    const semantics = canonicalVideoRequestSemantics(request, binding, secret);
+    const serialized = JSON.stringify(semantics);
+    expect(serialized).not.toContain("private prompt");
+    expect(serialized).not.toContain("base64");
+    expect(semantics.orderedSnapshotDigests).toEqual(request.referenceImages.map(item => item.digest));
+    const digest = deriveVideoRequestSemanticsDigest(request, binding, secret);
+    expect(deriveVideoRequestSemanticsDigest(request, binding, secret)).toBe(digest);
+    const changed = [
+      deriveVideoRequestSemanticsDigest({ ...request, prompt: "other" }, binding, secret),
+      deriveVideoRequestSemanticsDigest(request, { ...binding, providerId: "fixture" }, secret),
+      deriveVideoRequestSemanticsDigest(request, { ...binding, executor: "fixture-executor" }, secret),
+      deriveVideoRequestSemanticsDigest({ ...request, model: "fixture-model" }, binding, secret),
+      deriveVideoRequestSemanticsDigest({ ...request, referenceImages: [...request.referenceImages].reverse() }, binding, secret),
+      deriveVideoRequestSemanticsDigest({ ...request, duration: 9 }, binding, secret),
+      deriveVideoRequestSemanticsDigest({ ...request, resolution: "480p" }, binding, secret),
+      deriveVideoRequestSemanticsDigest({ ...request, aspectRatio: "16:9" }, binding, secret),
+      deriveVideoRequestSemanticsDigest({ ...request, audio: false }, binding, secret),
+    ];
+    expect(new Set(changed).size).toBe(changed.length);
+    for (const candidate of changed) expect(candidate).not.toBe(digest);
   });
 
   test("direct-runtime fallback collision guard includes the complete video submit request", () => {

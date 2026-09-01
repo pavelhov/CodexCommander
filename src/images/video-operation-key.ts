@@ -6,6 +6,25 @@ const CLIENT_REQUEST_ID_MAX = 256;
 const SAFE_CLIENT_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const PROCESS_VIDEO_DIGEST_SECRET = randomBytes(32);
 
+export interface VideoRequestSemanticsBinding {
+  readonly providerId: string;
+  readonly executor: string;
+}
+
+export interface CanonicalVideoRequestSemantics {
+  readonly version: 1;
+  readonly providerId: string;
+  readonly executor: string;
+  readonly model: string;
+  readonly promptDigest: string;
+  readonly mode: "text" | "starting_image" | "reference_images";
+  readonly orderedSnapshotDigests: readonly string[];
+  readonly duration: number;
+  readonly resolution: string;
+  readonly aspectRatio: string;
+  readonly audio: boolean | null;
+}
+
 export type VideoOperationAdmissionScope =
   | { kind: "configured"; keyId: string }
   | { kind: "environment" }
@@ -147,12 +166,55 @@ export function deriveVideoRequestBodyDigest(
   });
 }
 
+function normalizedVideoMode(request: XaiVideoSubmitRequest): CanonicalVideoRequestSemantics["mode"] {
+  return request.mode ?? "text";
+}
+
+/**
+ * Build the prompt-free canonical semantics which must be bound before the durable submit fence.
+ * Snapshot ordering is material. Base64 input bytes are deliberately excluded in favor of the
+ * validated snapshot digests, so neither this record nor its durable digest retains raw inputs.
+ */
+export function canonicalVideoRequestSemantics(
+  request: XaiVideoSubmitRequest,
+  binding: VideoRequestSemanticsBinding = { providerId: "xai", executor: "xai-media-v1" },
+  digestSecret: string | Uint8Array = PROCESS_VIDEO_DIGEST_SECRET,
+): CanonicalVideoRequestSemantics {
+  const mode = normalizedVideoMode(request);
+  const orderedSnapshotDigests = mode === "starting_image"
+    ? request.startingImage ? [request.startingImage.digest] : []
+    : mode === "reference_images"
+      ? request.referenceImages?.map(snapshot => snapshot.digest) ?? []
+      : [];
+  const promptDigest = privateDigest("codexcommander/video-prompt/v1", digestSecret, hmac => {
+    updateString(hmac, "P", request.prompt);
+  });
+  return Object.freeze({
+    version: 1,
+    providerId: binding.providerId,
+    executor: binding.executor,
+    model: request.model ?? "grok-imagine-video-1.5",
+    promptDigest,
+    mode,
+    orderedSnapshotDigests: Object.freeze([...orderedSnapshotDigests]),
+    duration: request.duration ?? 6,
+    resolution: request.resolution ?? "720p",
+    aspectRatio: request.aspectRatio ?? "16:9",
+    audio: request.audio ?? null,
+  });
+}
+
 /**
  * Safe fallback for direct runtime callers that do not carry a server-derived body digest.
  * The process-local key prevents a persisted prompt digest from being correlated offline.
  */
-export function deriveVideoRequestSemanticsDigest(request: XaiVideoSubmitRequest): string {
-  return privateDigest("codexcommander/video-submit-request/v2", PROCESS_VIDEO_DIGEST_SECRET, hmac => {
-    updateCanonicalJson(hmac, request);
+export function deriveVideoRequestSemanticsDigest(
+  request: XaiVideoSubmitRequest,
+  binding: VideoRequestSemanticsBinding = { providerId: "xai", executor: "xai-media-v1" },
+  digestSecret: string | Uint8Array = PROCESS_VIDEO_DIGEST_SECRET,
+): string {
+  const semantics = canonicalVideoRequestSemantics(request, binding, digestSecret);
+  return privateDigest("codexcommander/video-submit-request/v2", digestSecret, hmac => {
+    updateCanonicalJson(hmac, semantics);
   });
 }

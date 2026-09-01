@@ -76,6 +76,57 @@ describe("callXaiImages", () => {
     }
   });
 
+  test("uses only allowlisted structured evidence for quota, validation, safety, and authentication", async () => {
+    const rows = [
+      [429, { error: { code: "insufficient_quota", message: "opaque" } }, "usage_exhausted", "usage_exhausted"],
+      [429, { error: { message: "insufficient_quota" } }, "rate_limited", "rate_limited"],
+      [400, { error: { code: "invalid_api_key" } }, "needs_auth", "authentication"],
+      [400, { error: { code: "content_moderation", message: "invalid argument" } }, "policy_rejected", "safety"],
+      [400, { error: { code: "invalid_argument", message: "safety policy prose must be ignored" } }, "policy_rejected", "validation"],
+    ] as const;
+    for (const [status, body, code, category] of rows) {
+      let caught: unknown;
+      try {
+        await callXaiImages({ prompt: "structured" }, BINDING, undefined, 5_000, {
+          lease: boundLease(),
+          fetchFn: (async () => new Response(JSON.stringify(body), { status })) as typeof fetch,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toMatchObject({
+        code,
+        failure: {
+          version: 1,
+          origin: "provider",
+          stage: "submission",
+          category,
+          submissionCertainty: "definite_rejection",
+        },
+      });
+      expect(JSON.stringify(caught)).not.toContain("opaque");
+      expect(JSON.stringify(caught)).not.toContain("safety policy prose");
+    }
+  });
+
+  test("submit 5xx retains outcome-unknown certainty while safely classifying outage", async () => {
+    await expect(callXaiImages({ prompt: "unknown" }, BINDING, undefined, 5_000, {
+      lease: boundLease(),
+      fetchFn: (async () => new Response(JSON.stringify({ error: { code: "service_unavailable" } }), {
+        status: 503,
+      })) as typeof fetch,
+    })).rejects.toMatchObject({
+      code: "ambiguous_submission",
+      failure: {
+        origin: "transport",
+        stage: "submission",
+        category: "outage",
+        submissionCertainty: "outcome_unknown",
+        recovery: "acknowledge_outcome_unknown",
+      },
+    });
+  });
+
   test("OAuth 403/429/network failures never refresh and never consult an API key", async () => {
     const oauthBinding = { ...BINDING, authSource: "subscription_oauth" } as const;
     const snapshot = {
