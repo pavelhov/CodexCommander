@@ -1,4 +1,5 @@
 import type { MediaAuthSource } from "../types";
+import type { ProviderMediaDescriptor } from "../providers/registry";
 
 export type MediaCredentialObservationState = "ready" | "missing" | "reauthentication_required";
 
@@ -15,9 +16,38 @@ export type MediaReadinessReason =
   | "xai_provider_disabled"
   | "ambiguous_xai_provider"
   | "credential_unavailable"
-  | "reauthentication_required";
+  | "reauthentication_required"
+  | "provider_missing"
+  | "provider_disabled"
+  | "capability_absent"
+  | "auth_source_unsupported";
 
-export type MediaProviderKind = "canonical" | "legacy_alias";
+export type MediaRouteKind = "image" | "video";
+export type MediaRouteSelectionSource = "explicit" | "legacy_images_provider" | "legacy_bridge" | "none";
+export type MediaRouteState =
+  | "selected"
+  | "none"
+  | "unconfigured"
+  | "provider_missing"
+  | "provider_disabled"
+  | "capability_absent"
+  | "auth_source_missing"
+  | "auth_source_unsupported";
+
+/**
+ * The configured value is retained even when it no longer resolves. That blocks
+ * new work truthfully and prevents an implicit provider fallback.
+ */
+export interface MediaRouteResolution {
+  kind: MediaRouteKind;
+  configured: string | null | undefined;
+  source: MediaRouteSelectionSource;
+  state: MediaRouteState;
+  providerId: string | null;
+  descriptor?: ProviderMediaDescriptor;
+}
+
+export type MediaProviderKind = "canonical" | "legacy_alias" | "registry";
 
 export interface MediaCredentialReadiness {
   state: MediaReadinessState;
@@ -32,6 +62,7 @@ export interface MediaCapabilityReadiness {
   enabled: boolean;
   state: MediaReadinessState;
   reason: MediaReadinessReason | null;
+  route?: MediaRouteResolution;
 }
 
 /**

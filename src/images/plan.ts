@@ -3,8 +3,11 @@ import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveEnvValue } from "../config";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 import { bindMediaCredential, type BindMediaCredentialDeps } from "./media-credentials";
+import { resolveMediaRoute } from "./capabilities";
+import { PROVIDER_REGISTRY } from "../providers/registry";
 
-export const XAI_IMAGE_MODEL = "grok-imagine-image-2.0";
+const XAI_MEDIA_DESCRIPTOR = PROVIDER_REGISTRY.find(entry => entry.id === "xai")!.media!;
+export const XAI_IMAGE_MODEL = XAI_MEDIA_DESCRIPTOR.operations.image!.model;
 /** Absolute ceiling for `images.timeoutMs` (matches /v1/images relay budget). */
 export const MAX_IMAGE_TIMEOUT_MS = 300_000;
 
@@ -41,7 +44,8 @@ export async function planImageBridge(
   _routedProvider: CodexCommanderProviderConfig,
   credentialDeps: BindMediaCredentialDeps = {},
 ): Promise<ImageBridgePlan | undefined> {
-  if (config.images?.bridgeEnabled !== true) return undefined;
+  const route = resolveMediaRoute(config, "image");
+  if (route.state !== "selected" || route.descriptor?.executor !== "xai-media-v1") return undefined;
   if (!parsed._imageGeneration) return undefined;
   let auth: ImageBridgePlan["auth"];
   try {
@@ -64,7 +68,7 @@ export async function planImageBridge(
     typeof keepRaw === "number" && Number.isFinite(keepRaw) ? Math.floor(keepRaw) : undefined;
   return {
     auth,
-    model: config.images?.bridgeModel ?? XAI_IMAGE_MODEL,
+    model: config.images?.bridgeModel ?? route.descriptor.operations.image!.model,
     toolNames,
     ...(hostedSize ? { defaultSize: hostedSize } : {}),
     ...(hostedQuality ? { defaultQuality: hostedQuality } : {}),
@@ -73,7 +77,7 @@ export async function planImageBridge(
   };
 }
 
-export const XAI_VIDEO_MODEL = "grok-imagine-video-1.5";
+export const XAI_VIDEO_MODEL = XAI_MEDIA_DESCRIPTOR.operations.video!.model;
 
 /**
  * Decide whether the video bridge should activate for this request. Unlike images, video
@@ -88,7 +92,8 @@ export async function planVideoBridge(
   _routedProvider: CodexCommanderProviderConfig,
   credentialDeps: BindMediaCredentialDeps = {},
 ): Promise<VideoBridgePlan | undefined> {
-  if (config.images?.videoBridgeEnabled !== true) return undefined;
+  const route = resolveMediaRoute(config, "video");
+  if (route.state !== "selected" || route.descriptor?.executor !== "xai-media-v1") return undefined;
   let auth: VideoBridgePlan["auth"];
   try {
     auth = bindMediaCredential(config, credentialDeps);
@@ -115,7 +120,7 @@ export async function planVideoBridge(
   return {
     auth,
     // V1 is one audited wire contract. A legacy configurable slug cannot retarget paid work.
-    model: XAI_VIDEO_MODEL,
+    model: route.descriptor.operations.video!.model,
     toolNames,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(artifactsKeepCount !== undefined ? { artifactsKeepCount } : {}),

@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig, CodexCommanderParsedRequest } from "../../src/types";
-import { buildMediaExecutionPlan, buildMediaReadinessSnapshot } from "../../src/images/capabilities";
+import { buildMediaExecutionPlan, buildMediaReadinessSnapshot, resolveMediaRoute } from "../../src/images/capabilities";
 import type { MediaCredentialBinding } from "../../src/images/types";
+import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
 
 const PREV_HOME = process.env.CODEXCOMMANDER_HOME;
 let planImageBridge: typeof import("../../src/images/plan")["planImageBridge"];
@@ -369,5 +371,77 @@ describe("media image capability contract", () => {
     expect(binding).not.toHaveProperty("provider");
     expect(binding).not.toHaveProperty("baseUrl");
     expect(binding).not.toHaveProperty("token");
+  });
+});
+
+describe("provider-owned media route contract", () => {
+  test("xAI owns a typed descriptor that is derived for settings but never seeded into config", () => {
+    const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai")!;
+    const descriptor = xai.media!;
+
+    expect(descriptor).toMatchObject({
+      version: 1,
+      executor: "xai-media-v1",
+      credentialSources: ["api_key", "subscription_oauth"],
+      operations: {
+        image: { model: "grok-imagine-image-2.0" },
+        video: {
+          model: "grok-imagine-video-1.5",
+          modes: {
+            text: { inputCount: { min: 0, max: 0 }, resolutions: ["480p", "720p", "1080p"] },
+            starting_image: { inputCount: { min: 1, max: 1 }, resolutions: ["480p", "720p", "1080p"] },
+            reference_images: { inputCount: { min: 1, max: 7 }, resolutions: ["480p", "720p"] },
+          },
+        },
+      },
+      inputLimits: {
+        mimeTypes: ["image/jpeg", "image/png", "image/webp"],
+        maxBytesPerImage: 20 * 1024 * 1024,
+        maxAggregateDecodedBytes: 50 * 1024 * 1024,
+        maxPixelsPerImage: 100_000_000,
+        maxSerializedRequestBytes: 72 * 1024 * 1024,
+      },
+    });
+    expect(deriveProviderPresets().find(row => row.id === "xai")?.media).toEqual(descriptor);
+    expect(providerConfigSeed(xai)).not.toHaveProperty("media");
+  });
+
+  test("independent explicit None and invalid configured routes never fall back", () => {
+    const config = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "test-token" } },
+      { bridgeEnabled: true, videoBridgeEnabled: true, authSource: "api_key" },
+    );
+    config.media = { imageGenerator: null, videoGenerator: "removed-provider" };
+
+    expect(resolveMediaRoute(config, "image")).toMatchObject({
+      configured: null,
+      source: "explicit",
+      state: "none",
+      providerId: null,
+    });
+    expect(resolveMediaRoute(config, "video")).toMatchObject({
+      configured: "removed-provider",
+      source: "explicit",
+      state: "provider_missing",
+      providerId: "removed-provider",
+    });
+  });
+
+  test("a selected descriptor reports unsupported authentication separately from missing credentials", () => {
+    const config = makeConfig(
+      { xai: { baseUrl: "https://api.x.ai/v1", apiKey: "test-token" } },
+      { bridgeEnabled: true, authSource: "api_key" },
+    );
+    config.media = { imageGenerator: "xai" };
+    const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai")!;
+    const original = xai.media!;
+    xai.media = { ...original, credentialSources: ["subscription_oauth"] };
+    try {
+      expect(resolveMediaRoute(config, "image")).toMatchObject({ state: "auth_source_unsupported" });
+      expect(buildMediaReadinessSnapshot(config, { api_key: "missing" }).image)
+        .toMatchObject({ state: "blocked", reason: "auth_source_unsupported" });
+    } finally {
+      xai.media = original;
+    }
   });
 });

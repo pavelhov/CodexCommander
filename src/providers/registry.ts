@@ -1,4 +1,4 @@
-import type { CodexAccountMode, CodexCommanderProviderConfig } from "../types";
+import type { CodexAccountMode, CodexCommanderProviderConfig, MediaAuthSource } from "../types";
 import { OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS } from "../types";
 import { KIRO_MODELS, KIRO_MODEL_CONTEXT_WINDOWS, KIRO_MODEL_REASONING_EFFORTS } from "./kiro-models";
 import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_CONTEXT_WINDOWS, ANTIGRAVITY_MODEL_EFFORTS } from "./antigravity-models";
@@ -19,6 +19,52 @@ import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
+
+export type ProviderMediaOperationKind = "image" | "video";
+export type ProviderMediaInputMode = "text" | "starting_image" | "reference_images";
+export type ProviderMediaResolution = "480p" | "720p" | "1080p";
+
+export interface ProviderMediaInputLimits {
+  mimeTypes: readonly string[];
+  maxBytesPerImage: number;
+  maxAggregateDecodedBytes: number;
+  maxPixelsPerImage: number;
+  maxSerializedRequestBytes: number;
+}
+
+export interface ProviderMediaVideoMode {
+  inputCount: { min: number; max: number };
+  durationSeconds: { min: number; max: number; default: number };
+  resolutions: readonly ProviderMediaResolution[];
+  defaultResolution: ProviderMediaResolution;
+}
+
+export interface ProviderMediaImageOperation {
+  model: string;
+  lifecycle: "synchronous";
+  artifactKind: "image";
+}
+
+export interface ProviderMediaVideoOperation {
+  model: string;
+  lifecycle: "durable_job";
+  artifactKind: "video";
+  modes: Readonly<Record<ProviderMediaInputMode, ProviderMediaVideoMode>>;
+}
+
+/** Registry-owned, versioned media facts. Never persist these in provider config. */
+export interface ProviderMediaDescriptor {
+  version: 1;
+  executor: "xai-media-v1" | (string & {});
+  credentialSources: readonly MediaAuthSource[];
+  approvalPosture: "model_mediated";
+  modelDiscovery: "unsupported" | "supported";
+  inputLimits: ProviderMediaInputLimits;
+  operations: {
+    image?: ProviderMediaImageOperation;
+    video?: ProviderMediaVideoOperation;
+  };
+}
 
 /**
  * Wire protocol a client spoke when it reached the proxy. Chat and Anthropic surfaces
@@ -107,6 +153,8 @@ export interface ProviderRegistryEntry {
   baseUrl: string;
   apiKeyTransport?: CodexCommanderProviderConfig["apiKeyTransport"];
   authKind: ProviderAuthKind;
+  /** Trusted provider-owned media facts; never copied to persisted config. */
+  media?: ProviderMediaDescriptor;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
   allowKeyAuthOverride?: boolean;
@@ -930,6 +978,48 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     oauthId: "xai",
     jawcodeBundle: "xai",
     note: "Log in with your Grok account",
+    media: {
+      version: 1,
+      executor: "xai-media-v1",
+      credentialSources: ["api_key", "subscription_oauth"],
+      approvalPosture: "model_mediated",
+      modelDiscovery: "unsupported",
+      inputLimits: {
+        mimeTypes: ["image/jpeg", "image/png", "image/webp"],
+        maxBytesPerImage: 20 * 1024 * 1024,
+        maxAggregateDecodedBytes: 50 * 1024 * 1024,
+        maxPixelsPerImage: 100_000_000,
+        maxSerializedRequestBytes: 72 * 1024 * 1024,
+      },
+      operations: {
+        image: { model: "grok-imagine-image-2.0", lifecycle: "synchronous", artifactKind: "image" },
+        video: {
+          model: "grok-imagine-video-1.5",
+          lifecycle: "durable_job",
+          artifactKind: "video",
+          modes: {
+            text: {
+              inputCount: { min: 0, max: 0 },
+              durationSeconds: { min: 1, max: 15, default: 6 },
+              resolutions: ["480p", "720p", "1080p"],
+              defaultResolution: "720p",
+            },
+            starting_image: {
+              inputCount: { min: 1, max: 1 },
+              durationSeconds: { min: 1, max: 15, default: 6 },
+              resolutions: ["480p", "720p", "1080p"],
+              defaultResolution: "720p",
+            },
+            reference_images: {
+              inputCount: { min: 1, max: 7 },
+              durationSeconds: { min: 1, max: 15, default: 6 },
+              resolutions: ["480p", "720p"],
+              defaultResolution: "720p",
+            },
+          },
+        },
+      },
+    },
     // Parallel tool calls: officially supported and default-on per docs.x.ai function-calling
     // (verified 2026-07-09). Streamed calls arrive whole
     // per chunk, so the buffered parser assembles them losslessly.

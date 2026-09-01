@@ -442,6 +442,17 @@ describe("create-only config initialization", () => {
 });
 
 describe("media authentication source config", () => {
+  test("accepts independent generator selections including explicit None without rewriting an invalid selection", () => {
+    const result = validateConfigCandidate({
+      ...getDefaultConfig(),
+      media: { imageGenerator: null, videoGenerator: "future-provider" },
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      config: { media: { imageGenerator: null, videoGenerator: "future-provider" } },
+    });
+  });
+
   test("normalizes legacy enabled bridge configs to api_key without enabling the other bridge", () => {
     writeConfig({
       ...getDefaultConfig(),

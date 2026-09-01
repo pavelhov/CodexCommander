@@ -725,6 +725,8 @@ export interface CodexCommanderConfig {
   visionSidecar?: CodexCommanderVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
   images?: CodexCommanderImagesConfig;
+  /** Provider-owned media routing for new work; accepted jobs retain their stored binding. */
+  media?: CodexCommanderMediaConfig;
   /** /v1/alpha/search relay for codex's built-in web search client. */
   search?: CodexCommanderSearchConfig;
   /** Codex multi-account pool. */
@@ -915,6 +917,12 @@ export interface CodexCommanderTokenGuardianConfig {
 
 /** Explicit credential family used by both optional Grok media bridges. */
 export type MediaAuthSource = "subscription_oauth" | "api_key";
+
+/** Explicit default-generator intent. `null` is a deliberate "None" selection. */
+export interface CodexCommanderMediaConfig {
+  imageGenerator?: string | null;
+  videoGenerator?: string | null;
+}
 
 export interface CodexCommanderImagesConfig {
   /** Optional custom API-key provider for /v1/images relays. Built-in OpenAI tiers remain automatic. */

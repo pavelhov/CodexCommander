@@ -1022,6 +1022,12 @@ const imagesSchema = z.object({
   videoTimeoutMs: z.number().int().positive().optional(),
 }).strict();
 
+const mediaSelectionSchema = z.string().min(1).nullable().optional();
+const mediaSchema = z.object({
+  imageGenerator: mediaSelectionSchema,
+  videoGenerator: mediaSelectionSchema,
+}).strict();
+
 const searchSchema = z.object({ timeoutMs: z.number().int().positive().optional() }).strict();
 
 const codexAccountSchema = z.object({
@@ -1171,6 +1177,7 @@ const configSchema = z.object({
   webSearchSidecar: webSearchSidecarSchema.optional(),
   visionSidecar: visionSidecarSchema.optional(),
   images: imagesSchema.optional(),
+  media: mediaSchema.optional(),
   search: searchSchema.optional(),
   corsAllowOrigins: stringArraySchema.optional(),
 }).strict().superRefine((config, ctx) => {

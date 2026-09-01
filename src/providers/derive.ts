@@ -1,5 +1,5 @@
 import type { CodexAccountMode, CodexCommanderProviderConfig } from "../types";
-import { PROVIDER_REGISTRY, providerMatchesRegistryTransport, type ProviderRegistryEntry } from "./registry";
+import { PROVIDER_REGISTRY, providerMatchesRegistryTransport, type ProviderMediaDescriptor, type ProviderRegistryEntry } from "./registry";
 
 export interface DerivedKeyLoginProvider {
   label: string;
@@ -77,6 +77,8 @@ export interface DerivedProviderPreset {
    * form shows a dropdown; `custom` reveals a free-text base URL field.
    */
   baseUrlChoices?: Array<{ id: string; label: string; baseUrl?: string }>;
+  /** Sanitized registry-owned capability facts for provider settings and selector candidates. */
+  media?: ProviderMediaDescriptor;
   /** Immutable canonical provider config seed for the reserved canonical `openai` forward preset. */
   provider?: CodexCommanderProviderConfig;
 }
@@ -401,6 +403,38 @@ function entryToPreset(entry: ProviderRegistryEntry): DerivedProviderPreset {
     ...(entry.allowPrivateNetworkByDefault ? { allowPrivateNetworkByDefault: true } : {}),
     ...(entry.freeTier ? { freeTier: true } : {}),
     ...(entry.baseUrlChoices ? { baseUrlChoices: entry.baseUrlChoices.map(c => ({ ...c })) } : {}),
+    ...(entry.media ? { media: cloneMediaDescriptor(entry.media) } : {}),
+  };
+}
+
+function cloneMediaDescriptor(descriptor: ProviderMediaDescriptor): ProviderMediaDescriptor {
+  const video = descriptor.operations.video;
+  return {
+    ...descriptor,
+    credentialSources: [...descriptor.credentialSources],
+    inputLimits: { ...descriptor.inputLimits, mimeTypes: [...descriptor.inputLimits.mimeTypes] },
+    operations: {
+      ...(descriptor.operations.image ? { image: { ...descriptor.operations.image } } : {}),
+      ...(video ? {
+        video: {
+          ...video,
+          modes: {
+            text: cloneMediaVideoMode(video.modes.text),
+            starting_image: cloneMediaVideoMode(video.modes.starting_image),
+            reference_images: cloneMediaVideoMode(video.modes.reference_images),
+          },
+        },
+      } : {}),
+    },
+  };
+}
+
+function cloneMediaVideoMode(mode: NonNullable<ProviderMediaDescriptor["operations"]["video"]>["modes"]["text"]) {
+  return {
+    ...mode,
+    inputCount: { ...mode.inputCount },
+    durationSeconds: { ...mode.durationSeconds },
+    resolutions: [...mode.resolutions],
   };
 }
 
