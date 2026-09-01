@@ -767,12 +767,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   const mediaManagement: MediaManagementRuntime = {
     get state() { return mediaManagementImpl?.state ?? "ready"; },
     get probe() { return mediaManagementImpl?.probe; },
-    get probeStatus() { return mediaManagementImpl?.probeStatus; },
     get recovery() { return mediaManagementImpl?.recovery; },
     listJobs: () => mediaManagementImpl?.listJobs?.() ?? [],
     getJob: id => mediaManagementImpl?.getJob?.(id) ?? null,
     acknowledgeJob: (id, revision) => mediaManagementImpl?.acknowledgeJob?.(id, revision) ?? null,
-    probePreflightApproved: () => mediaManagementImpl?.probePreflightApproved?.() ?? false,
     get launchArtifact() { return mediaManagementImpl?.launchArtifact; },
     authorizeInteractiveCliAction: (input, proof) => {
       const runtimePort = boundPort ?? server?.port ?? listenPort;

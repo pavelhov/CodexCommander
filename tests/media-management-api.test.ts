@@ -452,7 +452,7 @@ describe("media management resource", () => {
     expect(acknowledgeJob).toHaveBeenCalledTimes(1);
   });
 
-  test("production preflight remains closed and prior probe acknowledgement ignores selected-source readiness", async () => {
+  test("ordinary readiness reads do not create or dispatch a probe, while legacy acknowledgement remains recoverable", async () => {
     const probeStatus = {
       id: "probe-operation",
       revision: 3,
@@ -490,7 +490,18 @@ describe("media management resource", () => {
     const cfg = config();
     cfg.images!.authSource = "api_key";
     const read = (await request(cfg, runtime, "/api/media"))!;
-    expect(await read.json()).toMatchObject({ probe: { id: "probe-operation", steps: { image: { state: "outcome_unknown" } } } });
+    const resource = await read.json() as { probe: unknown; readiness: { facts: Record<string, unknown> } };
+    expect(resource.probe).toBeNull();
+    expect(resource.readiness.facts).toMatchObject({
+      modelAccess: { image: { state: "unknown" }, video: { state: "unknown" } },
+      billing: { state: "unknown" },
+      quota: { state: "unknown", nextRequestAdmission: "unknown" },
+      recoveryAdmission: { state: "admitted" },
+    });
+    // These are the two paths that respectively create a journal record and
+    // dispatch image/video work. A readiness GET must never reach either.
+    expect(prepare).toHaveBeenCalledTimes(0);
+    expect(run).toHaveBeenCalledTimes(0);
     const exact = (await request(cfg, runtime, "/api/media/probes/probe-operation"))!;
     expect(exact.headers.get("cache-control")).toBe("no-store");
     expect(await exact.json()).toMatchObject({ probe: { id: "probe-operation", revision: 3 } });
@@ -498,7 +509,7 @@ describe("media management resource", () => {
     const probeBody = { action: "probe", target: "probe", id: "probe-operation", expectedRevision: 3, confirmation: true, caller: "confirmed_gui" };
     expect((await request(cfg, runtime, "/api/media/actions", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(probeBody),
-    }, "confirmed-gui-session"))!.status).toBe(409);
+    }, "confirmed-gui-session"))!.status).toBe(400);
     expect(prepare).toHaveBeenCalledTimes(0);
     expect(run).toHaveBeenCalledTimes(0);
 
@@ -507,6 +518,30 @@ describe("media management resource", () => {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(acknowledgeBody),
     }, "confirmed-gui-session"))!.status).toBe(200);
     expect(acknowledge).toHaveBeenCalledTimes(1);
+  });
+
+  test("readiness separates local credentials from unknown provider access and invalidates a source switch", async () => {
+    const cfg = config();
+    cfg.images = { bridgeEnabled: true, videoBridgeEnabled: true, authSource: "api_key" };
+    const apiKeyRead = await (await request(cfg, { state: "ready" }, "/api/media"))!.json() as {
+      readiness: { facts: Record<string, unknown> };
+    };
+    expect(apiKeyRead.readiness.facts).toMatchObject({
+      credentialAvailability: { source: "api_key", state: "available", observedAt: expect.any(Number) },
+      modelAccess: { image: { state: "unknown" }, video: { state: "unknown" } },
+      billing: { state: "unknown" },
+      quota: { state: "unknown", nextRequestAdmission: "unknown" },
+      freshness: { state: "current", lastObservedAt: expect.any(Number) },
+    });
+
+    cfg.images.authSource = "subscription_oauth";
+    const oauthRead = await (await request(cfg, { state: "ready" }, "/api/media"))!.json() as {
+      readiness: { facts: Record<string, unknown> };
+    };
+    expect(oauthRead.readiness.facts).toMatchObject({
+      credentialAvailability: { source: "subscription_oauth", state: "unavailable", observedAt: null },
+      freshness: { state: "not_observed", lastObservedAt: null },
+    });
   });
 
   test("recovery projection advertises only actions that can currently succeed", async () => {

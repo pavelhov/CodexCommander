@@ -9,7 +9,6 @@ import {
   CapabilityProbeGateError,
   IMAGE_PROBE_MODEL,
   VIDEO_PROBE_MODEL,
-  type CapabilityProbeGate,
   type CapabilityProbeService,
   type CapabilityProbeStatus,
 } from "../../images/capability-probe";
@@ -39,7 +38,7 @@ import { isPlainRecord } from "./shared";
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_PAGE_SIZE = 25;
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const MEDIA_ACTIONS = new Set(["probe", "acknowledge", "open", "reveal", "quarantine_reset"]);
+const MEDIA_ACTIONS = new Set(["acknowledge", "open", "reveal", "quarantine_reset"]);
 
 export type PublicMediaJobAction =
   | "wait"
@@ -67,10 +66,6 @@ export interface MediaManagementRuntime {
   probe?: CapabilityProbeService;
   /** Exact safe durable lookup; it never binds credentials or starts work. */
   getProbeStatus?(id: string): CapabilityProbeStatus | null;
-  /** May idempotently establish the one durable, no-paid-call operation on first read. */
-  probeStatus?: (config: CodexCommanderConfig) => CapabilityProbeStatus | null;
-  /** U8 turns this on only after the focused safety gates have actually passed. */
-  probePreflightApproved?: () => boolean;
   /** Test seam. Production launches the contained server-derived artifact without a shell. */
   launchArtifact?: (artifactId: string, reveal: boolean) => Promise<boolean>;
   settingsApplied?: (config: CodexCommanderConfig) => void;
@@ -148,19 +143,25 @@ function mediaRevision(config: CodexCommanderConfig): number {
   return Number.parseInt(createHash("sha256").update(semantic).digest("hex").slice(0, 12), 16);
 }
 
-function observations(config: CodexCommanderConfig) {
+function observations(config: CodexCommanderConfig): { observations: ReturnType<typeof credentialObservations>; observedAt?: number } {
   const source = config.images?.authSource;
-  if (source !== "subscription_oauth" && source !== "api_key") return {};
+  if (source !== "subscription_oauth" && source !== "api_key") return { observations: {} };
   try {
     bindMediaCredential(config);
-    return { [source]: "ready" as const };
+    return { observations: { [source]: "ready" as const }, observedAt: Date.now() };
   } catch {
     return {
-      [source]: source === "subscription_oauth"
-        ? "reauthentication_required" as const
-        : "missing" as const,
+      observations: credentialObservations(source, false),
     };
   }
+}
+
+function credentialObservations(source: MediaAuthSource, available: boolean) {
+  return available
+    ? { [source]: "ready" as const }
+    : { [source]: source === "subscription_oauth"
+      ? "reauthentication_required" as const
+      : "missing" as const };
 }
 
 export function publicMediaJobStatus(job: PublicVideoJob): PublicMediaJobStatus {
@@ -245,19 +246,6 @@ function capabilityProbeStatus(probe: PublicCapabilityProbe): CapabilityProbeSta
   };
 }
 
-function safeProbe(runtime: MediaManagementRuntime | undefined, config: CodexCommanderConfig): PublicMediaProbeStatus | null {
-  if (!runtime) return null;
-  try {
-    const status = runtime.probeStatus?.(config)
-      ?? (config.images?.authSource === "subscription_oauth"
-        ? runtime.probe?.prepare(bindMediaCredential(config))
-        : null);
-    return status ? publicMediaProbeStatus(status) : null;
-  } catch {
-    return null;
-  }
-}
-
 function parsePage(url: URL): { limit: number; offset: number } | null {
   const rawLimit = url.searchParams.get("limit");
   const rawCursor = url.searchParams.get("cursor");
@@ -305,13 +293,21 @@ function publicResource(
       videosEnabled: config.images?.videoBridgeEnabled === true,
       authSource: config.images?.authSource ?? null,
     },
-    readiness: buildMediaReadinessSnapshot(config, observations(config)),
+    readiness: (() => {
+      const observed = observations(config);
+      return buildMediaReadinessSnapshot(config, observed.observations, {
+        credentialObservedAt: observed.observedAt,
+        recoveryBlocked: runtime?.state === "recovery_blocked",
+      });
+    })(),
     experimental: true,
     sourceFallback: "disabled",
     acceptedJobsKeepOriginalBinding: true,
     jobs,
     page: { limit: page.limit, nextCursor: next },
-    probe: safeProbe(runtime, config),
+    // Compatibility-only field: ordinary readiness reads must never create or
+    // dispatch a durable probe. Existing records remain available by exact GET.
+    probe: null,
     recovery,
   };
 }
@@ -413,7 +409,8 @@ async function patchSettings(ctx: ManagementContext, body: unknown): Promise<Res
     current.images = nextImages;
     // Re-evaluate the exact selected source at the final mutation callback. An
     // unready source is allowed to persist, but it never falls back or arms work.
-    void buildMediaReadinessSnapshot(current, observations(current));
+    const observed = observations(current);
+    void buildMediaReadinessSnapshot(current, observed.observations, { credentialObservedAt: observed.observedAt });
     return { changed: true, value: { kind: "applied" as const, config: current } };
   };
 
@@ -436,7 +433,7 @@ async function patchSettings(ctx: ManagementContext, body: unknown): Promise<Res
 }
 
 type ActionBody = {
-  action: "probe" | "acknowledge" | "open" | "reveal" | "quarantine_reset";
+  action: "acknowledge" | "open" | "reveal" | "quarantine_reset";
   id: string;
   expectedRevision: number;
   confirmation: true;
@@ -463,7 +460,6 @@ function strictAction(value: unknown): ActionBody | null {
     if (!Number.isSafeInteger(value.issuedAt) || (value.issuedAt as number) <= 0) return null;
   } else if (value.nonce !== undefined || value.issuedAt !== undefined) return null;
   if ((value.action === "open" || value.action === "reveal") && (value.target !== "job" || value.step !== undefined)) return null;
-  if (value.action === "probe" && (value.target !== "probe" || value.step !== undefined)) return null;
   if (value.action === "quarantine_reset" && (value.target !== "recovery" || value.step !== undefined)) return null;
   if (value.action === "acknowledge") {
     if (value.target === "probe") {
@@ -599,8 +595,6 @@ async function runAction(ctx: ManagementContext, value: unknown): Promise<Respon
   const runtime = ctx.deps.mediaManagement;
   if (!callerAuthorized(ctx, body, runtime)) return error(ctx, 403, "media_action_attestation_required");
   if (!runtime) return error(ctx, 503, "media_runtime_unavailable");
-  const config = freshConfig(ctx);
-
   if (body.action === "acknowledge" && body.target === "job") {
     const applied = runtime.acknowledgeJob?.(body.id, body.expectedRevision);
     if (!applied) return error(ctx, 409, "stale_media_revision");
@@ -643,37 +637,6 @@ async function runAction(ctx: ManagementContext, value: unknown): Promise<Respon
     const result = await runtime.recovery.quarantineReset?.(body.expectedRevision);
     if (result !== "applied") return error(ctx, 409, result === "conflict" ? "stale_media_revision" : "media_recovery_unavailable");
     return noStore(jsonResponse({ applied: true, acknowledgementRequired: true }, 200, ctx.req, ctx.config));
-  }
-  if (body.action === "probe" && runtime.probe) {
-    if (!runtime.probePreflightApproved?.()) return error(ctx, 409, "probe_preflight_required");
-    let binding;
-    try { binding = bindMediaCredential(config); } catch { return error(ctx, 409, "media_source_unready"); }
-    const prepared = runtime.probe.prepare(binding);
-    if (prepared.id !== body.id || prepared.revision !== body.expectedRevision) return error(ctx, 409, "stale_media_revision");
-    const confirmationRevision = Math.max(prepared.confirmationRevision ?? 0, prepared.revision) + 1;
-    const gate: CapabilityProbeGate = {
-      caller: body.caller,
-      operationId: body.id,
-      expectedRevision: body.expectedRevision,
-      confirmationRevision,
-      expiresAt: Date.now() + 5 * 60_000,
-      runtimeAttested: true,
-      humanConfirmed: true,
-      targetedTestsPassed: true,
-      privacyScanPassed: true,
-      securityReviewApproved: true,
-      apiKeyFallbackDisabled: true,
-      billingAttribution: "unknown",
-      ambiguousSubmissionRiskAccepted: true,
-      nonReleaseEvidenceAccepted: true,
-    };
-    try {
-      const status = await runtime.probe.run(binding, gate);
-      return noStore(jsonResponse({ applied: true, probe: publicMediaProbeStatus(status) }, 200, ctx.req, ctx.config));
-    } catch (cause) {
-      if (cause instanceof CapabilityProbeGateError) return error(ctx, 409, cause.code);
-      throw cause;
-    }
   }
   return error(ctx, 400, "invalid_media_action");
 }
@@ -725,13 +688,6 @@ export function createMediaManagementRuntime(
   runtime: MediaRuntime,
   probe: CapabilityProbeService,
 ): MediaManagementRuntime {
-  let rememberedProbeId: string | undefined;
-  const rememberedProbe = (): CapabilityProbeStatus | null => {
-    if (!rememberedProbeId) return null;
-    const existing = store.publicCapabilityProbe(rememberedProbeId);
-    if (!existing) return null;
-    return capabilityProbeStatus(existing);
-  };
   return {
     state: "ready",
     listJobs: () => store.listPublicVideoJobs(),
@@ -742,21 +698,5 @@ export function createMediaManagementRuntime(
       const existing = store.publicCapabilityProbe(id);
       return existing ? capabilityProbeStatus(existing) : null;
     },
-    // GET may create exactly one durable operation for this binding. It performs
-    // no provider request, stores no prompt/URL, and subsequent reads return the
-    // same operation; POST + privileged confirmation is still the only paid path.
-    probeStatus: config => {
-      const previous = rememberedProbe();
-      if (previous && Object.values(previous.steps).some(step =>
-        ["submitting", "accepted", "outcome_unknown"].includes(step.state))) return previous;
-      try {
-        const prepared = probe.prepare(bindMediaCredential(config));
-        rememberedProbeId = prepared.id;
-        return prepared;
-      } catch {
-        return previous;
-      }
-    },
-    probePreflightApproved: () => false,
   };
 }

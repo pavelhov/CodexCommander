@@ -107,6 +107,11 @@ afterEach(() => {
 });
 
 describe("fetchProviderQuotaReports", () => {
+  test("quota observations never claim a future media request will be admitted", async () => {
+    const result = await fetchProviderQuotaReports(testConfig(), true);
+    expect(result.nextRequestAdmission).toBe("unknown");
+  });
+
   test("publishes one authoritative quota-capability predicate for thin clients", () => {
     const config = testConfig();
     const capability = Object.fromEntries(

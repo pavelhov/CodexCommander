@@ -14,6 +14,34 @@ import type {
   MediaRouteResolution,
 } from "./types";
 
+type KnowledgeState = "unknown" | "available" | "unavailable";
+
+export interface MediaReadinessFacts {
+  /** Route selection remains a configuration fact, separate from any credential claim. */
+  configuredRoute: { image: MediaRouteResolution; video: MediaRouteResolution };
+  credentialAvailability: {
+    source: MediaAuthSource | null;
+    state: "available" | "unavailable" | "not_configured";
+    observedAt: number | null;
+  };
+  /** A route descriptor is not evidence that an account may use that model. */
+  modelAccess: Record<MediaRouteKind, { state: KnowledgeState; observedAt: number | null }>;
+  /** Neither local credentials nor a configured route prove a billable account or remaining quota. */
+  billing: { state: "unknown"; observedAt: null };
+  quota: { state: "unknown"; observedAt: null; nextRequestAdmission: "unknown" };
+  freshness: { state: "not_observed" | "current" | "stale"; lastObservedAt: number | null };
+  recoveryAdmission: { state: "admitted" | "blocked"; reason: "media_recovery_blocked" | null };
+}
+
+export interface MediaReadinessOptions {
+  /** Locally observed credential binding; this is synchronous and never refreshes OAuth. */
+  credentialObservedAt?: number;
+  /** A blocked durable-journal fence prevents a truthful new-work admission claim. */
+  recoveryBlocked?: boolean;
+}
+
+export type PublicMediaReadinessSnapshot = MediaReadinessSnapshot & { facts: MediaReadinessFacts };
+
 const API_KEY_PROVIDER_RECOVERY =
   "Configure and enable canonical providers.xai for api_key media authentication.";
 const OAUTH_PROVIDER_RECOVERY =
@@ -150,7 +178,8 @@ function capabilityReadiness(
 export function buildMediaReadinessSnapshot(
   config: CodexCommanderConfig,
   observations: MediaCredentialObservations = {},
-): MediaReadinessSnapshot {
+  options: MediaReadinessOptions = {},
+): PublicMediaReadinessSnapshot {
   const imageRoute = resolveMediaRoute(config, "image");
   const videoRoute = resolveMediaRoute(config, "video");
   const imageCredential = credentialForRoute(config, imageRoute, observations);
@@ -160,11 +189,37 @@ export function buildMediaReadinessSnapshot(
     ? imageCredential
     : videoCredential;
 
+  const source = config.images?.authSource ?? null;
+  const observed = source && observations[source] === "ready" ? options.credentialObservedAt ?? Date.now() : null;
+  const credentialState = source === null
+    ? "not_configured" as const
+    : observed !== null
+      ? "available" as const
+      : "unavailable" as const;
+  const credentialCurrent = credentialState === "available";
+
   return {
     authSource: config.images?.authSource ?? null,
     credential,
     image: capabilityReadiness(imageRoute, imageCredential),
     video: capabilityReadiness(videoRoute, videoCredential),
+    facts: {
+      configuredRoute: { image: imageRoute, video: videoRoute },
+      credentialAvailability: { source, state: credentialState, observedAt: observed },
+      modelAccess: {
+        image: { state: "unknown", observedAt: null },
+        video: { state: "unknown", observedAt: null },
+      },
+      billing: { state: "unknown", observedAt: null },
+      quota: { state: "unknown", observedAt: null, nextRequestAdmission: "unknown" },
+      freshness: {
+        state: credentialCurrent ? "current" : "not_observed",
+        lastObservedAt: observed,
+      },
+      recoveryAdmission: options.recoveryBlocked
+        ? { state: "blocked", reason: "media_recovery_blocked" }
+        : { state: "admitted", reason: null },
+    },
   };
 }
 

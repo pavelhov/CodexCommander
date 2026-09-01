@@ -18,7 +18,6 @@ export const MEDIA_USAGE = `Usage:
   ccx media settings [--images on|off] [--videos on|off] [--source subscription_oauth|api_key]
   ccx media jobs [list] [--json]
   ccx media jobs wait <opaque-job-id> --revision <n> [--timeout <seconds>]
-  ccx media probe
   ccx media acknowledge <opaque-operation-id> --revision <n>
   ccx media <open|reveal|ack-job> <opaque-job-id> --revision <n>
   ccx media recovery [status|reset|acknowledge] ...`;
@@ -45,6 +44,11 @@ export interface MediaCommandStatus {
   ambiguousSubmissionRisk: boolean;
   releaseStatus: "feasibility_only";
   steps: { image: MediaCommandStepState; video: MediaCommandStepState };
+  /** Read-only knowledge, deliberately separate from a request admission promise. */
+  modelAccess?: { image: "unknown"; video: "unknown" };
+  quotaKnowledge?: "unknown";
+  freshness?: "not_observed" | "current" | "stale";
+  recoveryAdmission?: "admitted" | "blocked";
   /** Safe local operation id. It is omitted until a durable probe exists. */
   operationId?: string;
   /** Semantic revision for independent image/video/source settings. */
@@ -85,11 +89,6 @@ export interface MediaCommandProbeOperation {
 
 export interface MediaCommandService {
   status(): Promise<MediaCommandStatus>;
-  probe(input: {
-    action: "probe";
-    expectedRevision: number;
-    confirmation: true;
-  }): Promise<MediaCommandStatus>;
   acknowledge(input: {
     action: "acknowledge";
     operationId: string;
@@ -108,7 +107,6 @@ export interface MediaCommandService {
 
 export type ParsedMediaCommand =
   | { command: "status"; json: boolean }
-  | { command: "probe" }
   | { command: "acknowledge"; operationId: string; revision: number }
   | { command: "settings"; patch: MediaSettingsPatch }
   | { command: "jobs"; json: boolean }
@@ -154,8 +152,7 @@ export function parseMediaArgs(argv: string[]): ParsedMediaCommand {
     return { command: "status", json };
   }
   if (command === "probe") {
-    if (args.length > 0) usage("The capability probe uses fixed server-owned operations and accepts no overrides");
-    return { command: "probe" };
+    usage("media probe has been removed; readiness is read-only and legacy probe records may only be recovered");
   }
   if (command === "settings") {
     const patch: MediaSettingsPatch = {};
@@ -284,6 +281,18 @@ function safeStatus(value: MediaCommandStatus): MediaCommandStatus {
     ambiguousSubmissionRisk: record.ambiguousSubmissionRisk as boolean,
     releaseStatus: "feasibility_only",
     steps: { image: imageStep as MediaCommandStepState, video: videoStep as MediaCommandStepState },
+    ...(record.modelAccess && typeof record.modelAccess === "object"
+      && (record.modelAccess as Record<string, unknown>).image === "unknown"
+      && (record.modelAccess as Record<string, unknown>).video === "unknown"
+      ? { modelAccess: { image: "unknown" as const, video: "unknown" as const } }
+      : {}),
+    ...(record.quotaKnowledge === "unknown" ? { quotaKnowledge: "unknown" as const } : {}),
+    ...(record.freshness === "not_observed" || record.freshness === "current" || record.freshness === "stale"
+      ? { freshness: record.freshness }
+      : {}),
+    ...(record.recoveryAdmission === "admitted" || record.recoveryAdmission === "blocked"
+      ? { recoveryAdmission: record.recoveryAdmission }
+      : {}),
     ...(typeof record.operationId === "string" && OPAQUE_ID.test(record.operationId)
       ? { operationId: record.operationId }
       : {}),
@@ -301,7 +310,7 @@ function unavailableService(): MediaCommandService {
       null,
     );
   };
-  return { status: unavailable, probe: unavailable, acknowledge: unavailable };
+  return { status: unavailable, acknowledge: unavailable };
 }
 
 function exactSafeJob(value: unknown): MediaCommandJob {
@@ -387,6 +396,11 @@ function createHttpMediaService(target: AttestedLiveManagementProxy, fetchImpl: 
     const settings = resource.settings as Record<string, unknown> | undefined;
     const readiness = resource.readiness as Record<string, unknown> | undefined;
     const credential = readiness?.credential as Record<string, unknown> | undefined;
+    const facts = readiness?.facts as Record<string, unknown> | undefined;
+    const modelAccess = facts?.modelAccess as Record<string, { state?: unknown }> | undefined;
+    const quota = facts?.quota as Record<string, unknown> | undefined;
+    const freshness = facts?.freshness as Record<string, unknown> | undefined;
+    const recoveryAdmission = facts?.recoveryAdmission as Record<string, unknown> | undefined;
     const probe = resource.probe as Record<string, unknown> | null | undefined;
     const steps = probe?.steps as Record<string, { state?: unknown }> | undefined;
     const status: MediaCommandStatus = {
@@ -405,6 +419,16 @@ function createHttpMediaService(target: AttestedLiveManagementProxy, fetchImpl: 
         image: typeof steps?.image?.state === "string" ? steps.image.state as MediaCommandStepState : "pending",
         video: typeof steps?.video?.state === "string" ? steps.video.state as MediaCommandStepState : "pending",
       },
+      ...(modelAccess?.image?.state === "unknown" && modelAccess.video?.state === "unknown"
+        ? { modelAccess: { image: "unknown" as const, video: "unknown" as const } }
+        : {}),
+      ...(quota?.state === "unknown" ? { quotaKnowledge: "unknown" as const } : {}),
+      ...(freshness?.state === "not_observed" || freshness?.state === "current" || freshness?.state === "stale"
+        ? { freshness: freshness.state }
+        : {}),
+      ...(recoveryAdmission?.state === "admitted" || recoveryAdmission?.state === "blocked"
+        ? { recoveryAdmission: recoveryAdmission.state }
+        : {}),
       ...(typeof probe?.id === "string" ? { operationId: probe.id } : {}),
       ...(Number.isSafeInteger(resource.revision) ? { settingsRevision: resource.revision as number } : {}),
     };
@@ -428,12 +452,6 @@ function createHttpMediaService(target: AttestedLiveManagementProxy, fetchImpl: 
   };
   return {
     status: async () => (await read()).status,
-    async probe(input) {
-      const current = (await read()).status;
-      if (!current.operationId) throw new RuntimeApiError("No durable capability probe is available.", 409, null);
-      await postAction({ action: "probe", target: "probe", id: current.operationId, expectedRevision: input.expectedRevision });
-      return (await read()).status;
-    },
     async acknowledge(input) {
       const current = await this.probeOperation!(input.operationId);
       const step = current?.steps.image === "outcome_unknown" ? "image"
@@ -522,10 +540,14 @@ function printStatus(value: MediaCommandStatus, out: (line: string) => void, jso
   }
   out(`Media source: ${projected.source ?? "not configured"}`);
   out(`Binding readiness: ${projected.bindingReady ? "ready" : "blocked"}`);
-  out(`Fixed image operation: ${projected.imageModel}`);
-  out(`Fixed video operation: ${projected.videoModel}, 1 second, 1080p`);
+  out(`Configured image model (not access verification): ${projected.imageModel}`);
+  out(`Configured video model (not access verification): ${projected.videoModel}, 1 second, 1080p`);
   out(`API-key fallback: ${projected.apiKeyFallbackDisabled ? "disabled" : "not proven disabled"}`);
   out("Capability only; billing attribution: unknown");
+  out(`Model access knowledge: ${projected.modelAccess?.image === "unknown" ? "unknown" : "not observed"}`);
+  out(`Quota knowledge: ${projected.quotaKnowledge ?? "unknown"}; next-request admission is unknown`);
+  if (projected.freshness) out(`Observation freshness: ${projected.freshness}`);
+  if (projected.recoveryAdmission) out(`Recovery admission: ${projected.recoveryAdmission}`);
   out(`Ambiguous-submit risk: ${projected.ambiguousSubmissionRisk ? "may consume quota without a result" : "not acknowledged"}`);
   out("Release status: feasibility only; this is not packaged verification");
   out(`Image step: ${projected.steps.image}`);
@@ -605,12 +627,6 @@ export async function handleMediaCommand(argv: string[], deps: MediaCommandDeps 
       else out(`${recovery.id}  ${recovery.cause}  rev:${recovery.revision}  ${recovery.acknowledgementRequired ? "acknowledgement-required" : "restart-required"}`);
       return 0;
     }
-    if (
-      parsed.command === "probe"
-      && (preview.source !== "subscription_oauth" || !preview.bindingReady || !preview.apiKeyFallbackDisabled)
-    ) {
-      throw new RuntimeApiError("Media OAuth binding is not ready.", 403, null);
-    }
     if (!stdinIsTTY || !stdoutIsTTY) {
       throw new RuntimeApiError("Media settings and paid/recovery actions require an interactive terminal.", 403, null);
     }
@@ -622,8 +638,6 @@ export async function handleMediaCommand(argv: string[], deps: MediaCommandDeps 
         parsed.patch.authSource === undefined ? null : `source ${parsed.patch.authSource}`,
       ].filter((value): value is string => value !== null);
       question = `Apply media settings: ${changes.join(", ")}?`;
-    } else if (parsed.command === "probe") {
-      question = "Run exactly one fixed image and one one-second 1080p video capability probe?";
     } else if (parsed.command === "acknowledge") {
       question = `Acknowledge outcome-unknown media operation ${parsed.operationId}?`;
     } else {
@@ -673,26 +687,18 @@ export async function handleMediaCommand(argv: string[], deps: MediaCommandDeps 
       else out("Media recovery action applied; restart required.");
       return 0;
     }
-    if (parsed.command === "probe") {
-      if (freshPreview.revision !== preview.revision || freshPreview.operationId !== preview.operationId) {
-        throw new RuntimeApiError("Media action refused because the probe changed during confirmation.", 409, null);
-      }
-    } else {
-      const exact = freshPreview.operationId === parsed.operationId
-        ? { id: freshPreview.operationId, revision: freshPreview.revision, steps: freshPreview.steps }
-        : await freshService.probeOperation?.(parsed.operationId);
-      if (!exact || exact.revision !== parsed.revision) {
-        throw new RuntimeApiError("Media action refused because the probe changed during confirmation.", 409, null);
-      }
+    const exact = freshPreview.operationId === parsed.operationId
+      ? { id: freshPreview.operationId, revision: freshPreview.revision, steps: freshPreview.steps }
+      : await freshService.probeOperation?.(parsed.operationId);
+    if (!exact || exact.revision !== parsed.revision) {
+      throw new RuntimeApiError("Media action refused because the probe changed during confirmation.", 409, null);
     }
-    const result = parsed.command === "probe"
-      ? await freshService.probe({ action: "probe", expectedRevision: freshPreview.revision, confirmation: true })
-      : await freshService.acknowledge({
-          action: "acknowledge",
-          operationId: parsed.operationId,
-          expectedRevision: parsed.revision,
-          confirmation: true,
-        });
+    const result = await freshService.acknowledge({
+      action: "acknowledge",
+      operationId: parsed.operationId,
+      expectedRevision: parsed.revision,
+      confirmation: true,
+    });
     printStatus(safeStatus(result), out, false);
     return 0;
   } catch (error) {

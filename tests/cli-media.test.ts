@@ -80,31 +80,13 @@ describe("ccx media safe command boundary", () => {
     expect(parseMediaArgs([])).toEqual({ command: "status", json: false });
   });
 
-  test("invalid arguments and failed attestation reach no service or mutation", async () => {
-    let f = fixture();
+  test("removed paid probe command reaches no service or mutation", async () => {
+    const f = fixture();
     expect(await handleMediaCommand(["probe", "--yes"], f.deps)).toBe(2);
     expect(f.attest).toHaveBeenCalledTimes(0);
     expect(f.createService).toHaveBeenCalledTimes(0);
-
-    f = fixture({ attest: async () => null });
-    expect(await handleMediaCommand(["probe"], f.deps)).toBe(1);
+    expect(await handleMediaCommand(["probe"], f.deps)).toBe(2);
     expect(f.createService).toHaveBeenCalledTimes(0);
-    expect(f.probe).toHaveBeenCalledTimes(0);
-  });
-
-  test("noninteractive or declined confirmation performs zero mutation", async () => {
-    let f = fixture({ stdinIsTTY: false });
-    expect(await handleMediaCommand(["probe"], f.deps)).toBe(1);
-    expect(f.probe).toHaveBeenCalledTimes(0);
-
-    f = fixture({ status: { ...safeStatus, source: "api_key" } });
-    expect(await handleMediaCommand(["probe"], f.deps)).toBe(1);
-    expect(f.confirm).toHaveBeenCalledTimes(0);
-    expect(f.probe).toHaveBeenCalledTimes(0);
-
-    f = fixture({ confirm: false });
-    expect(await handleMediaCommand(["probe"], f.deps)).toBe(1);
-    expect(f.confirm).toHaveBeenCalledTimes(1);
     expect(f.probe).toHaveBeenCalledTimes(0);
   });
 
@@ -141,45 +123,6 @@ describe("ccx media safe command boundary", () => {
     });
   });
 
-  test("accepted confirmation re-attests the exact runtime and mutates once with fixed fields", async () => {
-    const f = fixture();
-    expect(await handleMediaCommand(["probe"], f.deps)).toBe(0);
-    expect(f.attest).toHaveBeenCalledTimes(2);
-    expect(f.status).toHaveBeenCalledTimes(2);
-    expect(f.probe).toHaveBeenCalledTimes(1);
-    expect(f.probe.mock.calls[0]?.[0]).toEqual({
-      action: "probe",
-      expectedRevision: 7,
-      confirmation: true,
-    });
-    expect(f.output.join("\n")).toContain("billing attribution: unknown");
-    expect(f.output.join("\n")).toContain("not packaged verification");
-  });
-
-  test("runtime rotation during confirmation aborts without mutation", async () => {
-    let calls = 0;
-    const f = fixture({
-      attest: async () => {
-        calls += 1;
-        return calls === 1 ? target : { ...target, runtimeRecordIdentity: "opaque-b" };
-      },
-    });
-    expect(await handleMediaCommand(["probe"], f.deps)).toBe(5);
-    expect(f.probe).toHaveBeenCalledTimes(0);
-  });
-
-  test("revision rotation during confirmation is re-read and aborts without mutation", async () => {
-    const f = fixture();
-    let reads = 0;
-    f.deps.createService = () => ({
-      status: async () => ({ ...safeStatus, revision: reads++ === 0 ? 7 : 8 }),
-      probe: f.probe,
-      acknowledge: f.acknowledge,
-    });
-    expect(await handleMediaCommand(["probe"], f.deps)).toBe(5);
-    expect(reads).toBe(2);
-    expect(f.probe).toHaveBeenCalledTimes(0);
-  });
 
   test("status output allowlists safe fields instead of serializing arbitrary service data", async () => {
     const malicious = {
