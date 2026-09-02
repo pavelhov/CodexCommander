@@ -3,21 +3,13 @@
  * per-family account readers. Kept separate from account.ts (command handlers)
  * per the 400-line module budget.
  */
-import { randomBytes } from "node:crypto";
 import {
   attestLiveManagementProxy,
   findLiveProxy,
   probeHostname,
-  sameAttestedRuntimeTarget,
-  type AttestedLiveManagementProxy,
   type ManagementAttestationIo,
 } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
-import {
-  MEDIA_ACTION_ATTESTATION_HEADER,
-  type MediaActionAttestationInput,
-} from "../lib/media-action-attestation";
-import { interactiveConfirm } from "./interactive-confirm";
 import { isPublicOAuthProvider } from "../oauth/index";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "../providers/registry";
 import type { CodexCommanderConfig } from "../types";
@@ -64,10 +56,6 @@ export interface AccountDeps {
   loadConfigImpl?: () => CodexCommanderConfig;
   stdinImpl?: AccountStdin;
   stdinTimeoutMs?: number;
-  stdinIsTTY?: boolean;
-  stdoutIsTTY?: boolean;
-  confirm?: (question: string) => Promise<boolean>;
-  readSecret?: (question: string) => Promise<string>;
   /** Test/platform injection for the official Codex login in a restricted staging home. */
   spawnCodexLoginImpl?: (codexHome: string) => NativeMainLoginChild;
   /** Test-only heartbeat cadence floor. Production keeps the five-second floor. */
@@ -107,41 +95,20 @@ export async function apiJson(
   method: "GET" | "PUT" | "POST" | "DELETE",
   path: string,
   body?: unknown,
-  options: {
-    signal?: AbortSignal;
-    target?: AttestedLiveManagementProxy;
-    actionAttestation?: Pick<MediaActionAttestationInput, "action" | "target" | "id">;
-  } = {},
+  options: { signal?: AbortSignal } = {},
 ): Promise<ApiResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   try {
     const attest = deps.attestLiveManagementProxyImpl ?? attestLiveManagementProxy;
-    const target = options.target ?? await attest({
+    const target = await attest({
       ...(deps.managementAttestation ?? {}),
       fetchFn: fetchImpl,
     });
     if (!target) return { status: 0, json: {} };
-    const headers = runningProxyUpdateHeaders();
-    let requestBody = body;
-    if (options.actionAttestation) {
-      if (!body || typeof body !== "object" || Array.isArray(body)) return { status: 0, json: {} };
-      const envelope = {
-        ...(body as Record<string, unknown>),
-        ...options.actionAttestation,
-        confirmation: true as const,
-        caller: "interactive_cli" as const,
-        nonce: randomBytes(32).toString("base64url"),
-        issuedAt: Date.now(),
-      } as MediaActionAttestationInput;
-      const proof = target.proveMediaAction?.(envelope);
-      if (!proof) return { status: 403, json: { error: "xAI media credential action attestation required" } };
-      headers.set(MEDIA_ACTION_ATTESTATION_HEADER, proof);
-      requestBody = envelope;
-    }
     const res = await fetchImpl(`${target.baseUrl}${path}`, {
       method,
-      headers,
-      body: requestBody === undefined ? undefined : JSON.stringify(requestBody),
+      headers: runningProxyUpdateHeaders(),
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: options.signal,
     });
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -149,126 +116,6 @@ export async function apiJson(
   } catch {
     return { status: 0, json: {} };
   }
-}
-
-export async function attestAccountManagementTarget(
-  deps: AccountDeps,
-  expectedPid?: number,
-): Promise<AttestedLiveManagementProxy | null> {
-  const fetchImpl = deps.fetchImpl ?? fetch;
-  const attest = deps.attestLiveManagementProxyImpl ?? attestLiveManagementProxy;
-  return attest({
-    ...(deps.managementAttestation ?? {}),
-    ...(expectedPid === undefined ? {} : { expectedPid }),
-    fetchFn: fetchImpl,
-  });
-}
-
-export interface XaiKeyActionGate {
-  target: AttestedLiveManagementProxy;
-  revision: number;
-}
-
-export async function gateXaiKeyAction(
-  deps: AccountDeps,
-  baseUrl: string,
-  question: string,
-): Promise<XaiKeyActionGate | null> {
-  const stdinIsTTY = deps.stdinIsTTY ?? process.stdin.isTTY === true;
-  const stdoutIsTTY = deps.stdoutIsTTY ?? process.stdout.isTTY === true;
-  if (!stdinIsTTY || !stdoutIsTTY) {
-    console.error("Error: xAI media key changes require an interactive terminal.");
-    return null;
-  }
-  const initial = await attestAccountManagementTarget(deps);
-  if (!initial) return null;
-  const before = await apiJson(deps, baseUrl, "GET", "/api/providers/keys?name=xai", undefined, { target: initial });
-  if (before.status !== 200 || !Number.isSafeInteger(before.json.revision)) return null;
-  const confirm = deps.confirm ?? (prompt => interactiveConfirm({ question: prompt, defaultYes: false }));
-  if (!await confirm(question)) {
-    console.error("xAI media key action declined; no credential change was attempted.");
-    return null;
-  }
-  const fresh = await attestAccountManagementTarget(deps, initial.pid);
-  if (!fresh || !sameAttestedRuntimeTarget(initial, fresh)) {
-    console.error("Error: xAI media key action refused because the attested runtime changed.");
-    return null;
-  }
-  const current = await apiJson(deps, baseUrl, "GET", "/api/providers/keys?name=xai", undefined, { target: fresh });
-  if (
-    current.status !== 200
-    || !Number.isSafeInteger(current.json.revision)
-    || current.json.revision !== before.json.revision
-  ) {
-    console.error("Error: xAI media key action refused because the key pool changed.");
-    return null;
-  }
-  return { target: fresh, revision: current.json.revision as number };
-}
-
-export type XaiOAuthActionGate =
-  | { kind: "unprotected" }
-  | { kind: "attested"; target: AttestedLiveManagementProxy; revision: number };
-
-function xaiOAuthActionChangesBillingIdentity(
-  snapshot: Record<string, unknown>,
-  action: "select" | "remove",
-  accountId: string,
-): boolean {
-  if (snapshot.mediaBillingIdentityProtected !== true) return false;
-  const activeAccountId = typeof snapshot.activeAccountId === "string" ? snapshot.activeAccountId : null;
-  return action === "select" ? activeAccountId !== accountId : activeAccountId === accountId;
-}
-
-/**
- * Confirm an exact xAI subscription-account change against the same attested
- * runtime and account-set revision that will receive the mutation.
- */
-export async function gateXaiOAuthAction(
-  deps: AccountDeps,
-  baseUrl: string,
-  action: "select" | "remove",
-  accountId: string,
-  question: string,
-): Promise<XaiOAuthActionGate | null> {
-  const initial = await attestAccountManagementTarget(deps);
-  if (!initial) return null;
-  const path = "/api/oauth/accounts?provider=xai";
-  const before = await apiJson(deps, baseUrl, "GET", path, undefined, { target: initial });
-  if (before.status !== 200) return null;
-  if (!xaiOAuthActionChangesBillingIdentity(before.json, action, accountId)) {
-    return { kind: "unprotected" };
-  }
-  if (!Number.isSafeInteger(before.json.revision)) return null;
-  const stdinIsTTY = deps.stdinIsTTY ?? process.stdin.isTTY === true;
-  const stdoutIsTTY = deps.stdoutIsTTY ?? process.stdout.isTTY === true;
-  if (!stdinIsTTY || !stdoutIsTTY) {
-    console.error("Error: xAI subscription media account changes require an interactive terminal.");
-    return null;
-  }
-  const confirm = deps.confirm ?? (prompt => interactiveConfirm({ question: prompt, defaultYes: false }));
-  if (!await confirm(question)) {
-    console.error("xAI subscription media account action declined; no credential change was attempted.");
-    return null;
-  }
-  const fresh = await attestAccountManagementTarget(deps, initial.pid);
-  if (!fresh || !sameAttestedRuntimeTarget(initial, fresh)) {
-    console.error("Error: xAI subscription media account action refused because the attested runtime changed.");
-    return null;
-  }
-  const current = await apiJson(deps, baseUrl, "GET", path, undefined, { target: fresh });
-  if (
-    current.status !== 200
-    || !Number.isSafeInteger(current.json.revision)
-    || current.json.revision !== before.json.revision
-  ) {
-    console.error("Error: xAI subscription media account action refused because the account set changed.");
-    return null;
-  }
-  if (!xaiOAuthActionChangesBillingIdentity(current.json, action, accountId)) {
-    return { kind: "unprotected" };
-  }
-  return { kind: "attested", target: fresh, revision: current.json.revision as number };
 }
 
 export async function resolveBaseUrl(deps: AccountDeps): Promise<string | null> {

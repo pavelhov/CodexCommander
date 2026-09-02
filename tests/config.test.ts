@@ -441,98 +441,87 @@ describe("create-only config initialization", () => {
   });
 });
 
-describe("media authentication source config", () => {
-  test("accepts independent generator selections including explicit None without rewriting an invalid selection", () => {
-    const result = validateConfigCandidate({
+describe("retired direct media config compatibility", () => {
+  test("disk reads discard retired media fields while preserving generic images and other settings", () => {
+    const legacyConfig = {
       ...getDefaultConfig(),
-      media: { imageGenerator: null, videoGenerator: "future-provider" },
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      config: { media: { imageGenerator: null, videoGenerator: "future-provider" } },
-    });
-  });
-
-  test("normalizes legacy enabled bridge configs to api_key without enabling the other bridge", () => {
-    writeConfig({
-      ...getDefaultConfig(),
-      images: { bridgeEnabled: true, videoBridgeEnabled: false },
-    });
+      port: 12345,
+      codexAutoStart: false,
+      images: {
+        provider: "custom-images",
+        timeoutMs: 12_345,
+        bridgeEnabled: true,
+        authSource: "subscription_oauth",
+        bridgeModel: "grok-imagine-image",
+        maxRounds: 4,
+        artifactsKeepCount: 30,
+        videoBridgeEnabled: true,
+        videoBridgeModel: "grok-imagine-video",
+        videoMaxRounds: 3,
+        videoTimeoutMs: 90_000,
+      },
+      media: {
+        imageGenerator: "grok",
+        videoGenerator: "grok",
+      },
+    };
+    const bytes = `${JSON.stringify(legacyConfig, null, 2)}\n`;
+    writeFileSync(getConfigPath(), bytes, "utf-8");
 
     const loaded = loadConfig();
-    expect(loaded.images).toEqual({
-      bridgeEnabled: true,
-      videoBridgeEnabled: false,
-      authSource: "api_key",
+    expect(loaded).toMatchObject({
+      port: 12345,
+      codexAutoStart: false,
+      images: { provider: "custom-images", timeoutMs: 12_345 },
     });
-    saveConfig(loaded);
-    expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).images).toEqual({
-      bridgeEnabled: true,
-      videoBridgeEnabled: false,
-      authSource: "api_key",
-    });
+    expect(Object.hasOwn(loaded, "media")).toBe(false);
+    expect(loaded.images).toEqual({ provider: "custom-images", timeoutMs: 12_345 });
 
-    writeConfig({
-      ...getDefaultConfig(),
-      images: { bridgeEnabled: false, videoBridgeEnabled: true },
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics).toMatchObject({
+      source: "file",
+      error: null,
+      config: {
+        port: 12345,
+        codexAutoStart: false,
+        images: { provider: "custom-images", timeoutMs: 12_345 },
+      },
     });
-    expect(loadConfig().images).toEqual({
-      bridgeEnabled: false,
+    expect(readFileSync(getConfigPath(), "utf-8")).toBe(bytes);
+  });
+
+  test("in-memory validation rejects every retired media field", () => {
+    expect(validateConfigCandidate({
+      ...getDefaultConfig(),
+      media: { imageGenerator: "grok" },
+    }).ok).toBe(false);
+
+    const retiredImageFields: Record<string, unknown> = {
+      bridgeEnabled: true,
+      authSource: "api_key",
+      bridgeModel: "grok-imagine-image",
+      maxRounds: 4,
+      artifactsKeepCount: 30,
       videoBridgeEnabled: true,
-      authSource: "api_key",
-    });
-  });
-
-  test("accepts both explicit media authentication sources for all four switch states", () => {
-    for (const authSource of ["api_key", "subscription_oauth"] as const) {
-      for (const bridgeEnabled of [false, true]) {
-        for (const videoBridgeEnabled of [false, true]) {
-          const result = validateConfigCandidate({
-            ...getDefaultConfig(),
-            images: { authSource, bridgeEnabled, videoBridgeEnabled },
-          });
-          expect(result).toMatchObject({
-            ok: true,
-            config: { images: { authSource, bridgeEnabled, videoBridgeEnabled } },
-          });
-        }
-      }
-    }
-  });
-
-  test("rejects missing, automatic, unknown, and malformed sources at mutation boundaries", () => {
-    expect(validateConfigCandidate({
-      ...getDefaultConfig(),
-      images: { bridgeEnabled: true },
-    })).toMatchObject({ ok: false, error: expect.stringContaining("authSource") });
-    expect(validateConfigCandidate({
-      ...getDefaultConfig(),
-      images: { videoBridgeEnabled: true },
-    })).toMatchObject({ ok: false, error: expect.stringContaining("authSource") });
-
-    for (const authSource of ["auto", "oauth", "api-key", true, null]) {
-      expect(validateConfigCandidate({
+      videoBridgeModel: "grok-imagine-video",
+      videoMaxRounds: 3,
+      videoTimeoutMs: 90_000,
+    };
+    for (const [field, value] of Object.entries(retiredImageFields)) {
+      const result = validateConfigCandidate({
         ...getDefaultConfig(),
-        images: { bridgeEnabled: true, authSource },
-      }).ok).toBe(false);
+        images: { provider: "custom-images", timeoutMs: 12_345, [field]: value },
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("images"),
+      });
     }
 
     expect(validateConfigCandidate({
       ...getDefaultConfig(),
-      images: { bridgeEnabled: true, authSource: "api_key", credential: "secret" },
-    })).toMatchObject({ ok: false, error: expect.stringContaining("unrecognized field") });
-  });
-
-  test("off/off remains valid and does not invent a credential source", () => {
-    const result = validateConfigCandidate({
-      ...getDefaultConfig(),
-      images: { bridgeEnabled: false, videoBridgeEnabled: false },
-    });
-    expect(result).toMatchObject({
-      ok: true,
-      config: { images: { bridgeEnabled: false, videoBridgeEnabled: false } },
-    });
-    if (result.ok) expect(result.config.images?.authSource).toBeUndefined();
+      images: { provider: "custom-images", timeoutMs: 12_345 },
+    }).ok).toBe(true);
   });
 });
 

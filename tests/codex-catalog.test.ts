@@ -2926,7 +2926,6 @@ describe("native slug allowlist", () => {
 describe("media-generation model filtering", () => {
   test("flags image/video generation model ids", () => {
     for (const id of [
-      "grok-2-image", "grok-2-image-1212", "grok-2-image-latest", "grok-video",
       "gpt-5-image", "gpt-5-image-mini", "gpt-image-1", "gemini-3-pro-image",
       "dall-e-3", "imagen-4", "sora-2", "veo-3", "flux", "stable-diffusion-3.5", "sdxl", "kling-2",
     ]) {
@@ -2961,7 +2960,7 @@ describe("shouldExposeRoutedModel — Gemini image-capable exemption", () => {
 
   test("still filters true media-generation models", () => {
     for (const id of [
-      "grok-2-image", "gpt-image-1", "dall-e-3", "imagen-4", "sora-2", "veo-3", "flux",
+      "gpt-image-1", "dall-e-3", "imagen-4", "sora-2", "veo-3", "flux",
     ]) {
       expect(shouldExposeRoutedModel({ provider: "openrouter", id })).toBe(false);
     }

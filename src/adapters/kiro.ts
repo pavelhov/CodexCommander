@@ -1858,7 +1858,6 @@ export function createKiroAdapter(provider: CodexCommanderProviderConfig): Provi
 
   return {
     name: "kiro",
-    toolCallIdCollisionKey: normalizeToolId,
     async buildRequest(parsed: CodexCommanderParsedRequest, incoming) {
       const built = await build(parsed);
       modelId = parsed.modelId;

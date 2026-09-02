@@ -112,12 +112,19 @@ describe("CLI OAuth live-update credential preservation", () => {
       delete expectedPostedProvider.apiKeyPool;
 
       let reconciliationBody: Record<string, unknown> | null = null;
+      const rotatedKey = "newer-live-update-key";
       const observedFetch: typeof fetch = async (input, init) => {
         const requestUrl = input instanceof Request ? input.url : String(input);
         const method = input instanceof Request ? input.method : init?.method;
         const body = input instanceof Request ? await input.clone().text() : String(init?.body ?? "");
         if (new URL(requestUrl).pathname === "/api/providers" && method === "POST") {
           reconciliationBody = JSON.parse(body) as Record<string, unknown>;
+          const rotated = await fetch(new URL("/api/providers/keys", server.url), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "xai", key: rotatedKey }),
+          });
+          if (!rotated.ok) throw new Error(`failed to rotate test key (HTTP ${rotated.status})`);
         }
         return globalThis.fetch(input, init);
       };
@@ -157,8 +164,8 @@ describe("CLI OAuth live-update credential preservation", () => {
 
       const disk = JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8")) as CodexCommanderConfig;
       expect(disk.providers.xai!.authMode).toBe("key");
-      expect(disk.providers.xai!.apiKey).toBe("live-update-sentinel-key");
-      expect(disk.providers.xai!.apiKeyPool?.some(entry => entry.key === "live-update-sentinel-key")).toBe(true);
+      expect(disk.providers.xai!.apiKey).toBe(rotatedKey);
+      expect(disk.providers.xai!.apiKeyPool?.some(entry => entry.key === rotatedKey)).toBe(true);
     } finally {
       await server.stop(true);
     }

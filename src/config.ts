@@ -1011,21 +1011,6 @@ const visionSidecarSchema = z.object({
 const imagesSchema = z.object({
   provider: z.string().optional(),
   timeoutMs: z.number().int().positive().optional(),
-  bridgeEnabled: z.boolean().optional(),
-  authSource: z.enum(["subscription_oauth", "api_key"]).optional(),
-  bridgeModel: z.string().optional(),
-  maxRounds: z.number().int().min(0).max(10).optional(),
-  artifactsKeepCount: z.number().int().nonnegative().optional(),
-  videoBridgeEnabled: z.boolean().optional(),
-  videoBridgeModel: z.string().optional(),
-  videoMaxRounds: z.number().int().nonnegative().optional(),
-  videoTimeoutMs: z.number().int().positive().optional(),
-}).strict();
-
-const mediaSelectionSchema = z.string().min(1).nullable().optional();
-const mediaSchema = z.object({
-  imageGenerator: mediaSelectionSchema,
-  videoGenerator: mediaSelectionSchema,
 }).strict();
 
 const searchSchema = z.object({ timeoutMs: z.number().int().positive().optional() }).strict();
@@ -1177,7 +1162,6 @@ const configSchema = z.object({
   webSearchSidecar: webSearchSidecarSchema.optional(),
   visionSidecar: visionSidecarSchema.optional(),
   images: imagesSchema.optional(),
-  media: mediaSchema.optional(),
   search: searchSchema.optional(),
   corsAllowOrigins: stringArraySchema.optional(),
 }).strict().superRefine((config, ctx) => {
@@ -1208,17 +1192,6 @@ const configSchema = z.object({
         message: "must be a supported Codex reasoning effort when native subagent defaults are enabled",
       });
     }
-  }
-
-  if (
-    (config.images?.bridgeEnabled === true || config.images?.videoBridgeEnabled === true)
-    && config.images.authSource === undefined
-  ) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["images", "authSource"],
-      message: "is required when an image or video bridge is enabled; choose subscription_oauth or api_key",
-    });
   }
 
   const accountNamespaces = config.codexAccountNamespaces;
@@ -1552,6 +1525,51 @@ function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
+const RETIRED_DIRECT_MEDIA_IMAGE_FIELDS = [
+  "bridgeEnabled",
+  "authSource",
+  "bridgeModel",
+  "maxRounds",
+  "artifactsKeepCount",
+  "videoBridgeEnabled",
+  "videoBridgeModel",
+  "videoMaxRounds",
+  "videoTimeoutMs",
+] as const;
+
+/**
+ * One-way compatibility for config files written while direct Grok media was
+ * supported. The current mutation boundary remains strict; only disk reads
+ * discard these retired fields so an upgrade cannot make the whole config
+ * unreadable.
+ */
+function normalizeRetiredDirectMediaDiskConfig(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+
+  const root = value as Record<string, unknown>;
+  let normalizedRoot = root;
+  if (Object.hasOwn(root, "media")) {
+    normalizedRoot = { ...root };
+    delete normalizedRoot.media;
+  }
+
+  const images = root.images;
+  if (!images || typeof images !== "object" || Array.isArray(images)) return normalizedRoot;
+
+  const imageConfig = images as Record<string, unknown>;
+  let normalizedImages: Record<string, unknown> | undefined;
+  for (const field of RETIRED_DIRECT_MEDIA_IMAGE_FIELDS) {
+    if (!Object.hasOwn(imageConfig, field)) continue;
+    normalizedImages ??= { ...imageConfig };
+    delete normalizedImages[field];
+  }
+  if (!normalizedImages) return normalizedRoot;
+
+  if (normalizedRoot === root) normalizedRoot = { ...root };
+  normalizedRoot.images = normalizedImages;
+  return normalizedRoot;
+}
+
 export function loadConfig(): CodexCommanderConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -1567,27 +1585,11 @@ export function loadConfig(): CodexCommanderConfig {
   } catch {
     throw new Error(`Cannot load CodexCommander config at ${configPath}: invalid_json`);
   }
-  const result = configSchema.safeParse(normalizeLegacyMediaAuthSource(parsed));
+  const result = configSchema.safeParse(normalizeRetiredDirectMediaDiskConfig(parsed));
   if (!result.success) {
     throw new Error(`Cannot load CodexCommander config at ${configPath}: ${schemaDiagnosticsError(result.error)}`);
   }
   return result.data as CodexCommanderConfig;
-}
-
-/**
- * One-way compatibility normalization for persisted bridge configs written
- * before images.authSource existed. New in-memory candidates must select a
- * source explicitly, so this helper is used only at disk-read boundaries.
- */
-function normalizeLegacyMediaAuthSource(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const root = value as Record<string, unknown>;
-  const images = root.images;
-  if (!images || typeof images !== "object" || Array.isArray(images)) return value;
-  const media = images as Record<string, unknown>;
-  if (Object.hasOwn(media, "authSource")) return value;
-  if (media.bridgeEnabled !== true && media.videoBridgeEnabled !== true) return value;
-  return { ...root, images: { ...media, authSource: "api_key" } };
 }
 
 export type ConfigDiagnostics = {
@@ -1656,7 +1658,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Cod
 function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
-    const result = configSchema.safeParse(normalizeLegacyMediaAuthSource(parsed));
+    const result = configSchema.safeParse(normalizeRetiredDirectMediaDiskConfig(parsed));
     if (result.success) {
       return validFileConfigDiagnostics(result.data as CodexCommanderConfig);
     }

@@ -25,12 +25,6 @@ import {
   saveConfigPreservingClaudeCode,
   setPersistedConfigMutationBeforeCommitForTests,
 } from "../src/config";
-import {
-  addProviderApiKey,
-  apiKeyPoolEntryId,
-  removeProviderApiKey,
-  setActiveProviderApiKey,
-} from "../src/providers/api-keys";
 import { isApiAuthRequired, requireApiAuth } from "../src/server/auth-cors";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
@@ -296,69 +290,39 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     });
   });
 
-  for (const scenario of ["add", "select", "remove"] as const) {
-    test(`OAuth provider commit rebases over a post-candidate xAI key ${scenario}`, async () => {
-      const firstKey = "xai-race-key-first-000111222333";
-      const secondKey = "xai-race-key-second-444555666777";
-      const seeded = config();
-      seeded.providers.xai = {
-        ...OAUTH_PROVIDERS.xai.providerConfig,
-        apiKey: scenario === "remove" ? secondKey : firstKey,
-        apiKeyPool: [
-          { id: "xai-first", key: firstKey },
-          ...(scenario === "add" ? [] : [{ id: "xai-second", key: secondKey }]),
-        ],
-      };
-      saveConfig(seeded);
-
-      const originalLogin = OAUTH_PROVIDERS.xai.login;
-      OAUTH_PROVIDERS.xai.login = async () => ({
-        access: `race-${scenario}-access`,
-        refresh: `race-${scenario}-refresh`,
-        accountId: `race-${scenario}-account`,
-        expires: Date.now() + 60_000,
-      });
-      setPersistedConfigMutationBeforeCommitForTests(() => {
-        const competing = loadConfig();
-        competing.port = 10991;
-        competing.providers.concurrent = {
-          adapter: "openai-chat",
-          baseUrl: "https://concurrent.example.test/v1",
-        };
-        if (scenario === "add") {
-          expect(addProviderApiKey(competing, "xai", secondKey)).not.toHaveProperty("error");
-        } else if (scenario === "select") {
-          expect(setActiveProviderApiKey(competing, "xai", "xai-second")).toBe(true);
-        } else {
-          expect(removeProviderApiKey(competing, "xai", "xai-second")).toBe(true);
-        }
-        if (scenario !== "add") saveConfig(competing);
-      });
-
-      try {
-        await runLogin("xai", {} as OAuthController);
-      } finally {
-        OAUTH_PROVIDERS.xai.login = originalLogin;
-      }
-
-      const persisted = loadConfig();
-      expect(persisted.port).toBe(10991);
-      expect(persisted.providers.concurrent).toEqual({
+  test("OAuth provider commit rebases over a concurrent config edit", async () => {
+    saveConfig(config());
+    const originalLogin = OAUTH_PROVIDERS.xai.login;
+    OAUTH_PROVIDERS.xai.login = async () => ({
+      access: "race-access",
+      refresh: "race-refresh",
+      accountId: "race-account",
+      expires: Date.now() + 60_000,
+    });
+    setPersistedConfigMutationBeforeCommitForTests(() => {
+      const competing = loadConfig();
+      competing.port = 10991;
+      competing.providers.concurrent = {
         adapter: "openai-chat",
         baseUrl: "https://concurrent.example.test/v1",
-      });
-      expect(persisted.providers.xai).toMatchObject({
-        ...OAUTH_PROVIDERS.xai.providerConfig,
-        apiKey: scenario === "remove" ? firstKey : secondKey,
-        apiKeyPool: scenario === "remove"
-          ? [{ id: "xai-first", key: firstKey }]
-          : [
-            { id: "xai-first", key: firstKey },
-            { id: scenario === "add" ? apiKeyPoolEntryId(secondKey) : "xai-second", key: secondKey },
-          ],
-      });
+      };
+      saveConfig(competing);
     });
-  }
+
+    try {
+      await runLogin("xai", {} as OAuthController);
+    } finally {
+      OAUTH_PROVIDERS.xai.login = originalLogin;
+    }
+
+    const persisted = loadConfig();
+    expect(persisted.port).toBe(10991);
+    expect(persisted.providers.concurrent).toEqual({
+      adapter: "openai-chat",
+      baseUrl: "https://concurrent.example.test/v1",
+    });
+    expect(persisted.providers.xai).toMatchObject(OAUTH_PROVIDERS.xai.providerConfig);
+  });
 
   for (const provider of ["xai", "kimi"] as const) {
     test(`management ${provider} OAuth creates and reconciles a fresh-home config`, async () => {

@@ -1211,7 +1211,7 @@ describe("web-search sidecar native web_search_call emission", () => {
   });
 
   // A signature authenticates the exact block it closed, so each block must keep its own pairing.
-  // Flattening two blocks under the last signature is what src/images/loop.ts already guards.
+  // Flattening two blocks under the last signature would corrupt the replay contract.
   test("multiple signed thinking blocks keep their own signatures across a web_search replay", async () => {
     globalThis.fetch = ((input) => {
       const url = String(input);

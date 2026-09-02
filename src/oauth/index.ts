@@ -427,17 +427,6 @@ export async function getValidAccessTokenSnapshot(provider: string): Promise<OAu
   return resolveAccessSnapshotForAccount(provider, set.activeAccountId);
 }
 
-/**
- * Resolve one exact stored account without consulting or changing the provider's active account.
- * Media credential leases use this to keep a long-running job on its originally bound identity.
- */
-export async function getValidAccessTokenSnapshotForAccount(
-  provider: string,
-  accountId: string,
-): Promise<OAuthAccessSnapshot> {
-  return resolveAccessSnapshotForAccount(provider, accountId);
-}
-
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
 const FORCE_REFRESH_PROVIDERS = new Set(["xai", "github-copilot", "kiro", "kimi"]);
 
@@ -951,11 +940,7 @@ function upsertOAuthProviderAfterCredential(config: CodexCommanderConfig, provid
   upsertOAuthProvider(config, provider);
 }
 
-/**
- * Persist the provider row against the freshest snapshot held by the shared config lock.
- * The missing-file branch retains first-login initialization, but retries the ordinary
- * field-scoped mutation after taking the lock so a competing creator always wins.
- */
+/** Persist the provider row against the freshest snapshot held by the shared config lock. */
 function persistOAuthProviderAfterCredential(provider: string): void {
   const mutateCurrent = () => mutatePersistedConfig(config => {
     upsertOAuthProviderAfterCredential(config, provider);
@@ -1057,8 +1042,8 @@ export async function runLogin(
     if (provider !== "chatgpt") {
       // Re-run against post-credential state so same-provider API-key additions, removals,
       // and active-key switches survive. A late namespace claim wins over provider creation.
-      // Keep explicit config dependencies as a narrow test seam for injected persistence
-      // failures. Production commits through the field-scoped, rebase-capable mutator.
+      // Keep explicit config dependencies as a narrow test seam. Production commits through
+      // the field-scoped mutator so concurrent settings and API-key edits are rebased.
       if (deps.loadConfig || deps.saveConfig) {
         const latestConfig = loadLatestConfig();
         upsertOAuthProviderAfterCredential(latestConfig, provider);

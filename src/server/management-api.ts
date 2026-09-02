@@ -30,7 +30,6 @@ import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleOpencodeIntegrationRoutes } from "./management/opencode-integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import { handleCodexRoutingRoutes } from "./management/codex-routing-routes";
-import { handleMediaRoutes } from "./management/media-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
@@ -171,7 +170,6 @@ export async function handleManagementAPI(
   let routed: Response | null;
   try {
     routed = (await handleConfigRoutes(ctx))
-      ?? (await handleMediaRoutes(ctx))
       ?? (await handleCodexRoutingRoutes(ctx))
       ?? (await handleLogsUsageRoutes(ctx))
       ?? (await handleRequestHistoryRoutes(ctx))

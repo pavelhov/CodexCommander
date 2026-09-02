@@ -139,8 +139,6 @@ export interface ProviderQuotaResponse {
   reports: ProviderQuotaReport[];
   /** One row per enabled provider with a concrete quota implementation. */
   availability: ProviderQuotaAvailability[];
-  /** Quota observations are not an admission guarantee for a future media request. */
-  nextRequestAdmission: "unknown";
 }
 
 let cache: { key: string; ts: number; response: ProviderQuotaResponse } | null = null;
@@ -1765,7 +1763,6 @@ export async function fetchProviderQuotaReports(config: CodexCommanderConfig, fo
       generatedAt,
       reports: [...byProvider.values()],
       availability,
-      nextRequestAdmission: "unknown",
     };
     // Commit only when this probe still holds authority (no clear/force superseded it).
     if (

@@ -66,8 +66,6 @@ export default defineConfig({
             { label: "Pi", slug: "guides/pi" },
             { label: "Integrations", slug: "guides/integrations" },
             { label: "Sidecars: Web Search & Vision", slug: "guides/sidecars" },
-            { label: "Image Bridge", slug: "guides/image-bridge" },
-            { label: "Video Bridge", slug: "guides/video-bridge" },
             { label: "Web Dashboard", slug: "guides/web-dashboard" },
             { label: "macOS Menu Bar", slug: "guides/macos-menu-bar" },
             { label: "Sub-agent Surface", slug: "guides/sub-agent-surface" },

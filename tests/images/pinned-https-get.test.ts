@@ -6,7 +6,7 @@ type LookupCb =
   | ((err: Error | null, addresses: { address: string; family: number }[]) => void);
 
 /**
- * Capture the custom lookup + response-stream path used by pinnedHttpsGet without
+ * Capture the custom lookup + response-stream path used by pinnedHttpGet without
  * opening a real TLS socket (Windows CI friendly).
  */
 function installHttpsMock(bodyChunks: Buffer[], statusCode = 200) {
@@ -53,8 +53,8 @@ function installHttpsMock(bodyChunks: Buffer[], statusCode = 200) {
   return requestMock;
 }
 
-describe("pinnedHttpsGet transport", () => {
-  test("exposes no credential or custom-header input and sends only the required Host header", async () => {
+describe("pinnedHttpGet transport", () => {
+  test("sends the required Host header and verifies TLS by default", async () => {
     let capturedOptions: { headers?: Record<string, string>; method?: string; rejectUnauthorized?: boolean } | undefined;
     const requestMock = mock((
       options: { headers?: Record<string, string>; method?: string; rejectUnauthorized?: boolean },
@@ -82,8 +82,8 @@ describe("pinnedHttpsGet transport", () => {
     });
     mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
-    const response = await pinnedHttpsGet(
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
+    const response = await pinnedHttpGet(
       "https://cdn.example/media.png?opaque=1",
       { address: "93.184.216.34", family: 4 },
     );
@@ -94,29 +94,6 @@ describe("pinnedHttpsGet transport", () => {
     expect(Object.keys(capturedOptions?.headers ?? {})).not.toContain("cookie");
     expect(Object.keys(capturedOptions?.headers ?? {})).not.toContain("referer");
     await response.arrayBuffer();
-  });
-
-  test("rejects private or mismatched pinned peers and URL-carried credentials before transport", async () => {
-    const requestMock = mock(() => { throw new Error("transport must not run"); });
-    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
-    await expect(pinnedHttpsGet(
-      "https://cdn.example/media.png",
-      { address: "127.0.0.1", family: 4 },
-    )).rejects.toThrow(/unsafe/);
-    await expect(pinnedHttpsGet(
-      "https://cdn.example/media.png",
-      { address: "93.184.216.34", family: 6 },
-    )).rejects.toThrow(/unsafe/);
-    await expect(pinnedHttpsGet(
-      "https://" + "user" + ":" + "pass" + "@cdn.example/media.png",
-      { address: "93.184.216.34", family: 4 },
-    )).rejects.toThrow(/credentials/);
-    await expect(pinnedHttpsGet(
-      "https://cdn.example/media.png#secret",
-      { address: "93.184.216.34", family: 4 },
-    )).rejects.toThrow(/fragment/);
-    expect(requestMock).toHaveBeenCalledTimes(0);
   });
 
   test("lookup honors scalar and { all: true } callback shapes", async () => {
@@ -146,9 +123,9 @@ describe("pinnedHttpsGet transport", () => {
     });
     mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
     const pinned = { address: "93.184.216.34", family: 4 };
-    const respPromise = pinnedHttpsGet("https://cdn.example/img.png", pinned);
+    const respPromise = pinnedHttpGet("https://cdn.example/img.png", pinned);
     // Give request() a tick to store lookup.
     await Promise.resolve();
     expect(capturedLookup).toBeTypeOf("function");
@@ -177,9 +154,9 @@ describe("pinnedHttpsGet transport", () => {
     const chunks = [small, small, small]; // 3 KiB total
     installHttpsMock(chunks);
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
     const maxBytes = 1500; // trip on the second chunk
-    const resp = await pinnedHttpsGet(
+    const resp = await pinnedHttpGet(
       "https://cdn.example/big.png",
       { address: "93.184.216.34", family: 4 },
       undefined,
@@ -204,7 +181,7 @@ describe("pinnedHttpsGet transport", () => {
     expect(received).toBeLessThanOrEqual(maxBytes + small.byteLength);
   });
 
-  test("3xx redirect status rejects without following", async () => {
+  test("returns a 3xx response without following it", async () => {
     let resDestroyed = false;
     const requestMock = mock((
       _options: unknown,
@@ -232,11 +209,12 @@ describe("pinnedHttpsGet transport", () => {
     });
     mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
-    await expect(pinnedHttpsGet(
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
+    const response = await pinnedHttpGet(
       "https://cdn.example/redirect.png",
       { address: "93.184.216.34", family: 4 },
-    )).rejects.toThrow(/301/);
+    );
+    expect(response.status).toBe(301);
     expect(resDestroyed).toBe(true);
   });
 
@@ -285,7 +263,7 @@ describe("pinnedHttpsGet transport", () => {
         }) as typeof res.on;
         queueMicrotask(() => {
           onResponse?.(res);
-          // Keep dumping body after headers — must not be buffered by pinnedHttpsGet.
+          // Keep dumping body after headers — must not be buffered by pinnedHttpGet.
           queueMicrotask(() => {
             for (let i = 0; i < 32; i++) res.emit("data", Buffer.alloc(64 * 1024, 7));
             res.emit("end");
@@ -296,11 +274,12 @@ describe("pinnedHttpsGet transport", () => {
     });
     mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
-    await expect(pinnedHttpsGet(
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
+    const response = await pinnedHttpGet(
       "https://cdn.example/fail.png",
       { address: "93.184.216.34", family: 4 },
-    )).rejects.toThrow(/media artifact download failed: 500/);
+    );
+    expect(response.status).toBe(500);
 
     expect(resDestroyed).toBe(true);
     expect(reqDestroyed).toBe(true);
@@ -324,8 +303,8 @@ describe("pinnedHttpsGet transport", () => {
     });
     mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
-    await expect(pinnedHttpsGet(
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
+    await expect(pinnedHttpGet(
       "https://cdn.example/hang.png",
       { address: "93.184.216.34", family: 4 },
       undefined,
@@ -372,8 +351,8 @@ describe("pinnedHttpsGet transport", () => {
     });
     mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
-    const resp = await pinnedHttpsGet(
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
+    const resp = await pinnedHttpGet(
       "https://cdn.example/img.png",
       { address: "93.184.216.34", family: 4 },
       undefined,
@@ -409,8 +388,8 @@ describe("pinnedHttpsGet transport", () => {
     });
     mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
 
-    const { pinnedHttpsGet } = await import("../../src/images/pinned-https-get");
-    const response = await pinnedHttpsGet(
+    const { pinnedHttpGet } = await import("../../src/lib/pinned-http");
+    const response = await pinnedHttpGet(
       "https://cdn.example/hanging-body.mp4",
       { address: "93.184.216.34", family: 4 },
       undefined,

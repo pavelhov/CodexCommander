@@ -43,7 +43,6 @@ import {
   responseContinuationRetainedStoreSnapshot,
 } from "../responses/state";
 import { translatorObservedBufferSnapshot } from "./translator-budget";
-import { imageFulfillmentTailSnapshot } from "../images/fulfill";
 import { oauthMutationTailSnapshot } from "../oauth/store";
 import { grokApplyFlightSnapshot } from "../server/management/agent-settings-routes";
 
@@ -156,7 +155,6 @@ export function registerDefaultAppOwnedMemoryStores(): void {
 
 export const APP_OWNED_OBSERVED_BUFFER_REGISTRATIONS = [
   { id: "translator_buffers", category: "translator", snapshot: translatorObservedBufferSnapshot },
-  { id: "image_fulfillment_tail", category: "serialized_tails", snapshot: imageFulfillmentTailSnapshot },
   { id: "oauth_mutation_tail", category: "serialized_tails", snapshot: oauthMutationTailSnapshot },
   { id: "grok_apply_flight", category: "serialized_tails", snapshot: grokApplyFlightSnapshot },
 ] as const;
