@@ -17,7 +17,8 @@ import {
 
 import { activeCodexModelsCachePath, applyJawcodeCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, catalogModelSlug, ensureStrictCatalogFields, isRoutedModelCompatibilityExcluded, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath } from "./parsing";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
-import { applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, isNativeAliasCatalogEntry, isSupportedNativeOpenAiSlug, isUnsupportedOpenAiNativeSlug, nativeOpenAiSlugs, shouldUpgradeToUpstreamEntry, supportedNativeOpenAiSlugs, upstreamNativeEntry } from "./metadata";
+import { applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, isNativeAliasCatalogEntry, isSupportedNativeOpenAiSlug, nativeOpenAiSlugs, resetSupportedNativeSlugMemoForTests, shouldUpgradeToUpstreamEntry, upstreamNativeEntry } from "./metadata";
+import { LEGACY_NATIVE_OPENAI_MODELS } from "./native-models";
 import {
   resetBundledCatalogCacheForTests,
 } from "./bundled";
@@ -479,6 +480,7 @@ export function buildCatalogEntries(
 
 export function resetCatalogRuntimeStateForTests(): void {
   resetBundledCatalogCacheForTests();
+  resetSupportedNativeSlugMemoForTests();
   lastDropWarnSignature.clear();
   openAiApiCollisionWarnings.clear();
   comboCatalogWarningSignatures.clear();
@@ -676,8 +678,9 @@ export function mergeCatalogEntriesForSync(
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const resolvedNativeSlugs = includeNativeOpenAi
-    ? (availableNativeSlugs ?? supportedNativeOpenAiSlugs())
+    ? (availableNativeSlugs ?? LEGACY_NATIVE_OPENAI_MODELS)
     : (availableNativeSlugs ?? []);
+  const supportedNativeSet = new Set(resolvedNativeSlugs);
   const freshBareComboAliases = new Set(routedEntries.flatMap(entry => (
     isNativeAliasCatalogEntry(entry) && typeof entry.slug === "string" ? [entry.slug] : []
   )));
@@ -686,7 +689,8 @@ export function mergeCatalogEntriesForSync(
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
       && m.owned_by !== COMBO_NAMESPACE
-      && !isUnsupportedOpenAiNativeSlug(m.slug as string))
+      && (supportedNativeSet.has(m.slug as string)
+        || !/^(?:gpt|codex)-/.test(m.slug as string)))
     .map(m => {
       const slug = m.slug as string;
       const baselinePriority = baseline.get(slug) ?? (m.priority as number);
@@ -850,7 +854,13 @@ export function mergeCatalogEntriesForSync(
   // clobber a hide flag back to list. Bare ids disable every account clone; qualified ids disable
   // only their generated account row.
   return applyMultiAgentMode(
-    applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0),
+    applyNativeVisibility(
+      mergedEntries,
+      disabledModels,
+      alignedAccountBoundEntries.length > 0,
+      {},
+      supportedNativeSet,
+    ),
     multiAgentMode,
     isMultiAgentV2Enabled(),
   );

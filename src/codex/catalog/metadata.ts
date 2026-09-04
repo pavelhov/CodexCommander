@@ -33,7 +33,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
 import type { RawEntry } from "./parsing";
-import { loadBundledCodexCatalog, readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
+import { bundledCatalogCacheState, loadBundledCodexCatalog, readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { LEGACY_NATIVE_OPENAI_MODELS } from "./native-models";
@@ -103,7 +103,33 @@ function onDiskBareNativeRecoverySlugs(deps: BundledCatalogDeps = {}): string[] 
   }));
 }
 
-export function supportedNativeOpenAiSlugs(
+type SupportedNativeSlugMemo = {
+  key: string;
+  slugs: string[];
+  slugSet: Set<string>;
+};
+
+let supportedNativeSlugMemo: SupportedNativeSlugMemo | null = null;
+
+function hasInjectedNativeCatalogDeps(options: NativeCatalogSelectionOptions): boolean {
+  return Boolean(
+    options.commandCandidates
+      || options.execFileSync
+      || options.configDir
+      || options.env
+      || options.platform
+      || options.existsSync
+      || options.readFileSync
+      || options.now
+      || options.discoverAlternatives,
+  );
+}
+
+function supportedNativeSlugMemoKey(mode: NativeCatalogMode): string {
+  return `${mode}\0${bundledCatalogCacheState().epoch}`;
+}
+
+function computeSupportedNativeOpenAiSlugs(
   options: NativeCatalogSelectionOptions = {},
 ): string[] {
   const mode = resolveNativeCatalogMode(options.nativeCatalogMode);
@@ -118,10 +144,35 @@ export function supportedNativeOpenAiSlugs(
   return [...LEGACY_NATIVE_OPENAI_MODELS];
 }
 
+export function supportedNativeOpenAiSlugs(
+  options: NativeCatalogSelectionOptions = {},
+): string[] {
+  if (hasInjectedNativeCatalogDeps(options)) {
+    return computeSupportedNativeOpenAiSlugs(options);
+  }
+  const mode = resolveNativeCatalogMode(options.nativeCatalogMode);
+  const key = supportedNativeSlugMemoKey(mode);
+  if (supportedNativeSlugMemo?.key === key) {
+    return supportedNativeSlugMemo.slugs;
+  }
+  const slugs = computeSupportedNativeOpenAiSlugs(options);
+  supportedNativeSlugMemo = { key, slugs, slugSet: new Set(slugs) };
+  return slugs;
+}
+
 export function supportedNativeOpenAiSlugSet(
   options: NativeCatalogSelectionOptions = {},
 ): Set<string> {
-  return new Set(supportedNativeOpenAiSlugs(options));
+  if (hasInjectedNativeCatalogDeps(options)) {
+    return new Set(computeSupportedNativeOpenAiSlugs(options));
+  }
+  const mode = resolveNativeCatalogMode(options.nativeCatalogMode);
+  const key = supportedNativeSlugMemoKey(mode);
+  if (supportedNativeSlugMemo?.key === key) {
+    return supportedNativeSlugMemo.slugSet;
+  }
+  const slugs = supportedNativeOpenAiSlugs(options);
+  return supportedNativeSlugMemo?.slugSet ?? new Set(slugs);
 }
 
 export function isSupportedNativeOpenAiSlug(
@@ -179,6 +230,11 @@ export function isUnsupportedOpenAiNativeSlug(
   if (slug.includes("/")) return false;
   if (isSupportedNativeOpenAiSlug(slug, options)) return false;
   return /^(?:gpt|codex)-/.test(slug);
+}
+
+/** Test-only: clear the supported-native slug memo (sync.ts calls this via resetCatalogRuntimeStateForTests). */
+export function resetSupportedNativeSlugMemoForTests(): void {
+  supportedNativeSlugMemo = null;
 }
 
 export const NATIVE_GPT56_CONTEXT_WINDOW = 372_000;
@@ -321,7 +377,9 @@ export function applyNativeVisibility(
   disabledModels: ReadonlySet<string>,
   hideBareNative = false,
   options: NativeCatalogSelectionOptions = {},
+  supportedNativeSlugs?: ReadonlySet<string>,
 ): RawEntry[] {
+  const supported = supportedNativeSlugs ?? supportedNativeOpenAiSlugSet(options);
   for (const entry of entries) {
     if (isNativeAliasCatalogEntry(entry)) continue;
     const slug = typeof entry.slug === "string" ? entry.slug : "";
@@ -329,7 +387,7 @@ export function applyNativeVisibility(
     const nativeSlug = accountBoundSlug ?? slug;
     if (!nativeSlug
       || (!accountBoundSlug && slug.includes("/"))
-      || !isSupportedNativeOpenAiSlug(nativeSlug, options)) continue;
+      || !supported.has(nativeSlug)) continue;
     const disabled = disabledModels.has(nativeSlug)
       || (accountBoundSlug !== undefined && disabledModels.has(slug));
     entry.visibility = disabled || (!accountBoundSlug && hideBareNative)
