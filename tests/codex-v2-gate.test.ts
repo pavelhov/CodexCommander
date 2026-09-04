@@ -33,6 +33,7 @@ import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from
 import { handleManagementAPI } from "../src/server/management-api";
 import { getDefaultConfig, loadConfig, saveConfig } from "../src/config";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { createBundledCatalogExec } from "./helpers/codex-runtime-fixture";
 
 function template(): Record<string, unknown> {
   return {
@@ -1253,7 +1254,9 @@ describe("cli surface", () => {
   });
 
   test("codexFeaturesInvocation: POSIX passthrough; win32 .cmd routed through cmd.exe (implementation contract 020)", () => {
-    const execFileSync = () => "codex-cli 0.145.0";
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: { codex: "codex-cli 0.145.0" },
+    });
     expect(codexFeaturesInvocation("enable", "multi_agent_v2", "darwin", {
       env: { PATH: "" },
       configDir: mkdtempSync(join(tmpdir(), "ccx-v2-inv-posix-")),

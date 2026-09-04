@@ -3,11 +3,26 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readCodexCatalogPath, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
+import { persistCodexRuntime } from "../src/codex/runtime";
 import { getDefaultConfig } from "../src/config";
 import type { CodexCommanderConfig } from "../src/types";
 import { convergeCatalogForTest } from "./helpers/catalog-convergence";
+import {
+  bundledCatalogFixture,
+  createCodexRuntimeFixture,
+} from "./helpers/codex-runtime-fixture";
 
 setDefaultTimeout(30_000);
+
+const SYNC_BUNDLED_SLUGS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex-spark",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+];
 
 async function syncCatalog(config: Pick<CodexCommanderConfig, "providers"> & Partial<CodexCommanderConfig>): Promise<string> {
   const warnings: string[] = [];
@@ -73,17 +88,34 @@ function ccxAuthoredEntry(slug: string, priority: number): Record<string, unknow
 describe("Codex catalog sync hardening", () => {
   let codexHome: string;
   let codexCommanderHome: string;
+  let fixtureDir: string;
   let previousCodexHome: string | undefined;
   let previousCodexCommanderHome: string | undefined;
+  let previousCodexCliPath: string | undefined;
+  let previousPath: string | undefined;
 
   beforeEach(() => {
     previousCodexHome = process.env.CODEX_HOME;
     previousCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;
+    previousCodexCliPath = process.env.CODEX_CLI_PATH;
+    previousPath = process.env.PATH;
     codexHome = mkdtempSync(join(tmpdir(), "ccx-sync-home-"));
     codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-sync-ccx-"));
+    fixtureDir = mkdtempSync(join(tmpdir(), "ccx-sync-fixture-"));
     process.env.CODEX_HOME = codexHome;
     process.env.CODEXCOMMANDER_HOME = codexCommanderHome;
     resetCatalogRuntimeStateForTests();
+    const fixturePath = createCodexRuntimeFixture(fixtureDir, {
+      version: "0.146.0",
+      catalog: bundledCatalogFixture(SYNC_BUNDLED_SLUGS),
+    });
+    process.env.CODEX_CLI_PATH = fixturePath;
+    process.env.PATH = "";
+    persistCodexRuntime({
+      command: fixturePath,
+      version: "0.146.0",
+      source: "environment" as const,
+    }, { configDir: codexCommanderHome });
   });
 
   afterEach(() => {
@@ -92,8 +124,13 @@ describe("Codex catalog sync hardening", () => {
     else process.env.CODEX_HOME = previousCodexHome;
     if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
     else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
+    if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+    else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     if (existsSync(codexHome)) rmSync(codexHome, { recursive: true, force: true });
     if (existsSync(codexCommanderHome)) rmSync(codexCommanderHome, { recursive: true, force: true });
+    if (existsSync(fixtureDir)) rmSync(fixtureDir, { recursive: true, force: true });
   });
 
   test("Gap B: drops retired OpenAI-family natives but keeps supported + user natives", async () => {
@@ -211,6 +248,7 @@ describe("Codex catalog sync hardening", () => {
         removed: "missing-account",
       },
     };
+    await syncCatalog(config);
     const firstWarnings = await syncCatalog(config);
     writeFileSync(firstCatalogPath, readFileSync(catalogPath));
     const secondWarnings = await syncCatalog(config);

@@ -248,7 +248,7 @@ test("Codex discovery restores account rows for supported natives hidden on disk
   try {
     const plain = await fetch(new URL("/v1/models", server.url))
       .then(response => response.json()) as { data: Array<{ id: string }> };
-    expect(plain.data.some(model => model.id === "gpt-5.4-mini")).toBe(false);
+    expect(plain.data.some(model => model.id === "gpt-5.4-mini")).toBe(true);
 
     const catalog = await fetch(new URL("/v1/models?client_version=1.0.0", server.url))
       .then(response => response.json()) as {

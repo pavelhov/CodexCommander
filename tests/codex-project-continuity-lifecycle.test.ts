@@ -103,7 +103,9 @@ function runLifecycle(nativeConfig: string): { result: LifecycleResult; stderr: 
       const { gatherCodexCatalogCandidate, commitCodexCatalogCandidate } = require("./src/codex/convergence");
       const { injectCodexConfig, restoreNativeCodexAsync } = require("./src/codex/inject");
       const { readCodexTransitionState } = require("./src/codex/transition-state");
-      const { setCodexRuntimeResolveCacheForTests } = require("./src/codex/runtime");
+      const { chmodSync, writeFileSync } = require("node:fs");
+      const { join } = require("node:path");
+      const { setCodexRuntimeResolveCacheForTests, persistCodexRuntime } = require("./src/codex/runtime");
       const { setBundledCatalogCacheForTests } = require("./src/codex/catalog/bundled");
       const {
         resolveCodexCatalogSerializationDatabasePath,
@@ -132,9 +134,25 @@ function runLifecycle(nativeConfig: string): { result: LifecycleResult; stderr: 
           priority: 5,
         }],
       }, null, 2) + "\n");
-      const runtime = { command: "/tmp/codex-hermetic-fixture", version: "0.146.0", source: "environment" };
-      setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
-      setBundledCatalogCacheForTests(runtime, nativeCatalog);
+      const fixturePath = join(codexHome, "codex-hermetic-fixture");
+      writeFileSync(fixturePath, [
+        "#!/bin/sh",
+        'if [ "$1" = "--version" ]; then',
+        '  echo "codex-cli 0.146.0"',
+        "  exit 0",
+        "fi",
+        'if [ "$1" = "debug" ] && [ "$2" = "models" ] && [ "$3" = "--bundled" ]; then',
+        "  printf '%s\\n' '" + JSON.stringify(nativeCatalog) + "'",
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
+      ].join("\n"));
+      chmodSync(fixturePath, 0o700);
+      process.env.CODEX_CLI_PATH = fixturePath;
+      process.env.PATH = "";
+      const runtime = { command: fixturePath, version: "0.146.0", source: "environment" };
+      persistCodexRuntime(runtime);
 
       const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(config));
       if (gathered.kind !== "candidate") throw new Error("catalog gather did not produce a candidate");

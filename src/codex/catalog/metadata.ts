@@ -95,11 +95,23 @@ export function bundledNativeCatalogSlugs(
   }));
 }
 
-function onDiskBareNativeRecoverySlugs(deps: BundledCatalogDeps = {}): string[] {
+function onDiskBareNativeRecoverySlugs(
+  deps: BundledCatalogDeps = {},
+  mode: NativeCatalogMode = DEFAULT_NATIVE_CATALOG_MODE,
+): string[] {
+  const supportedOnDisk = new Set([
+    ...bundledNativeCatalogSlugs(deps, mode),
+    ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS,
+  ]);
+  if (supportedOnDisk.size === 0) return [];
   const cat = readCurrentCatalogOrCache(deps);
   return unique((cat?.models ?? []).flatMap(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
-    return isBareBundledNativeCatalogEntry(entry) && /^(?:gpt|codex)-/.test(slug) ? [slug] : [];
+    return isBareBundledNativeCatalogEntry(entry)
+      && /^(?:gpt|codex)-/.test(slug)
+      && supportedOnDisk.has(slug)
+      ? [slug]
+      : [];
   }));
 }
 
