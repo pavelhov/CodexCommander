@@ -3,8 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import { persistCodexRuntime } from "../src/codex/runtime";
 import { startServer } from "../src/server";
 import type { CodexCommanderConfig } from "../src/types";
+import { bundledCatalogFixture, createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
 
@@ -14,10 +16,14 @@ setDefaultTimeout(SERVER_BUDGET_MS);
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousCodexCliPath: string | undefined;
+let previousPath: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
   previousHome = process.env.CODEXCOMMANDER_HOME;
+  previousCodexCliPath = process.env.CODEX_CLI_PATH;
+  previousPath = process.env.PATH;
   isolatedCodexHome = installIsolatedCodexHome("ccx-claude-discovery-");
   testDir = mkdtempSync(join(tmpdir(), "ccx-claude-discovery-"));
   process.env.CODEXCOMMANDER_HOME = testDir;
@@ -26,6 +32,10 @@ beforeEach(() => {
 afterEach(() => {
   if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousHome;
+  if (previousCodexCliPath === undefined) delete process.env.CODEX_CLI_PATH;
+  else process.env.CODEX_CLI_PATH = previousCodexCliPath;
+  if (previousPath === undefined) delete process.env.PATH;
+  else process.env.PATH = previousPath;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -210,6 +220,19 @@ test("exact account disables affect only the matching OpenAI and Codex discovery
 });
 
 test("Codex discovery restores account rows for supported natives hidden on disk", async () => {
+  const fixtureDir = mkdtempSync(join(tmpdir(), "ccx-claude-discovery-fixture-"));
+  const fixturePath = createCodexRuntimeFixture(fixtureDir, {
+    version: "0.146.0",
+    catalog: bundledCatalogFixture(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]),
+  });
+  process.env.CODEX_CLI_PATH = fixturePath;
+  process.env.PATH = "";
+  persistCodexRuntime({
+    command: fixturePath,
+    version: "0.146.0",
+    source: "environment",
+  });
+
   const config = configWithStaticModels();
   config.providers.openai = {
     adapter: "openai-responses",
