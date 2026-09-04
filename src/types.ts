@@ -635,6 +635,12 @@ export interface CodexCommanderConfig {
    * the bare row plus every generated selector row and omit that model family from raw discovery.
    */
   disabledModels?: string[];
+  /**
+   * Which native OpenAI slugs CodexCommander publishes from the installed Codex bundled catalog.
+   * `bundled-all` includes both `visibility: list` and `visibility: hide` rows; `bundled-listed`
+   * publishes only listed rows. Routing still accepts explicit bare `gpt-*` / `codex-*` ids.
+   */
+  nativeCatalogMode?: "bundled-all" | "bundled-listed";
   /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 목록. */
   customModels?: CodexCommanderCustomModel[];
   /**

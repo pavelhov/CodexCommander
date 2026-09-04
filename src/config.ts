@@ -1116,6 +1116,7 @@ const configSchema = z.object({
   multiAgentGuidanceEnabled: z.boolean(),
   multiAgentMode: z.enum(["v1", "default", "v2"]).optional(),
   multiAgentV2MessageDelivery: z.enum(["encrypted", "plaintext"]).optional(),
+  nativeCatalogMode: z.enum(["bundled-all", "bundled-listed"]).optional(),
   injectionModel: z.string().optional(),
   injectionEffort: codexReasoningEffortSchema.optional(),
   injectionPrompt: z.string().optional(),
@@ -1525,51 +1526,6 @@ function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
 
-const RETIRED_DIRECT_MEDIA_IMAGE_FIELDS = [
-  "bridgeEnabled",
-  "authSource",
-  "bridgeModel",
-  "maxRounds",
-  "artifactsKeepCount",
-  "videoBridgeEnabled",
-  "videoBridgeModel",
-  "videoMaxRounds",
-  "videoTimeoutMs",
-] as const;
-
-/**
- * One-way compatibility for config files written while direct Grok media was
- * supported. The current mutation boundary remains strict; only disk reads
- * discard these retired fields so an upgrade cannot make the whole config
- * unreadable.
- */
-function normalizeRetiredDirectMediaDiskConfig(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-
-  const root = value as Record<string, unknown>;
-  let normalizedRoot = root;
-  if (Object.hasOwn(root, "media")) {
-    normalizedRoot = { ...root };
-    delete normalizedRoot.media;
-  }
-
-  const images = root.images;
-  if (!images || typeof images !== "object" || Array.isArray(images)) return normalizedRoot;
-
-  const imageConfig = images as Record<string, unknown>;
-  let normalizedImages: Record<string, unknown> | undefined;
-  for (const field of RETIRED_DIRECT_MEDIA_IMAGE_FIELDS) {
-    if (!Object.hasOwn(imageConfig, field)) continue;
-    normalizedImages ??= { ...imageConfig };
-    delete normalizedImages[field];
-  }
-  if (!normalizedImages) return normalizedRoot;
-
-  if (normalizedRoot === root) normalizedRoot = { ...root };
-  normalizedRoot.images = normalizedImages;
-  return normalizedRoot;
-}
-
 export function loadConfig(): CodexCommanderConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -1585,7 +1541,7 @@ export function loadConfig(): CodexCommanderConfig {
   } catch {
     throw new Error(`Cannot load CodexCommander config at ${configPath}: invalid_json`);
   }
-  const result = configSchema.safeParse(normalizeRetiredDirectMediaDiskConfig(parsed));
+  const result = configSchema.safeParse(parsed);
   if (!result.success) {
     throw new Error(`Cannot load CodexCommander config at ${configPath}: ${schemaDiagnosticsError(result.error)}`);
   }
@@ -1658,7 +1614,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Cod
 function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
-    const result = configSchema.safeParse(normalizeRetiredDirectMediaDiskConfig(parsed));
+    const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(result.data as CodexCommanderConfig);
     }

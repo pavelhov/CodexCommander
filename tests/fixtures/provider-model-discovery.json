@@ -12,11 +12,6 @@
       "id": "acme/embed-small",
       "type": "embedding",
       "context_length": 8192
-    },
-    {
-      "id": "acme/video-gen",
-      "type": "video",
-      "capabilities": ["video-generation"]
     }
   ]
 }

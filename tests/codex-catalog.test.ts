@@ -2890,8 +2890,8 @@ describe("OpenAI API trusted catalog augmentation", () => {
   });
 });
 
-describe("native slug allowlist", () => {
-  test("drops retired/internal natives from a live Codex catalog", () => {
+describe("bundled native catalog discovery", () => {
+  test("publishes bundled bare natives and documented additions from a live Codex catalog", () => {
     const liveModels = [
       { slug: "gpt-5.5", visibility: "list" },
       { slug: "gpt-5.4", visibility: "list" },
@@ -2904,20 +2904,25 @@ describe("native slug allowlist", () => {
       { slug: "gpt-5.5", visibility: "hidden" },
     ];
 
-    expect(filterSupportedNativeSlugs(liveModels)).toEqual([
-      "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
+    expect(filterSupportedNativeSlugs(liveModels, "bundled-all")).toEqual([
+      "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.2",
+      "codex-auto-review", "gpt-5.3-codex-spark",
     ]);
   });
 
-  test("keeps GPT-5.6 native preview slugs from a live Codex catalog", () => {
+  test("keeps GPT-5.6 native preview slugs and honors bundled-listed visibility", () => {
     const liveModels = [
       { slug: "gpt-5.6-sol", visibility: "list" },
       { slug: "gpt-5.6-terra", visibility: "list" },
       { slug: "gpt-5.6-luna", visibility: "list" },
-      { slug: "gpt-5.6-internal", visibility: "list" },
+      { slug: "gpt-5.6-internal", visibility: "hide" },
+      { slug: "gpt-5.4", visibility: "hide" },
     ];
 
-    expect(filterSupportedNativeSlugs(liveModels)).toEqual([
+    expect(filterSupportedNativeSlugs(liveModels, "bundled-all")).toEqual([
+      "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-internal", "gpt-5.4",
+    ]);
+    expect(filterSupportedNativeSlugs(liveModels, "bundled-listed")).toEqual([
       "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     ]);
   });

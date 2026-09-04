@@ -857,7 +857,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
         const nativeSlugs = includeNativeOpenAi ? nativeOpenAiSlugs() : [];
@@ -916,7 +916,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // newly re-enabled native reappear under each selector before the next sync, while the
           // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
           const catalogNativeSlugs = accountSelectors.length > 0
-            ? NATIVE_OPENAI_MODELS
+            ? nativeOpenAiSlugs()
             : nativeSlugs;
           const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs);
           return jsonResponse({
@@ -967,7 +967,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // for both bare and qualified rows. Without selectors, the live catalog continues to own
         // bare availability.
         const selectorNativeSlugs = accountSelectors.length > 0
-          ? NATIVE_OPENAI_MODELS.filter(slug => !disabledNatives.has(slug))
+          ? nativeOpenAiSlugs().filter(slug => !disabledNatives.has(slug))
           : [];
         const visibleNatives = includeNativeOpenAi
           ? accountSelectors.length > 0

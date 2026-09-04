@@ -3,9 +3,9 @@
  * No network — transforms GET /api/combos rows into rail groups + attention.
  */
 
-import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-models";
+import { isSupportedNativeOpenAiSlug } from "../../src/codex/catalog/metadata";
 
-export { SUPPORTED_NATIVE_OPENAI_SLUGS };
+export { isSupportedNativeOpenAiSlug };
 
 export type ComboStrategy = "failover" | "round-robin";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -329,7 +329,7 @@ export function validateComboDraft(
     && (displayName.length > 128 || displayNameHasControlCharacter)) {
     return "invalidDisplayName";
   }
-  if (item.nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) return "unsupportedNativeAlias";
+  if (item.nativeAlias && !isSupportedNativeOpenAiSlug(alias)) return "unsupportedNativeAlias";
   if (item.nativeAlias && !displayName) return "missingNativeAliasDisplayName";
   if (item.targets.length < 1) return "noTargets";
 
