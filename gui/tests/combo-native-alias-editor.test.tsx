@@ -52,6 +52,7 @@ function setSelectValue(select: HTMLSelectElement, value: string) {
 const target = [{ provider: "openai", model: "gpt-5", clientKey: "ct-native" }];
 const providers = [{ name: "openai" }];
 const models = [{ provider: "openai", id: "gpt-5" }];
+const supportedNativeSlugs = new Set(["gpt-5.6-sol"]);
 
 async function renderPanel(baseline: ComboItem, isCreate: boolean, onSave: (item: ComboItem) => void) {
   const { createRoot } = await import("react-dom/client");
@@ -70,6 +71,7 @@ async function renderPanel(baseline: ComboItem, isCreate: boolean, onSave: (item
           providerMap={{ openai: {} }}
           providers={providers}
           models={models}
+          supportedNativeSlugs={supportedNativeSlugs}
           onSaved={() => {}}
           onSave={async item => { onSave(item); return { ok: true }; }}
           onDirtyChange={() => {}}
@@ -179,6 +181,7 @@ test("the normal add modal creates a labeled native alias in one pass", async ()
           providerMap={{ openai: {} }}
           providers={providers}
           models={models}
+          supportedNativeSlugs={supportedNativeSlugs}
           onClose={() => {}}
           onSubmit={async item => { submitted = item; return { ok: true }; }}
         />

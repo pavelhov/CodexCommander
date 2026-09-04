@@ -1366,7 +1366,7 @@ async function gatherRoutedModelsUncached(
     capture.openAiApiPolicy,
   );
   const all = augmentRoutedModelsWithJawcodeMetadata(apiAugmented, activeProviders.map(provider => provider.name), config.providers, config)
-    // Drop image/video generation models (e.g. Grok image/video) by default. Cursor's static catalog
+    // Drop non-chat generation models by default. Cursor's static catalog
     // intentionally mirrors Cursor's public model table, including Gemini image preview, so the
     // exposure decision goes through shouldExposeRoutedModel (single choke point).
     .filter(shouldExposeRoutedModel);

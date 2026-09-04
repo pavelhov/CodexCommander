@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
+import { findNativeTemplate, parseCatalogJson } from "./catalog/parsing";
 import { parseCodexShimState } from "./shim";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 import { readEnv } from "../identity";
@@ -11,6 +12,7 @@ import { readEnv } from "../identity";
 export type CodexRuntimeSource =
   | "environment"
   | "configured"
+  | "bundled"
   | "shim"
   | "path"
   | "fallback";
@@ -110,6 +112,7 @@ function cloneAndDeepFreeze<T>(value: T): DeepReadonly<T> {
 function isCodexRuntimeSource(value: unknown): value is CodexRuntimeSource {
   return value === "environment"
     || value === "configured"
+    || value === "bundled"
     || value === "shim"
     || value === "path"
     || value === "fallback";
@@ -385,6 +388,75 @@ function probeVersion(
   }
 }
 
+function probeBundledCatalog(
+  command: string,
+  deps: ResolveCodexRuntimeDeps,
+): { ok: true } | { ok: false; reason: string } {
+  const platform = deps.platform ?? process.platform;
+  if (command.includes("/") || command.includes("\\") || /^[A-Za-z]:/.test(command)) {
+    const exists = deps.existsSync ?? existsSync;
+    if (!exists(command)) return { ok: false, reason: "path does not exist" };
+    if (!isSpawnableCodexCandidate(command, platform)) {
+      return { ok: false, reason: "not a spawnable Codex launcher on this platform" };
+    }
+  }
+  const execFile = deps.execFileSync ?? (execFileSync as unknown as RuntimeExecFile);
+  let probeHome: string | undefined;
+  try {
+    probeHome = mkdtempSync(join(tmpdir(), "ccx-codex-probe-"));
+    const invocation = codexExecInvocation(command, ["debug", "models", "--bundled"], platform, {
+      env: deps.env,
+      exists: deps.existsSync,
+    });
+    const output = execFile(invocation.file, invocation.args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+      windowsHide: true,
+      env: { ...(deps.env ?? process.env), CODEX_HOME: probeHome },
+      ...invocation.options,
+    });
+    const catalog = parseCatalogJson(output);
+    if (!catalog || !findNativeTemplate(catalog)) {
+      return { ok: false, reason: "bundled catalog unavailable or missing native template" };
+    }
+    return { ok: true };
+  } catch (error) {
+    if (!probeHome) return { ok: false, reason: "probe sandbox unavailable" };
+    const message = error instanceof Error ? error.message : String(error);
+    const redacted = redactUserPath(redactSecretString(message)).slice(0, 160);
+    return { ok: false, reason: `failed debug models --bundled (${redacted})` };
+  } finally {
+    if (probeHome) {
+      try { rmSync(probeHome, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  }
+}
+
+function bundledAppCandidates(deps: ResolveCodexRuntimeDeps): string[] {
+  const platform = deps.platform ?? process.platform;
+  if (platform !== "darwin") return [];
+  const exists = deps.existsSync ?? existsSync;
+  const out: string[] = [];
+  const roots = [
+    "/Applications/ChatGPT.app/Contents/Resources",
+    "/Applications/Codex.app/Contents/Resources",
+  ];
+  for (const root of roots) {
+    const direct = join(root, "codex");
+    if (exists(direct) && isSpawnableCodexCandidate(direct, platform)) out.push(direct);
+    try {
+      const { readdirSync } = require("node:fs") as typeof import("node:fs");
+      for (const entry of readdirSync(root)) {
+        if (!entry.startsWith("codex-")) continue;
+        const candidate = join(root, entry);
+        if (exists(candidate) && isSpawnableCodexCandidate(candidate, platform)) out.push(candidate);
+      }
+    } catch { /* absent app bundle */ }
+  }
+  return [...new Set(out)];
+}
+
 function shimCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   const configDir = deps.configDir ?? getConfigDir();
   const read = deps.readFileSync ?? ((path, encoding) => readFileSync(path, encoding));
@@ -433,6 +505,11 @@ function tryCandidate(
   const probed = probeVersion(candidate.command, deps);
   if (!probed.ok) {
     failures.push({ command: candidate.command, source: candidate.source, reason: probed.reason });
+    return null;
+  }
+  const bundled = probeBundledCatalog(candidate.command, deps);
+  if (!bundled.ok) {
+    failures.push({ command: candidate.command, source: candidate.source, reason: bundled.reason });
     return null;
   }
   return {
@@ -588,6 +665,10 @@ function resolveCodexRuntimeUncached(deps: ResolveCodexRuntimeDeps = {}): Resolv
   const persisted = loadPersistedCodexRuntime(deps);
   if (persisted?.command) {
     ordered.push({ command: persisted.command, source: "configured" });
+  }
+
+  for (const command of bundledAppCandidates(deps)) {
+    ordered.push({ command, source: "bundled" });
   }
 
   for (const command of shimCandidates(deps)) {

@@ -14,7 +14,7 @@ import {
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
 import { loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../src/config";
-import { deriveOAuthProviderConfig, deriveProviderPresets } from "../src/providers/derive";
+import { deriveProviderPresets } from "../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
 import {
   assertServerAuthConfig,
@@ -42,15 +42,6 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 import * as destinationPolicy from "../src/lib/destination-policy";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
-import {
-  createMediaActionAttestationProof,
-  type MediaActionAttestationInput,
-  verifyMediaActionAttestationProof,
-} from "../src/lib/media-action-attestation";
-import { createLocalAttestationSecret } from "../src/lib/local-management-attestation";
-import { listProviderApiKeys } from "../src/providers/api-keys";
-import { xaiProviderMutationAttestationId } from "../src/server/management/provider-routes";
-import type { MediaManagementRuntime } from "../src/server/management/media-routes";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -164,6 +155,71 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("provider replacement preserves the newest persisted key pool when credentials are omitted", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
+    const liveConfig: CodexCommanderConfig = {
+      port: 0,
+      multiAgentGuidanceEnabled: true,
+      defaultProvider: "custom",
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          authMode: "key",
+          apiKey: "older-provider-key",
+          apiKeyPool: [{ id: "older-key", key: "older-provider-key" }],
+        },
+      },
+    };
+    saveConfig(structuredClone(liveConfig));
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue(null);
+    let injected = false;
+    setPersistedConfigMutationBeforeCommitForTests(() => {
+      injected = true;
+      const competing = loadConfig();
+      competing.providers.custom!.apiKey = "newer-provider-key";
+      competing.providers.custom!.apiKeyPool = [{ id: "newer-key", key: "newer-provider-key" }];
+      saveConfig(competing);
+    });
+
+    try {
+      const request = new Request("http://127.0.0.1/api/providers", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "custom",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            authMode: "key",
+            defaultModel: "replacement-model",
+          },
+        }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(),
+      });
+
+      expect(response?.status).toBe(200);
+      expect(injected).toBe(true);
+      expect(loadConfig().providers.custom).toMatchObject({
+        apiKey: "newer-provider-key",
+        apiKeyPool: [{ id: "newer-key", key: "newer-provider-key" }],
+        defaultModel: "replacement-model",
+      });
+      expect(liveConfig.providers.custom).toMatchObject({
+        apiKey: "newer-provider-key",
+        apiKeyPool: [{ id: "newer-key", key: "newer-provider-key" }],
+        defaultModel: "replacement-model",
+      });
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
   test("provider management validates model hosted-tool preferences", () => {
     const provider = {
       adapter: "openai-responses",
@@ -1065,511 +1121,6 @@ describe("provider management validation", () => {
     } finally {
       await server.stop(true);
     }
-  });
-
-  test("generic provider replacement and deletion cannot bypass canonical xAI key attestation", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
-    const originalKey = "xai-media-key-original-000111222333";
-    saveConfig({
-      port: 0,
-      multiAgentGuidanceEnabled: true,
-      defaultProvider: "test-openai",
-      providers: {
-        "test-openai": {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          apiKey: "sk-secret-value",
-        },
-        xai: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-          apiKey: originalKey,
-          apiKeyPool: [{ id: "xai-original", key: originalKey }],
-        },
-      },
-    });
-
-    const server = startServer(0);
-    try {
-      for (const provider of [
-        {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-          apiKey: "xai-attacker-key-444555666777",
-        },
-        {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-          apiKeyPool: [{ id: "attacker", key: "xai-attacker-key-444555666777" }],
-        },
-      ]) {
-        const response = await fetch(new URL("/api/providers", server.url), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: "xai", provider }),
-        });
-        expect(response.status).toBe(403);
-        expect(await response.json()).toMatchObject({ code: "xai_media_key_attestation_required" });
-      }
-
-      const deletion = await fetch(new URL("/api/providers?name=xai", server.url), { method: "DELETE" });
-      expect(deletion.status).toBe(403);
-      expect(await deletion.json()).toMatchObject({ code: "xai_media_key_attestation_required" });
-
-      const persisted = loadConfig();
-      expect(persisted.providers.xai?.apiKey).toBe(originalKey);
-      expect(persisted.providers.xai?.apiKeyPool).toEqual([{ id: "xai-original", key: originalKey }]);
-    } finally {
-      await server.stop(true);
-    }
-  });
-
-  test("raw admin cannot retarget preserved canonical xAI credentials through provider POST or PATCH", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
-    const originalKey = "xai-media-key-original-000111222333";
-    const liveConfig: CodexCommanderConfig = {
-      port: 0,
-      multiAgentGuidanceEnabled: true,
-      defaultProvider: "xai",
-      providers: {
-        xai: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-          apiKey: originalKey,
-          apiKeyPool: [{ id: "xai-original", key: originalKey }],
-        },
-        cursor: {
-          adapter: "cursor",
-          baseUrl: "https://api2.cursor.sh",
-          authMode: "oauth",
-          apiKey: "cursor-dashboard-key",
-          apiKeyPool: [{ id: "cursor-key", key: "cursor-dashboard-key" }],
-        },
-      },
-    };
-    saveConfig(liveConfig);
-    const destinationProbe = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
-    const dispatch = async (
-      path: string,
-      method: "POST" | "PATCH",
-      body: Record<string, unknown>,
-      principal: "admin-token" | "confirmed-gui-session" = "admin-token",
-    ) => {
-      const req = new Request(`http://127.0.0.1${path}`, {
-        method,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      return (await handleManagementAPI(req, new URL(req.url), liveConfig, {
-        createManagementConvergeCodex: catalogConvergenceFactory(),
-      }, principal))!;
-    };
-
-    try {
-      const replacement = await dispatch("/api/providers", "POST", {
-        name: "xai",
-        provider: {
-          adapter: "openai-chat",
-          baseUrl: "https://attacker.example/v1",
-          authMode: "key",
-          note: "must not land",
-        },
-      });
-      expect(replacement.status).toBe(403);
-      expect(await replacement.json()).toMatchObject({ code: "xai_media_key_attestation_required" });
-
-      const patch = await dispatch("/api/providers?name=xai", "PATCH", {
-        baseUrl: "https://attacker.example/v1",
-        authMode: "key",
-      });
-      expect(patch.status).toBe(403);
-      expect(await patch.json()).toMatchObject({ code: "xai_media_key_attestation_required" });
-
-      const safeReplacement = await dispatch("/api/providers", "POST", {
-        name: "xai",
-        provider: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-          note: "safe replacement label",
-        },
-      });
-      expect(safeReplacement.status).toBe(200);
-      const safePatch = await dispatch("/api/providers?name=xai", "PATCH", { note: "safe label" });
-      expect(safePatch.status).toBe(200);
-
-      // Cursor's established OAuth/API-key dual mode is not part of the canonical xAI gate.
-      const cursor = await dispatch("/api/providers?name=cursor", "PATCH", { authMode: "key" });
-      expect(cursor.status).toBe(200);
-
-      const persisted = loadConfig();
-      expect(persisted.providers.xai).toMatchObject({
-        adapter: "openai-chat",
-        baseUrl: "https://api.x.ai/v1",
-        authMode: "oauth",
-        note: "safe label",
-        apiKey: originalKey,
-        apiKeyPool: [{ id: "xai-original", key: originalKey }],
-      });
-      expect(persisted.providers.cursor?.authMode).toBe("key");
-      expect(JSON.stringify(persisted)).not.toContain("attacker.example");
-    } finally {
-      destinationProbe.mockRestore();
-    }
-  });
-
-  test("raw admin may bootstrap only the default canonical xAI OAuth state before the first credential", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
-    const liveConfig: CodexCommanderConfig = {
-      port: 0,
-      multiAgentGuidanceEnabled: true,
-      defaultProvider: "test-openai",
-      providers: {
-        "test-openai": {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          apiKey: "sk-secret-value",
-        },
-      },
-    };
-    saveConfig(liveConfig);
-    const canonical = deriveOAuthProviderConfig("xai")!;
-    const destinationProbe = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
-    const replace = async (provider: CodexCommanderProviderConfig, setDefault = false) => {
-      const req = new Request("http://127.0.0.1/api/providers", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "xai", provider, setDefault }),
-      });
-      return (await handleManagementAPI(req, new URL(req.url), liveConfig, {
-        createManagementConvergeCodex: catalogConvergenceFactory(),
-      }, "admin-token"))!;
-    };
-
-    try {
-      const stagedKeyAuth = await replace({ ...canonical, authMode: "key" });
-      expect(stagedKeyAuth.status).toBe(403);
-      expect(await stagedKeyAuth.json()).toMatchObject({ code: "xai_media_key_attestation_required" });
-      expect(liveConfig.providers.xai).toBeUndefined();
-      expect(loadConfig().providers.xai).toBeUndefined();
-
-      const bootstrap = await replace(canonical, true);
-      expect(bootstrap.status).toBe(200);
-      expect(liveConfig.defaultProvider).toBe("xai");
-      expect(liveConfig.providers.xai).toMatchObject({
-        adapter: "openai-chat",
-        baseUrl: "https://api.x.ai/v1",
-        authMode: "oauth",
-      });
-      expect(liveConfig.providers.xai?.apiKey).toBeUndefined();
-      expect(loadConfig().providers.xai).toMatchObject({ authMode: "oauth" });
-    } finally {
-      destinationProbe.mockRestore();
-    }
-  });
-
-  test("confirmed GUI and fresh exact CLI proof may retarget protected canonical xAI credentials", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
-    const originalKey = "xai-media-key-original-000111222333";
-    const liveConfig: CodexCommanderConfig = {
-      port: 0,
-      multiAgentGuidanceEnabled: true,
-      defaultProvider: "test-openai",
-      providers: {
-        "test-openai": {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          apiKey: "sk-test-openai-key",
-        },
-        xai: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-          apiKey: originalKey,
-          apiKeyPool: [{ id: "xai-original", key: originalKey }],
-        },
-      },
-    };
-    saveConfig(liveConfig);
-    const secret = createLocalAttestationSecret();
-    const pid = 4_321;
-    const port = 10_100;
-    const now = 2_000_000_000_000;
-    const consumed = new Set<string>();
-    const runtime: MediaManagementRuntime = {
-      state: "ready",
-      authorizeInteractiveCliAction: (input, proof) => {
-        if (consumed.has(input.nonce) || !verifyMediaActionAttestationProof(secret, input, pid, port, proof, now)) return false;
-        consumed.add(input.nonce);
-        return true;
-      },
-    };
-    const dispatch = async (
-      path: string,
-      method: "POST" | "PATCH",
-      body: Record<string, unknown>,
-      principal: "admin-token" | "confirmed-gui-session",
-      proof?: string | null,
-    ) => {
-      const req = new Request(`http://127.0.0.1${path}`, {
-        method,
-        headers: {
-          "content-type": "application/json",
-          ...(proof ? { "x-codexcommander-media-action-proof": proof } : {}),
-        },
-        body: JSON.stringify(body),
-      });
-      return (await handleManagementAPI(req, new URL(req.url), liveConfig, {
-        mediaManagement: runtime,
-        createManagementConvergeCodex: catalogConvergenceFactory(),
-      }, principal))!;
-    };
-    const destinationProbe = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
-
-    try {
-      // Removing paid authority is fail-safe, but re-arming a stored bridge and
-      // its credentials is an exact human-authorized provider mutation.
-      expect((await dispatch(
-        "/api/providers?name=xai",
-        "PATCH",
-        { disabled: true },
-        "admin-token",
-      )).status).toBe(200);
-      const rawEnable = await dispatch(
-        "/api/providers?name=xai",
-        "PATCH",
-        { disabled: false },
-        "admin-token",
-      );
-      expect(rawEnable.status).toBe(403);
-      expect(loadConfig().providers.xai?.disabled).toBe(true);
-
-      expect((await dispatch(
-        "/api/providers?name=xai",
-        "PATCH",
-        { disabled: false },
-        "confirmed-gui-session",
-      )).status).toBe(200);
-      expect((await dispatch(
-        "/api/providers?name=xai",
-        "PATCH",
-        { disabled: true },
-        "admin-token",
-      )).status).toBe(200);
-
-      const enableTarget = { ...liveConfig.providers.xai!, disabled: false };
-      const enableEnvelope = {
-        disabled: false,
-        action: "settings",
-        target: "settings",
-        name: "xai",
-        id: xaiProviderMutationAttestationId("PATCH", enableTarget),
-        expectedRevision: listProviderApiKeys(liveConfig, "xai").revision,
-        confirmation: true,
-        caller: "interactive_cli",
-        nonce: "e".repeat(43),
-        issuedAt: now,
-      } satisfies MediaActionAttestationInput & Record<string, unknown>;
-      expect((await dispatch(
-        "/api/providers?name=xai",
-        "PATCH",
-        enableEnvelope,
-        "admin-token",
-        createMediaActionAttestationProof(secret, enableEnvelope, pid, port),
-      )).status).toBe(200);
-      expect(loadConfig().providers.xai?.disabled).toBe(false);
-
-      const guiReplacement = await dispatch("/api/providers", "POST", {
-        name: "xai",
-        provider: {
-          adapter: "openai-chat",
-          baseUrl: "https://gui-approved.example/v1",
-          authMode: "oauth",
-        },
-      }, "confirmed-gui-session");
-      expect(guiReplacement.status).toBe(200);
-
-      const target = {
-        ...liveConfig.providers.xai!,
-        baseUrl: "https://cli-approved.example/v1",
-        authMode: "key" as const,
-      };
-      const envelope = {
-        baseUrl: target.baseUrl,
-        authMode: target.authMode,
-        action: "settings",
-        target: "settings",
-        name: "xai",
-        id: xaiProviderMutationAttestationId("PATCH", target),
-        expectedRevision: listProviderApiKeys(liveConfig, "xai").revision,
-        confirmation: true,
-        caller: "interactive_cli",
-        nonce: "p".repeat(43),
-        issuedAt: now,
-      } satisfies MediaActionAttestationInput & Record<string, unknown>;
-      const proof = createMediaActionAttestationProof(secret, envelope, pid, port);
-      setPersistedConfigMutationBeforeCommitForTests(() => {
-        const competing = loadConfig();
-        const key = "xai-media-key-competing-444555666777";
-        competing.providers.xai!.apiKey = key;
-        competing.providers.xai!.apiKeyPool = [{ id: "xai-competing", key }];
-        saveConfig(competing);
-      });
-      const stalePatch = await dispatch("/api/providers?name=xai", "PATCH", envelope, "admin-token", proof);
-      expect(stalePatch.status).toBe(409);
-      expect(await stalePatch.json()).toMatchObject({ code: "stale_xai_provider_mutation" });
-      expect(loadConfig().providers.xai).toMatchObject({
-        baseUrl: "https://gui-approved.example/v1",
-        authMode: "oauth",
-        apiKey: "xai-media-key-competing-444555666777",
-      });
-
-      const retryTarget = {
-        ...liveConfig.providers.xai!,
-        baseUrl: "https://cli-approved.example/v1",
-        authMode: "key" as const,
-      };
-      const retryEnvelope = {
-        ...envelope,
-        id: xaiProviderMutationAttestationId("PATCH", retryTarget),
-        expectedRevision: listProviderApiKeys(liveConfig, "xai").revision,
-        nonce: "q".repeat(43),
-      } satisfies MediaActionAttestationInput & Record<string, unknown>;
-      const retryProof = createMediaActionAttestationProof(secret, retryEnvelope, pid, port);
-      const cliPatch = await dispatch("/api/providers?name=xai", "PATCH", retryEnvelope, "admin-token", retryProof);
-      expect(cliPatch.status).toBe(200);
-
-      const persisted = loadConfig();
-      expect(persisted.providers.xai).toMatchObject({
-        baseUrl: "https://cli-approved.example/v1",
-        authMode: "key",
-        apiKey: "xai-media-key-competing-444555666777",
-        apiKeyPool: [{ id: "xai-competing", key: "xai-media-key-competing-444555666777" }],
-      });
-    } finally {
-      destinationProbe.mockRestore();
-    }
-  });
-
-  test("xAI provider replacement rebases on the final attested key pool instead of restoring a stale snapshot", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
-    const originalKey = "xai-media-key-original-000111222333";
-    const liveConfig: CodexCommanderConfig = {
-      port: 0,
-      multiAgentGuidanceEnabled: true,
-      defaultProvider: "xai",
-      providers: {
-        xai: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-          apiKey: originalKey,
-          apiKeyPool: [{ id: "xai-original", key: originalKey }],
-        },
-      },
-    };
-    saveConfig(liveConfig);
-    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
-    setPersistedConfigMutationBeforeCommitForTests(() => {
-      const competing = loadConfig();
-      const key = "xai-media-key-attested-later-444555666777";
-      competing.providers.xai!.apiKey = key;
-      competing.providers.xai!.apiKeyPool = [{ id: "xai-attested-later", key }];
-      saveConfig(competing);
-    });
-
-    try {
-      const req = new Request("http://127.0.0.1/api/providers", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: "xai",
-          provider: {
-            adapter: "openai-chat",
-            baseUrl: "https://api.x.ai/v1",
-            authMode: "oauth",
-            note: "replacement chat settings",
-          },
-        }),
-      });
-      const response = await handleManagementAPI(req, new URL(req.url), liveConfig, {
-        createManagementConvergeCodex: catalogConvergenceFactory(),
-      });
-      expect(response?.status).toBe(200);
-      expect(resolvedError).toHaveBeenCalled();
-
-      const persisted = loadConfig();
-      expect(persisted.providers.xai).toMatchObject({
-        note: "replacement chat settings",
-        apiKey: "xai-media-key-attested-later-444555666777",
-        apiKeyPool: [{
-          id: "xai-attested-later",
-          key: "xai-media-key-attested-later-444555666777",
-        }],
-      });
-      expect(liveConfig.providers.xai).toMatchObject(persisted.providers.xai!);
-    } finally {
-      resolvedError.mockRestore();
-    }
-  });
-
-  test("xAI provider deletion rechecks the final persisted key pool before removing the provider", async () => {
-    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.CODEXCOMMANDER_HOME = TEST_DIR;
-    const liveConfig: CodexCommanderConfig = {
-      port: 0,
-      multiAgentGuidanceEnabled: true,
-      defaultProvider: "test-openai",
-      providers: {
-        "test-openai": {
-          adapter: "openai-chat",
-          baseUrl: "https://api.example.test/v1",
-          apiKey: "sk-secret-value",
-        },
-        xai: {
-          adapter: "openai-chat",
-          baseUrl: "https://api.x.ai/v1",
-          authMode: "oauth",
-        },
-      },
-    };
-    saveConfig(liveConfig);
-    setPersistedConfigMutationBeforeCommitForTests(() => {
-      const competing = loadConfig();
-      const key = "xai-media-key-attested-during-delete";
-      competing.providers.xai!.apiKey = key;
-      competing.providers.xai!.apiKeyPool = [{ id: "xai-attested-during-delete", key }];
-      saveConfig(competing);
-    });
-
-    const req = new Request("http://127.0.0.1/api/providers?name=xai", { method: "DELETE" });
-    const response = await handleManagementAPI(req, new URL(req.url), liveConfig, {
-      createManagementConvergeCodex: catalogConvergenceFactory(),
-    });
-    expect(response?.status).toBe(403);
-    expect(await response?.json()).toMatchObject({ code: "xai_media_key_attestation_required" });
-    expect(loadConfig().providers.xai).toMatchObject({
-      apiKey: "xai-media-key-attested-during-delete",
-      apiKeyPool: [{
-        id: "xai-attested-during-delete",
-        key: "xai-media-key-attested-during-delete",
-      }],
-    });
   });
 
   test("provider deletion removes stale provider context caps", async () => {

@@ -4,8 +4,10 @@
 
 `src/codex/catalog.ts` builds a shared Codex-shaped catalog for CLI, TUI, App, and SDK. It:
 
-- preserves native OpenAI entries from the live catalog or static fallback, and emits
-  gpt-5.6 natives from the pinned upstream models.json snapshot
+- preserves native OpenAI entries from the installed Codex bundled catalog
+  (`codex debug models --bundled`), including hidden rows when
+  `nativeCatalogMode` is `bundled-all` (default), and still upgrades fallback-quality
+  rows from the pinned upstream models.json snapshot
   (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
 - clones a native template for routed `provider/model` entries;
 - forces strict Codex catalog fields required by the current parser;

@@ -429,10 +429,7 @@ management API is `/api/providers/keys` and returns masked keys only.
 Use `ccx account list`, `ccx account current`, and `ccx account use` to inspect or switch the same
 Codex, OAuth, and API-key pools without opening the dashboard. See the
 [CLI reference](/reference/cli/#ccx-account-subcommand) for commands, JSON output, and
-new-session behavior. If xAI subscription OAuth is the saved media source, changing or removing its
-active account requires an interactive confirmation and a fresh attestation of the same running
-proxy. Selecting the already-active account and removing an inactive account remain non-billing
-operations.
+new-session behavior.
 
 ### GPT-5.6 preview paths
 

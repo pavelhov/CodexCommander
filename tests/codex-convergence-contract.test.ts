@@ -44,6 +44,10 @@ import {
   setBundledCatalogCacheForTests,
 } from "../src/codex/catalog/bundled";
 import {
+  createCodexRuntimeFixture,
+  seedDeterministicBundledCatalog,
+} from "./helpers/codex-runtime-fixture";
+import {
   resolveCodexCatalogSerializationDatabasePath,
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
@@ -103,6 +107,22 @@ function explicitCatalogConvergeRequest() {
   } as const;
 }
 
+function seedConvergenceRuntimeFixture(): string {
+  const fixturePath = createCodexRuntimeFixture(root, {
+    version: "0.146.0",
+    catalog: sourceCatalog(),
+  });
+  const runtime = {
+    command: fixturePath,
+    version: "0.146.0",
+    source: "environment" as const,
+  };
+  persistCodexRuntime(runtime, { configDir: codexCommanderHome });
+  process.env.CODEX_CLI_PATH = fixturePath;
+  process.env.PATH = "";
+  return fixturePath;
+}
+
 function writeManagedRouting(): void {
   writeFileSync(join(codexHome, "config.toml"), [
     "# Auto-injected by CodexCommander",
@@ -154,6 +174,7 @@ beforeEach(() => {
   resetCodexCatalogConvergenceReceiptForTests();
   saveConfig(config());
   writeFileSync(join(codexHome, "codexcommander-catalog.json"), sourceCatalog());
+  seedConvergenceRuntimeFixture();
 });
 
 afterEach(() => {
@@ -170,36 +191,29 @@ afterEach(() => {
 });
 
 test("T1 gather performs no filesystem write and does not materialize a runtime probe home", async () => {
-  process.env.CODEX_CLI_PATH = join(root, "must-not-execute");
   const before = manifest(root);
   const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(config()));
   expect(gathered.kind).toBe("candidate");
   expect(manifest(root)).toEqual(before);
   expect(existsSync(join(root, "probe-home"))).toBe(false);
-  delete process.env.CODEX_CLI_PATH;
 });
 
 test("production sync primes a bundled source before an observe-only fresh-home gather", async () => {
   if (process.platform === "win32") return;
 
   rmSync(join(codexHome, "codexcommander-catalog.json"));
-  resetCatalogRuntimeStateForTests();
-  resetCodexRuntimeResolveCacheForTests();
-  const fakeCodex = join(root, "codex-fixture");
-  writeFileSync(fakeCodex, `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "codex-cli 0.146.0"
-  exit 0
-fi
-if [ "$1" = "debug" ] && [ "$2" = "models" ]; then
-  cat <<'CCX_CATALOG'
-${sourceCatalog("fresh-bundled")}CCX_CATALOG
-  exit 0
-fi
-exit 1
-`);
-  chmodSync(fakeCodex, 0o700);
+  const fakeCodex = createCodexRuntimeFixture(root, {
+    version: "0.146.0",
+    catalog: sourceCatalog("fresh-bundled"),
+  });
+  const runtime = {
+    command: fakeCodex,
+    version: "0.146.0",
+    source: "environment" as const,
+  };
   process.env.CODEX_CLI_PATH = fakeCodex;
+  process.env.PATH = "";
+  persistCodexRuntime(runtime, { configDir: codexCommanderHome });
 
   const live: CodexCommanderConfig = {
     ...config(),
@@ -577,9 +591,19 @@ test("target identity drift wins before source comparison and writes nothing", a
 });
 
 test("used process-local authority drift rejects before every catalog target write", async () => {
-  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
-  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] }, { discoverAlternatives: false });
-  setBundledCatalogCacheForTests(runtime, JSON.parse(sourceCatalog("bundled")) as never);
+  resetCatalogRuntimeStateForTests();
+  resetCodexRuntimeResolveCacheForTests();
+  const fixturePath = createCodexRuntimeFixture(root, {
+    version: "0.146.0",
+    catalog: sourceCatalog("bundled"),
+  });
+  const runtime = { command: fixturePath, version: "0.146.0", source: "environment" as const };
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+  persistCodexRuntime(runtime, { configDir: codexCommanderHome });
+  seedDeterministicBundledCatalog(runtime, JSON.parse(sourceCatalog("bundled")) as { models: Array<Record<string, unknown>> }, {
+    codexCommanderHome,
+  });
+  process.env.CODEX_CLI_PATH = fixturePath;
   const gathered = await candidate();
   invalidateBundledCatalogCache();
   expect(await commitCodexCatalogCandidate(gathered, 1_000)).toEqual({ kind: "stale", reason: "process-local" });

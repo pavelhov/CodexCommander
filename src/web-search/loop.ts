@@ -139,7 +139,7 @@ async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
  * `tool_use`"). The signature validity gate stays in the anthropic adapter; other adapters
  * ignore or serialize the part harmlessly.
  *
- * Each signed block keeps its OWN signature and text, mirroring src/images/loop.ts: a signature
+ * Each signed block keeps its OWN signature and text: a signature
  * authenticates the exact block it closed, so flattening two blocks under the last signature
  * 400s on replay just as it does there.
  *

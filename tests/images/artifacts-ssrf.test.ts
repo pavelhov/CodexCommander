@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import { describe, expect, mock, test } from "bun:test";
 
 // Mock DNS before importing destination-policy — it binds `lookup` at load time.
@@ -6,9 +5,6 @@ const lookupMock = mock(async (_hostname: string, _opts: unknown): Promise<{ add
 mock.module("node:dns/promises", () => ({ lookup: lookupMock }));
 
 const { assessUrlDestination, assertUrlResolvesPublic, resolvePublicAddresses } = await import("../../src/lib/destination-policy");
-const { downloadImageToArtifact } = await import("../../src/images/artifacts");
-
-const MIN_PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 describe("SSRF: assessUrlDestination", () => {
   test("loopback IPv4 → loopback", () => {
@@ -130,125 +126,6 @@ describe("SSRF: resolvePublicAddresses", () => {
       await expect(resolvePublicAddresses("https://v6-mcast.example/img.png")).rejects.toThrow(/multicast|ff02/);
     } finally {
       lookupMock.mockClear();
-    }
-  });
-});
-
-describe("SSRF: downloadImageToArtifact scheme enforcement", () => {
-  test("http:// → rejects (non-HTTPS)", async () => {
-    await expect(downloadImageToArtifact("http://public-host/path")).rejects.toThrow(/HTTPS/);
-  });
-
-  test("ftp:// → rejects", async () => {
-    await expect(downloadImageToArtifact("ftp://host/path")).rejects.toThrow(/HTTPS/);
-  });
-
-  test("gopher:// → rejects (non-HTTPS)", async () => {
-    await expect(downloadImageToArtifact("gopher://host/path")).rejects.toThrow(/HTTPS/);
-  });
-
-  test("private 10.x via download helper → rejects", async () => {
-    await expect(downloadImageToArtifact("https://10.0.0.1/img.png")).rejects.toThrow();
-  });
-
-  test("shorthand IPv4 (127.1 / decimal) via download helper → rejects", async () => {
-    await expect(downloadImageToArtifact("https://127.1/img.png")).rejects.toThrow(/loopback/);
-    await expect(downloadImageToArtifact("https://2130706433/img.png")).rejects.toThrow(/loopback/);
-  });
-
-  test("IPv4-mapped IPv6 [::ffff:127.0.0.1] via download helper → rejects", async () => {
-    await expect(downloadImageToArtifact("https://[::ffff:127.0.0.1]/image.png")).rejects.toThrow();
-  });
-
-  test("IPv4-mapped IPv6 hex [::ffff:7f00:1] via download helper → rejects", async () => {
-    await expect(downloadImageToArtifact("https://[::ffff:7f00:1]/image.png")).rejects.toThrow();
-  });
-
-  test(`3xx redirect response → rejects without following`, async () => {
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    try {
-      await expect(downloadImageToArtifact("https://public-host/redirect-img", undefined, undefined, {
-        pinnedDownload: async () => new Response("", {
-          status: 301,
-          headers: { Location: "https://evil.example/redirect" },
-        }),
-      })).rejects.toThrow(/301|failed/);
-    } finally {
-      lookupMock.mockClear();
-    }
-  });
-
-  test("https:// public host → succeeds with pinned download", async () => {
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    let downloadedPath: string | undefined;
-    let seenPinned: { address: string; family: number } | undefined;
-    try {
-      downloadedPath = await downloadImageToArtifact("https://public-host/valid-image", undefined, undefined, {
-        pinnedDownload: async (_url, pinned) => {
-          seenPinned = pinned;
-          return new Response(MIN_PNG, { status: 200 });
-        },
-      });
-      expect(downloadedPath).toMatch(/dl-.*\.png$/);
-      expect(seenPinned).toEqual({ address: "93.184.216.34", family: 4 });
-    } finally {
-      lookupMock.mockClear();
-      if (downloadedPath) await rm(downloadedPath).catch(() => {});
-    }
-  });
-
-  test("empty 200 body → rejects", async () => {
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    try {
-      await expect(downloadImageToArtifact("https://public-host/empty", undefined, undefined, {
-        pinnedDownload: async () => new Response(new Uint8Array(0), { status: 200 }),
-      })).rejects.toThrow(/empty/);
-    } finally {
-      lookupMock.mockClear();
-    }
-  });
-
-  test("non-image 200 body (HTML/JSON) → rejects", async () => {
-    lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-    try {
-      await expect(downloadImageToArtifact("https://public-host/not-image", undefined, undefined, {
-        pinnedDownload: async () => new Response("<html>error</html>", { status: 200 }),
-      })).rejects.toThrow(/recognized image/);
-    } finally {
-      lookupMock.mockClear();
-    }
-  });
-
-  test("DNS rebinding: connection uses the validated public address, not a later private resolve", async () => {
-    // Validation lookup returns public; any subsequent OS resolve would return loopback.
-    // The download must pin the first answer and must not call dns.lookup again.
-    // (Transport lookup-shape + byte-cap coverage lives in pinned-https-get.test.ts.)
-    let lookups = 0;
-    lookupMock.mockImplementation(async () => {
-      lookups += 1;
-      if (lookups === 1) return [{ address: "93.184.216.34", family: 4 }];
-      return [{ address: "127.0.0.1", family: 4 }];
-    });
-
-    let downloadedPath: string | undefined;
-    let seenPinned: { address: string; family: number } | undefined;
-    try {
-      downloadedPath = await downloadImageToArtifact("https://rebind.example/img.png", undefined, undefined, {
-        pinnedDownload: async (_url, pinned) => {
-          // Still only one DNS resolve at connect time — pin came from validation.
-          expect(lookups).toBe(1);
-          seenPinned = pinned;
-          expect(pinned.address).toBe("93.184.216.34");
-          expect(pinned.address).not.toBe("127.0.0.1");
-          return new Response(MIN_PNG, { status: 200 });
-        },
-      });
-      expect(downloadedPath).toMatch(/dl-.*\.png$/);
-      expect(seenPinned?.address).toBe("93.184.216.34");
-      expect(lookups).toBe(1);
-    } finally {
-      lookupMock.mockClear();
-      if (downloadedPath) await rm(downloadedPath).catch(() => {});
     }
   });
 });

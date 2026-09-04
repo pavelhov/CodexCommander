@@ -1,5 +1,4 @@
 import { isCodexReasoningEffort } from "../reasoning-effort";
-import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import type {
   CodexCommanderComboConfig,
   CodexCommanderComboDefaultEffort,
@@ -52,7 +51,7 @@ export function isNativeAliasCombo(
 ): boolean {
   const alias = typeof combo.alias === "string" ? combo.alias.trim() : "";
   return combo.nativeAlias === true
-    && SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias);
+    && NATIVE_OPENAI_FAMILY_PATTERN.test(alias);
 }
 
 export function targetKey(target: Pick<CodexCommanderComboTarget, "provider" | "model">): string {
@@ -250,10 +249,10 @@ export function comboConfigIssues(
   }
   const alias = typeof body.alias === "string" ? body.alias.trim() : "";
   const nativeAlias = body.nativeAlias === true;
-  if (nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) {
+  if (nativeAlias && !NATIVE_OPENAI_FAMILY_PATTERN.test(alias)) {
     issues.push({
       path: ["nativeAlias"],
-      message: "nativeAlias requires a currently supported bare OpenAI-native model alias",
+      message: "nativeAlias requires a bare OpenAI-native model alias",
     });
   }
   if (nativeAlias && (typeof body.displayName !== "string" || body.displayName.trim().length === 0)) {

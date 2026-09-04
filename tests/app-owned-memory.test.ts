@@ -364,12 +364,11 @@ describe("app-owned retained memory", () => {
     });
   });
 
-  test("all four 050 observed ids appear in observedInFlight with the 040 scalar shape", () => {
+  test("all registered observed ids appear in observedInFlight with the scalar shape", () => {
     registerDefaultAppOwnedObservedBuffers();
     const observed = appOwnedBytesSnapshot().observedInFlight;
     expect(Object.keys(observed).sort()).toEqual([
       "grok_apply_flight",
-      "image_fulfillment_tail",
       "oauth_mutation_tail",
       "translator_buffers",
     ]);

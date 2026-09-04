@@ -1,62 +1,26 @@
 import {
   closeSync,
   constants,
-  existsSync,
   fstatSync,
   lstatSync,
   openSync,
-  readFileSync,
   readSync,
+  readdirSync,
+  statSync,
   unlinkSync,
   type Stats,
 } from "node:fs";
-import { open, unlink, type FileHandle } from "node:fs/promises";
+import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
-import { assessUrlDestination, resolvePublicAddresses } from "../lib/destination-policy";
+import { getConfigDir } from "../config";
+import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { ARTIFACT_HTTP_PREFIX } from "../identity";
-import {
-  pinnedHttpsGet,
-  type PinnedDownloadFn,
-} from "./pinned-https-get";
-import { pruneMediaArtifacts, removeMediaArtifact, unlinkMediaArtifactDurably } from "./artifact-retention";
-import {
-  artifactContentType,
-  artifactExtension,
-  ensureArtifactsDirectory,
-  getArtifactsDir,
-  pickPinnedAddress,
-  privateArtifactFile,
-  sameFileIdentity,
-  syncArtifactDirectory,
-  timestampPrefix,
-} from "./artifact-storage";
-import { guessVideoExtFromMagic, MAX_VIDEO_DOWNLOAD_BYTES } from "./video-artifacts";
-
-export { pinnedHttpsGet } from "./pinned-https-get";
-export type { PinnedAddress, PinnedDownloadFn } from "./pinned-https-get";
-export { getArtifactsDir } from "./artifact-storage";
-export {
-  adoptReservedVideoArtifact,
-  chargeVideoBudget,
-  createVideoBudget,
-  downloadVideoToArtifact,
-  guessVideoExtFromMagic,
-  MAX_VIDEO_DOWNLOAD_BYTES,
-  reserveVideoArtifactId,
-} from "./video-artifacts";
-export type {
-  VideoArtifactDownloadOptions,
-  VideoArtifactExtension,
-  VideoBudget,
-} from "./video-artifacts";
 
 const MAX_DECODED_BYTES_PER_IMAGE = 50 * 1024 * 1024;
 const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
-/** Hard cap for remote image downloads (also enforced inside pinnedHttpsGet). */
+/** Hard cap for an image artifact served from disk. */
 export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
-/** Idle timeout for pinned HTTPS connect/headers/body when no AbortSignal is provided. */
-export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 
 /**
  * Upper bound on the raw base64 string length before it is decoded. Base64
@@ -73,7 +37,7 @@ export const DEFAULT_ARTIFACT_KEEP_COUNT = 200;
 /** Opaque artifact HTTP path prefix (data-plane, API-auth gated). */
 export { ARTIFACT_HTTP_PREFIX };
 
-const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif|mp4|webm)$/i;
+const ARTIFACT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,200}\.(png|jpe?g|webp|gif)$/i;
 const ARTIFACT_STREAM_CHUNK_BYTES = 256 * 1024;
 
 // Strict alphabet check: Buffer.from(..., "base64") silently ignores invalid
@@ -97,6 +61,10 @@ export function chargeImageBudget(budget: ImageBudget | undefined, bytes: number
   budget.spent += bytes;
 }
 
+export function getArtifactsDir(): string {
+  return join(getConfigDir(), "artifacts");
+}
+
 /**
  * Markdown-safe relative URL for a materialized artifact. Opaque filename only —
  * never expose host filesystem paths to model-visible content.
@@ -113,27 +81,20 @@ export function artifactHttpUrl(filePath: string): string {
  * Resolve an opaque artifact id to an absolute path under the artifacts dir.
  * Rejects traversal (`..`, absolute paths, separators).
  */
-export function resolveArtifactPath(id: string): string | null {
-  if (!ARTIFACT_ID_RE.test(id)) return null;
-  const dir = resolve(getArtifactsDir());
-  const candidate = resolve(dir, id);
-  if (candidate !== dir && !candidate.startsWith(dir + sep)) return null;
-  if (!existsSync(candidate)) return null;
-  try {
-    const stats = lstatSync(candidate);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) return null;
-  } catch {
-    return null;
-  }
-  return candidate;
+function artifactExtension(id: string): "png" | "jpg" | "jpeg" | "webp" | "gif" | null {
+  const ext = id.split(".").pop()?.toLowerCase();
+  return ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "webp" || ext === "gif"
+    ? ext
+    : null;
 }
 
-export function readArtifactBytes(id: string): { bytes: Buffer; contentType: string } | null {
-  const path = resolveArtifactPath(id);
-  if (!path) return null;
-  const bytes = readFileSync(path);
-  const contentType = artifactContentType(path) ?? "application/octet-stream";
-  return { bytes, contentType };
+export function artifactContentType(id: string): string | null {
+  const ext = artifactExtension(id);
+  if (ext === "png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "webp") return "image/webp";
+  if (ext === "gif") return "image/gif";
+  return null;
 }
 
 function privateArtifactDirectory(stats: Stats): boolean {
@@ -143,20 +104,22 @@ function privateArtifactDirectory(stats: Stats): boolean {
   return uid !== undefined && stats.uid === uid && (stats.mode & 0o777) === 0o700;
 }
 
-function magicMatchesExtension(bytes: Uint8Array, ext: string): boolean {
-  if (ext === "mp4" || ext === "webm") {
-    try { return guessVideoExtFromMagic(bytes) === ext; } catch { return false; }
-  }
-  const sniffed = sniffImageExtension(bytes);
-  return sniffed === ext || (sniffed === "jpg" && ext === "jpeg");
+function privateArtifactFile(stats: Stats): boolean {
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) return false;
+  if (process.platform === "win32") return true;
+  const uid = process.getuid?.();
+  return uid !== undefined && stats.uid === uid && (stats.mode & 0o777) === 0o600;
+}
+
+function sameFileIdentity(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
 }
 
 type ArtifactByteRange = { start: number; end: number };
 
 function parseArtifactRange(value: string, size: number): ArtifactByteRange | null {
   if (/[^\x20-\x7e]/.test(value) || value.includes(",") || !/^bytes=/i.test(value)) return null;
-  const spec = value.slice(6);
-  const match = /^(\d*)-(\d*)$/.exec(spec);
+  const match = /^(\d*)-(\d*)$/.exec(value.slice(6));
   if (!match || (!match[1] && !match[2])) return null;
   const parse = (raw: string): number | null => {
     if (!/^\d+$/.test(raw)) return null;
@@ -176,15 +139,10 @@ function parseArtifactRange(value: string, size: number): ArtifactByteRange | nu
   return { start, end: Math.min(requestedEnd, size - 1) };
 }
 
-function closeQuietlyFd(fd: number): void {
+function closeQuietly(fd: number): void {
   try { closeSync(fd); } catch { /* already closed */ }
 }
 
-/**
- * Open, validate, and stream one artifact through a single no-follow file
- * descriptor. The pathname is rechecked against the opened identity before any
- * bytes are returned, so a later replacement cannot retarget the response.
- */
 export async function createArtifactResponse(
   id: string,
   method: "GET" | "HEAD",
@@ -196,10 +154,10 @@ export async function createArtifactResponse(
   if (!ext || !contentType) return null;
 
   const dir = resolve(getArtifactsDir());
-  let dirStats: Stats;
-  let before: Stats;
   const path = resolve(dir, id);
   if (!path.startsWith(dir + sep)) return null;
+  let dirStats: Stats;
+  let before: Stats;
   try {
     dirStats = lstatSync(dir);
     before = lstatSync(path);
@@ -235,27 +193,26 @@ export async function createArtifactResponse(
       || !privateArtifactFile(after)
       || !sameFileIdentity(before, stats)
       || !sameFileIdentity(stats, after)
+      || !Number.isSafeInteger(stats.size)
+      || stats.size <= 0
+      || stats.size > MAX_DOWNLOAD_BYTES
     ) {
-      closeQuietlyFd(fd);
-      return null;
-    }
-    const maxBytes = ext === "mp4" || ext === "webm" ? MAX_VIDEO_DOWNLOAD_BYTES : MAX_DOWNLOAD_BYTES;
-    if (!Number.isSafeInteger(stats.size) || stats.size <= 0 || stats.size > maxBytes) {
-      closeQuietlyFd(fd);
+      closeQuietly(fd);
       return null;
     }
     const header = Buffer.alloc(Math.min(12, stats.size));
     const bytesRead = readSync(fd, header, 0, header.length, 0);
-    if (bytesRead !== header.length || !magicMatchesExtension(header, ext)) {
-      closeQuietlyFd(fd);
+    const sniffed = sniffImageExtension(header);
+    if (bytesRead !== header.length || (sniffed !== ext && !(sniffed === "jpg" && ext === "jpeg"))) {
+      closeQuietly(fd);
       return null;
     }
   } catch {
-    closeQuietlyFd(fd);
+    closeQuietly(fd);
     return null;
   }
 
-  const commonHeaders = new Headers({
+  const headers = new Headers({
     "accept-ranges": "bytes",
     "cache-control": "private, max-age=3600",
     "content-type": contentType,
@@ -267,20 +224,20 @@ export async function createArtifactResponse(
   if (rangeHeader !== null) {
     const range = parseArtifactRange(rangeHeader, stats.size);
     if (!range) {
-      closeQuietlyFd(fd);
-      commonHeaders.set("content-range", `bytes */${stats.size}`);
-      commonHeaders.set("content-length", "0");
-      return new Response(null, { status: 416, headers: commonHeaders });
+      closeQuietly(fd);
+      headers.set("content-range", `bytes */${stats.size}`);
+      headers.set("content-length", "0");
+      return new Response(null, { status: 416, headers });
     }
     status = 206;
     start = range.start;
     end = range.end;
-    commonHeaders.set("content-range", `bytes ${start}-${end}/${stats.size}`);
+    headers.set("content-range", `bytes ${start}-${end}/${stats.size}`);
   }
-  commonHeaders.set("content-length", String(end - start + 1));
+  headers.set("content-length", String(end - start + 1));
   if (method === "HEAD") {
-    closeQuietlyFd(fd);
-    return new Response(null, { status, headers: commonHeaders });
+    closeQuietly(fd);
+    return new Response(null, { status, headers });
   }
 
   let position = start;
@@ -288,7 +245,7 @@ export async function createArtifactResponse(
   const close = () => {
     if (closed) return;
     closed = true;
-    closeQuietlyFd(fd);
+    closeQuietly(fd);
   };
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
@@ -317,7 +274,7 @@ export async function createArtifactResponse(
       close();
     },
   });
-  return new Response(body, { status, headers: commonHeaders });
+  return new Response(body, { status, headers });
 }
 
 /**
@@ -350,16 +307,53 @@ export function decodeValidatedImageBase64(base64Data: string): Buffer {
  * of files. All errors are swallowed and logged so a prune failure never breaks an image write.
  */
 export function pruneOldArtifacts(dir: string, maxFiles: number): void {
-  const result = pruneMediaArtifacts({ dir, maxFiles });
-  if (result.blocked && maxFiles > 0) {
-    console.warn("[images] prune: artifact directory could not be read");
+  // A non-positive maxFiles disables pruning entirely (do not delete everything).
+  if (maxFiles <= 0) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch (e) {
+    console.warn(`[images] prune: could not read ${dir}:`, e instanceof Error ? e.message : e);
+    return;
+  }
+  if (entries.length <= maxFiles) return;
+
+  let stats: Array<{ name: string; mtime: number }>;
+  try {
+    stats = entries.map(name => {
+      const st = statSync(join(dir, name));
+      return { name, mtime: st.mtimeMs };
+    });
+  } catch (e) {
+    console.warn(`[images] prune: could not stat files in ${dir}:`, e instanceof Error ? e.message : e);
+    return;
+  }
+
+  // Sort oldest-first, delete the excess.
+  stats.sort((a, b) => a.mtime - b.mtime);
+  const toDelete = stats.slice(0, stats.length - maxFiles);
+  for (const { name } of toDelete) {
+    try {
+      unlinkSync(join(dir, name));
+    } catch (e) {
+      console.warn(`[images] prune: could not delete ${name}:`, e instanceof Error ? e.message : e);
+    }
   }
 }
 
-function artifactFsErrorCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && "code" in error
-    ? String((error as { code?: unknown }).code)
-    : undefined;
+function timestampPrefix(): string {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+    "-",
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0"),
+    "-",
+    String(now.getMilliseconds()).padStart(3, "0"),
+  ].join("");
 }
 
 /**
@@ -377,27 +371,40 @@ async function writeArtifactUnique(
   for (let attempt = 0; ; attempt++) {
     const suffix = attempt === 0 ? crypto.randomUUID() : `${crypto.randomUUID()}-${attempt}`;
     const filePath = join(dir, `${prefix}${timestampPrefix()}-${suffix}.${ext}`);
-    let handle: FileHandle | undefined;
     try {
-      handle = await open(filePath, "wx", 0o600);
-      if (process.platform === "win32") {
-        hardenSecretPath(filePath, { required: true, timeoutMemoKey: `${dir}::artifact-file` });
+      await writeFile(filePath, buf, { mode: 0o600, flag: "wx" });
+      if (process.platform === "win32" && !hardenSecretPath(filePath, { required: true }).ok) {
+        throw new Error("artifact file ACL hardening failed");
       }
-      await handle.writeFile(buf);
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await syncArtifactDirectory(dir);
       return filePath;
     } catch (e) {
-      if (handle) {
-        try { await handle.close(); } catch { /* cleanup continues */ }
+      if (e instanceof Error && "code" in e && (e as { code: string }).code === "EEXIST") {
+        if (attempt < 3) continue;
+        throw e;
       }
-      try { await unlink(filePath); } catch { /* absent or collision */ }
-      if (e instanceof Error && "code" in e && (e as { code: string }).code === "EEXIST" && attempt < 3) continue;
+      // `writeFile` can leave a partially-written file when it fails after the
+      // exclusive create succeeds. EEXIST is the one exception: that name was
+      // already owned by a concurrent writer and must never be removed here.
+      try { await unlink(filePath); } catch { /* absent or cleanup failed */ }
       throw e;
     }
   }
+}
+
+async function ensureArtifactsDirectory(): Promise<string> {
+  const dir = getArtifactsDir();
+  recordOwnedConfigPath(getConfigDir(), dir);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (process.platform === "win32") {
+    if (!hardenSecretDir(dir, { required: true, timeoutMemoKey: `${dir}::artifacts` }).ok) {
+      throw new Error("artifact directory ACL hardening failed");
+    }
+  } else {
+    await chmod(dir, 0o700);
+  }
+  const stats = lstatSync(dir);
+  if (!privateArtifactDirectory(stats)) throw new Error("artifact directory is unsafe");
+  return dir;
 }
 
 /** Sniff a recognized image extension, or null when the payload is empty/non-image. */
@@ -420,16 +427,9 @@ export function guessExtFromMagic(bytes: Uint8Array): string {
   return ext;
 }
 
-/** Prune after a full image batch while preserving every artifact in the response being returned. */
-export function pruneArtifacts(
-  keepCount?: number,
-  protectedArtifactIds: ReadonlySet<string> = new Set(),
-): void {
-  const maxFiles = keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT;
-  const result = pruneMediaArtifacts({ dir: getArtifactsDir(), maxFiles, protectedArtifactIds });
-  if (result.blocked && maxFiles > 0) {
-    console.warn("[images] prune: artifact directory could not be read");
-  }
+/** Prune `CODEXCOMMANDER_HOME/artifacts` after a full image batch has been written. */
+export function pruneArtifacts(keepCount?: number): void {
+  pruneOldArtifacts(getArtifactsDir(), keepCount ?? DEFAULT_ARTIFACT_KEEP_COUNT);
 }
 
 export async function materializeInlineImage(
@@ -444,122 +444,7 @@ export async function materializeInlineImage(
   // Sniff actual format from decoded bytes rather than trusting the declared mimeType.
   const ext = sniffImageExtension(buf);
   if (!ext) throw new Error("inline image data is not a recognized image");
-  // Retention is post-batch via pruneArtifacts (see fulfill.ts) so a tight keepCount
+  // Retention is post-batch so a tight keepCount
   // cannot delete earlier images from the same call before their paths are returned.
   return writeArtifactUnique(dir, "img-", buf, ext);
-}
-
-/**
- * HTTPS GET that connects to a previously validated address while keeping the
- * original hostname for SNI / Host. The custom `lookup` never asks the OS
- * resolver again, so a rebinding answer cannot redirect the TCP peer.
- *
- * Returns a streaming Response so callers can enforce byte caps while reading;
- * the transport also destroys the request if `maxBytes` is exceeded mid-stream.
- */
-/** Delete one opaque artifact after its durable inspection record releases the pin. */
-export async function removeArtifactById(id: string): Promise<boolean> {
-  if (!ARTIFACT_ID_RE.test(id)) return false;
-  const dir = resolve(getArtifactsDir());
-  const candidate = resolve(dir, id);
-  if (!candidate.startsWith(dir + sep)) return false;
-  return removeMediaArtifact(dir, id);
-}
-
-/**
- * Exact deletion primitive for a capability artifact whose durable probe row already records
- * pending deletion. It deliberately bypasses generic pin release, revalidates the private file
- * identity immediately before unlink, and leaves journal finalization to the probe owner's CAS.
- */
-export async function removePendingCapabilityArtifactById(id: string): Promise<boolean> {
-  if (!ARTIFACT_ID_RE.test(id)) return false;
-  const dir = resolve(getArtifactsDir());
-  const candidate = resolve(dir, id);
-  if (!candidate.startsWith(dir + sep)) return false;
-  try {
-    const observed = lstatSync(candidate);
-    if (!privateArtifactFile(observed)) return false;
-    const current = lstatSync(candidate);
-    if (!privateArtifactFile(current) || !sameFileIdentity(observed, current)) return false;
-    return unlinkMediaArtifactDurably(dir, id, {}, observed);
-  } catch (error) {
-    // A prior unlink-before-fsync attempt is completed only by durably syncing
-    // the directory while the exact name remains absent.
-    if (artifactFsErrorCode(error) === "ENOENT") return unlinkMediaArtifactDurably(dir, id);
-    return false;
-  }
-}
-
-export async function downloadImageToArtifact(
-  url: string,
-  budget?: ImageBudget,
-  signal?: AbortSignal,
-  options?: { pinnedDownload?: PinnedDownloadFn },
-): Promise<string> {
-  if (url.startsWith("data:")) {
-    const m = /^data:([^;]+);base64,(.+)$/.exec(url);
-    if (!m) throw new Error("data URL is not a valid base64 image");
-    return materializeInlineImage(m[2], budget);
-  }
-
-  // SSRF protection: validate the provider-returned URL before fetching.
-  // Require HTTPS strictly — plain HTTP and all other schemes (ftp, file, …) are rejected.
-  // Resolve DNS once, then pin that public address for the HTTPS connect (SNI/Host keep
-  // the original hostname) so a rebinding answer cannot retarget the TCP peer.
-  let parsedUrl: URL;
-  try { parsedUrl = new URL(url); } catch { throw new Error("image URL is not valid"); }
-  if (parsedUrl.protocol !== "https:") {
-    throw new Error(`image URL must use HTTPS, got ${parsedUrl.protocol}`);
-  }
-  // Reject literal private/loopback/link-local/metadata addresses.
-  const assessment = assessUrlDestination(url);
-  if (assessment && assessment.kind !== "public" && assessment.kind !== "hostname") {
-    throw new Error(`image URL targets ${assessment.detail}`);
-  }
-  const resolved = await resolvePublicAddresses(url);
-  const pinned = pickPinnedAddress(resolved.addresses);
-  const download = options?.pinnedDownload ?? pinnedHttpsGet;
-  const resp = await download(url, pinned, signal);
-  if (!resp.ok) {
-    // Custom `pinnedDownload` seams may still return a failed Response with a
-    // live body; cancel it so unread error payloads cannot keep the socket warm.
-    try { await resp.body?.cancel(); } catch { /* ignore */ }
-    throw new Error("image download failed: " + resp.status);
-  }
-
-  // Stream the body with a hard byte cap so a missing/lying Content-Length or a
-  // compromised CDN URL cannot exhaust memory before the size check runs.
-  if (!resp.body) throw new Error("image download returned no body");
-  const reader = resp.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_DOWNLOAD_BYTES) {
-        throw new Error(`image download exceeds ${MAX_DOWNLOAD_BYTES} byte cap`);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    try { await reader.cancel(); } catch { /* ignore cancel errors */ }
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) { bytes.set(c, offset); offset += c.byteLength; }
-
-  if (bytes.byteLength === 0) throw new Error("image download returned empty body");
-  const ext = sniffImageExtension(bytes);
-  if (!ext) throw new Error("image download did not contain a recognized image");
-
-  chargeImageBudget(budget, bytes.length);
-
-  const dir = await ensureArtifactsDirectory();
-
-  // Retention is post-batch via pruneArtifacts (see fulfill.ts).
-  return writeArtifactUnique(dir, "dl-", bytes, ext);
 }

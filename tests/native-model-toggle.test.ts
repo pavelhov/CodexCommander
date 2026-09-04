@@ -7,7 +7,7 @@ import {
   CODEX_ACCOUNT_BOUND_CATALOG_KIND,
   disabledNativeSlugs,
   mergeCatalogEntriesForSync,
-  NATIVE_OPENAI_MODELS,
+  nativeOpenAiSlugs,
   nativeModelRows,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
@@ -76,7 +76,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
 
   test("nativeModelRows lists the full static supported set regardless of disabled state", () => {
     const rows = nativeModelRows({ disabledModels: ["gpt-5.6-sol"] });
-    expect(rows.map(r => r.slug)).toEqual([...NATIVE_OPENAI_MODELS]);
+    expect(rows.map(r => r.slug)).toEqual([...nativeOpenAiSlugs()]);
     expect(rows.find(r => r.slug === "gpt-5.6-sol")?.disabled).toBe(true);
     expect(rows.find(r => r.slug === "gpt-5.5")?.disabled).toBe(false);
     // Known context metadata rides along for the dashboard.
@@ -360,7 +360,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     );
     const rows = await modelsRes!.json() as Array<{ namespaced: string; native?: boolean; disabled: boolean }>;
     const nativeRows = rows.filter(r => r.native);
-    expect(nativeRows.map(r => r.namespaced)).toEqual([...NATIVE_OPENAI_MODELS]);
+    expect(nativeRows.map(r => r.namespaced)).toEqual([...nativeOpenAiSlugs()]);
     expect(nativeRows.find(r => r.namespaced === "gpt-5.6-sol")?.disabled).toBe(true);
     // Native rows lead the response so the GUI pins the group first.
     expect(rows[0]?.native).toBe(true);

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveStatusPid, selectListenTarget } from "../src/cli/status";
-import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { bundledCatalogJson, createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
@@ -165,25 +165,19 @@ describe("CLI status JSON", () => {
   });
 
   test("status --json reports catalogClamp.runtimeVersion when clamp is active", async () => {
-    const { chmodSync } = await import("node:fs");
     const { persistEffortClamp, resetCodexRuntimeResolveCacheForTests } = await import("../src/codex/runtime");
     const codexCommanderHome = mkdtempSync(join(tmpdir(), "ccx-status-clamp-"));
+    const runtimeDir = mkdtempSync(join(tmpdir(), "ccx-status-clamp-runtime-"));
     try {
       writeFileSync(join(codexCommanderHome, "config.json"), JSON.stringify({
         port: 9,
         providers: {},
         defaultProvider: "openai",
       }), "utf8");
-      const fakeCodex = process.platform === "win32"
-        ? join(codexCommanderHome, "bin", "codex.cmd")
-        : join(codexCommanderHome, "bin", "codex");
-      mkdirSync(join(codexCommanderHome, "bin"), { recursive: true });
-      if (process.platform === "win32") {
-        writeFileSync(fakeCodex, "@echo off\r\necho codex-cli 0.133.0\r\n", "utf8");
-      } else {
-        writeFileSync(fakeCodex, "#!/bin/sh\necho 'codex-cli 0.133.0'\n", "utf8");
-        chmodSync(fakeCodex, 0o755);
-      }
+      const fakeCodex = createCodexRuntimeFixture(runtimeDir, {
+        version: "0.133.0",
+        catalogJson: bundledCatalogJson(["gpt-5.6-sol"]),
+      });
       persistEffortClamp({
         runtimePath: fakeCodex,
         runtimeVersion: "0.133.0",
@@ -218,6 +212,7 @@ describe("CLI status JSON", () => {
     } finally {
       resetCodexRuntimeResolveCacheForTests();
       rmSync(codexCommanderHome, { recursive: true, force: true });
+      rmSync(runtimeDir, { recursive: true, force: true });
     }
   });
 

@@ -3,9 +3,12 @@
  * No network — transforms GET /api/combos rows into rail groups + attention.
  */
 
-import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-models";
-
-export { SUPPORTED_NATIVE_OPENAI_SLUGS };
+export function isSupportedNativeOpenAiSlug(
+  slug: string,
+  supportedNativeSlugs: ReadonlySet<string>,
+): boolean {
+  return supportedNativeSlugs.has(slug);
+}
 
 export type ComboStrategy = "failover" | "round-robin";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -302,6 +305,8 @@ export function validateComboDraft(
     existingAliases?: readonly string[];
     isCreate: boolean;
     providers: Readonly<Record<string, { disabled?: boolean }>>;
+    /** Bare native OpenAI slugs from GET /api/models (native === true). */
+    supportedNativeSlugs?: ReadonlySet<string>;
   },
 ): ComboDraftError | null {
   const id = item.id.trim();
@@ -329,7 +334,7 @@ export function validateComboDraft(
     && (displayName.length > 128 || displayNameHasControlCharacter)) {
     return "invalidDisplayName";
   }
-  if (item.nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) return "unsupportedNativeAlias";
+  if (item.nativeAlias && !isSupportedNativeOpenAiSlug(alias, options.supportedNativeSlugs ?? new Set())) return "unsupportedNativeAlias";
   if (item.nativeAlias && !displayName) return "missingNativeAliasDisplayName";
   if (item.targets.length < 1) return "noTargets";
 

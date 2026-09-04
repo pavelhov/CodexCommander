@@ -69,7 +69,7 @@ import {
   desktopAllowlistSuppressedNativeSlugs,
   disabledNativeSlugs,
   isNativeAliasCatalogEntry,
-  NATIVE_OPENAI_MODELS,
+  nativeOpenAiSlugs,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
 } from "./catalog/metadata";
@@ -425,7 +425,7 @@ function prepareCatalog(
     ? []
     : buildCatalogEntries(
       template ? JSON.parse(JSON.stringify(template)) : null,
-      NATIVE_OPENAI_MODELS,
+      nativeOpenAiSlugs(),
       [],
       featured,
       websocketsEnabled(config),
@@ -464,7 +464,7 @@ function prepareCatalog(
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
-    NATIVE_OPENAI_MODELS,
+    nativeOpenAiSlugs(),
     suppressedBareNativeSlugs,
   );
   clampCatalogModelsToSupportedEfforts(

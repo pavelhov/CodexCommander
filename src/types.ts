@@ -37,8 +37,6 @@ export interface CodexCommanderParsedRequest {
    * executes searches via the gpt-5.4-mini sidecar (see src/web-search). Absent when not requested.
    */
   _webSearch?: Record<string, unknown>;
-  /** Hosted image_generation tool config stashed for the image bridge sidecar (see src/images). */
-  _imageGeneration?: { toolNames: Set<string>; originalTool?: Record<string, unknown> };
   /**
    * True when Codex requested structured output (`text.format` = json_schema/json_object). The
    * web-search tool_result is then rendered as compact JSON instead of markdown prose, so its
@@ -168,10 +166,6 @@ export interface CodexCommanderTool {
   loadedFromToolSearch?: boolean;
   /** Synthetic web_search tool: the model's call is executed by the gpt-5.4-mini sidecar, not relayed to Codex. */
   webSearch?: boolean;
-  /** Synthetic image_gen tool: the model's call is executed by the xAI image bridge sidecar, not relayed to Codex. */
-  imageGeneration?: boolean;
-  /** Synthetic video_gen tool: executed by the xAI video bridge sidecar. */
-  videoGeneration?: boolean;
 }
 
 /**
@@ -308,13 +302,6 @@ export type AdapterEvent =
       code?: string;
       retryable?: boolean;
     };
-
-/** Terminals that the Responses bridge exposes as `response.incomplete`. */
-export function isIncompleteAdapterTerminalEvent(event: AdapterEvent): boolean {
-  return event.type === "incomplete"
-    || (event.type === "done"
-      && (event.stopReason === "max_tokens" || event.stopReason === "content_filter"));
-}
 
 /**
  * A web source backing a search answer. Surfaced on the search-end event and rendered by the bridge
@@ -648,6 +635,12 @@ export interface CodexCommanderConfig {
    * the bare row plus every generated selector row and omit that model family from raw discovery.
    */
   disabledModels?: string[];
+  /**
+   * Which native OpenAI slugs CodexCommander publishes from the installed Codex bundled catalog.
+   * `bundled-all` includes both `visibility: list` and `visibility: hide` rows; `bundled-listed`
+   * publishes only listed rows. Routing still accepts explicit bare `gpt-*` / `codex-*` ids.
+   */
+  nativeCatalogMode?: "bundled-all" | "bundled-listed";
   /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 목록. */
   customModels?: CodexCommanderCustomModel[];
   /**
@@ -913,36 +906,11 @@ export interface CodexCommanderTokenGuardianConfig {
   codexWarmupModel?: string;
 }
 
-/** Explicit credential family used by both optional Grok media bridges. */
-export type MediaAuthSource = "subscription_oauth" | "api_key";
-
 export interface CodexCommanderImagesConfig {
   /** Optional custom API-key provider for /v1/images relays. Built-in OpenAI tiers remain automatic. */
   provider?: string;
-  /** Upstream timeout (ms) for one image generation/edit call (bridge xAI + /v1/images relay). Default 60000 for the bridge; relay may use a higher default (300000). */
+  /** Upstream timeout (ms) for one image generation/edit relay call. */
   timeoutMs?: number;
-  /** Master switch for the image bridge. Default false — set true to enable paid xAI Grok Imagine generation. */
-  bridgeEnabled?: boolean;
-  /**
-   * Credential family shared by image and video generation. There is no automatic
-   * fallback between sources. Legacy enabled bridge configs that omit this field
-   * are normalized to "api_key" when loaded from disk.
-   */
-  authSource?: MediaAuthSource;
-  /** xAI image model id. Default "grok-imagine-image-2.0" (see XAI_IMAGE_MODEL in images/plan.ts). */
-  bridgeModel?: string;
-  /** Max image-generation loop iterations before forced-final. Default 3; clamped to [0, 10]. */
-  maxRounds?: number;
-  /** Max files retained under artifacts/. Oldest deleted when exceeded. Default 200. */
-  artifactsKeepCount?: number;
-  /** Master switch for the video bridge. Default false — must be explicitly opted in. */
-  videoBridgeEnabled?: boolean;
-  /** Legacy video-model override retained for config compatibility; video v1 uses grok-imagine-video-1.5. */
-  videoBridgeModel?: string;
-  /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */
-  videoMaxRounds?: number;
-  /** Per-video generation timeout (ms) including polling. Default 300000 (5 min). */
-  videoTimeoutMs?: number;
 }
 
 export interface CodexCommanderSearchConfig {

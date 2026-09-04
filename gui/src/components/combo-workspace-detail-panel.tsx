@@ -25,6 +25,7 @@ export function DetailPanel({
   providerMap,
   providers,
   models,
+  supportedNativeSlugs,
   onBack,
   onSaved,
   onRequestRemove,
@@ -40,6 +41,7 @@ export function DetailPanel({
   providerMap: Readonly<Record<string, { disabled?: boolean }>>;
   providers: ProviderOption[];
   models: ModelOption[];
+  supportedNativeSlugs: ReadonlySet<string>;
   onBack?: () => void;
   onSaved: (item: ComboItem) => void;
   onRequestRemove?: () => void;
@@ -99,6 +101,7 @@ export function DetailPanel({
       existingAliases: otherAliases,
       isCreate,
       providers: providerMap,
+      supportedNativeSlugs,
     });
     if (code) {
       setMsg({ ok: false, text: t(`cws.err.${code}`) });
