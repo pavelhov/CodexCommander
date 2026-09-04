@@ -411,7 +411,7 @@ export function installApiAuthFetch(): void {
   guiLaunchCapabilityReady = launch
     ? exchangeGuiLaunchFragment(launch).then(exchanged => exchanged || rehydrated)
     : Promise.resolve(rehydrated);
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const authFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (!needsApiAuth(input)) return originalFetch(input, init);
 
     // A launcher-confirmed page must finish its one-time exchange before the
@@ -442,6 +442,7 @@ export function installApiAuthFetch(): void {
     if (retry.status === 401) clearTokenIfCurrent(nextToken);
     return retry;
   };
+  window.fetch = Object.assign(authFetch, originalFetch);
 }
 
 export function isConfirmedGuiLaunch(): boolean {
