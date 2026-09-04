@@ -144,6 +144,13 @@ function computeSupportedNativeOpenAiSlugs(
   return [...LEGACY_NATIVE_OPENAI_MODELS];
 }
 
+function shouldMemoizeSupportedNativeSlugs(slugs: readonly string[]): boolean {
+  if (slugs.length === 0) return false;
+  if (slugs.length !== LEGACY_NATIVE_OPENAI_MODELS.length) return true;
+  const legacy = new Set(LEGACY_NATIVE_OPENAI_MODELS);
+  return slugs.every(slug => legacy.has(slug));
+}
+
 export function supportedNativeOpenAiSlugs(
   options: NativeCatalogSelectionOptions = {},
 ): string[] {
@@ -156,7 +163,11 @@ export function supportedNativeOpenAiSlugs(
     return supportedNativeSlugMemo.slugs;
   }
   const slugs = computeSupportedNativeOpenAiSlugs(options);
-  supportedNativeSlugMemo = { key, slugs, slugSet: new Set(slugs) };
+  if (shouldMemoizeSupportedNativeSlugs(slugs)) {
+    supportedNativeSlugMemo = { key, slugs, slugSet: new Set(slugs) };
+  } else {
+    supportedNativeSlugMemo = null;
+  }
   return slugs;
 }
 
@@ -232,9 +243,14 @@ export function isUnsupportedOpenAiNativeSlug(
   return /^(?:gpt|codex)-/.test(slug);
 }
 
+/** Drop the process-local supported-native slug memo after bundled catalog or sync changes. */
+export function invalidateSupportedNativeSlugMemo(): void {
+  supportedNativeSlugMemo = null;
+}
+
 /** Test-only: clear the supported-native slug memo (sync.ts calls this via resetCatalogRuntimeStateForTests). */
 export function resetSupportedNativeSlugMemoForTests(): void {
-  supportedNativeSlugMemo = null;
+  invalidateSupportedNativeSlugMemo();
 }
 
 export const NATIVE_GPT56_CONTEXT_WINDOW = 372_000;

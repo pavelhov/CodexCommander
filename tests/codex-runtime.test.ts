@@ -55,6 +55,38 @@ function gatherEvidence(
   };
 }
 
+const BUNDLED_CATALOG_FIXTURE = JSON.stringify({
+  models: [{
+    slug: "gpt-5.5",
+    display_name: "GPT-5.5",
+    description: "native fixture",
+    priority: 0,
+    visibility: "list",
+    base_instructions: "You are Codex, a coding agent based on GPT-5.",
+    supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+  }],
+});
+
+function createBundledCatalogExec(
+  options: {
+    versionByPath?: Record<string, string>;
+    bundledByPath?: Record<string, string | null>;
+  } = {},
+): RuntimeExecFile {
+  return (file, args) => {
+    const path = String(file);
+    if (args[0] === "--version") {
+      return options.versionByPath?.[path] ?? "codex-cli 0.145.0-alpha.30";
+    }
+    if (args[0] === "debug" && args[1] === "models" && args[2] === "--bundled") {
+      const payload = options.bundledByPath?.[path];
+      if (payload === null) throw new Error("bundled catalog unavailable");
+      return payload ?? BUNDLED_CATALOG_FIXTURE;
+    }
+    throw new Error(`unexpected codex invocation: ${path} ${args.join(" ")}`);
+  };
+}
+
 describe("parseCodexVersionOutput / compareCodexVersions", () => {
   test("parses dotted and prerelease versions", () => {
     expect(parseCodexVersionOutput("codex-cli 0.133.0")).toBe("0.133.0");
@@ -343,10 +375,12 @@ describe("resolveCodexRuntime", () => {
       selectedVersion: "0.133.0",
       updatedAt: "2026-01-01T00:00:00.000Z",
     }));
-    const execFileSync: RuntimeExecFile = (file) => {
-      if (String(file).includes("new")) return "codex-cli 0.145.0-alpha.30";
-      return "codex-cli 0.133.0";
-    };
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: {
+        "C:\\new\\codex.exe": "codex-cli 0.145.0-alpha.30",
+        "C:\\old\\codex.exe": "codex-cli 0.133.0",
+      },
+    });
     const result = resolveCodexRuntime({
       configDir,
       env: { CODEX_CLI_PATH: "C:\\new\\codex.exe", PATH: "" },
@@ -363,8 +397,9 @@ describe("resolveCodexRuntime", () => {
     // A real Codex CLI writes state (tmp/) under CODEX_HOME even for --version;
     // the probe must redirect it so read-only commands stay read-only.
     let seenEnv: NodeJS.ProcessEnv | undefined;
-    const execFileSync: RuntimeExecFile = (_file, _args, options) => {
+    const execFileSync: RuntimeExecFile = (file, args, options) => {
       seenEnv = options.env;
+      if (args[0] === "debug" && args[1] === "models") return BUNDLED_CATALOG_FIXTURE;
       return "codex-cli 0.145.0";
     };
     const result = resolveCodexRuntime({
@@ -409,12 +444,15 @@ describe("resolveCodexRuntime", () => {
         wrapperPath: "C:\\shim\\wrapper.cmd",
       }],
     }));
-    const execFileSync: RuntimeExecFile = (file) => {
-      const text = String(file);
-      if (text.includes("configured")) return "codex-cli 0.145.0-alpha.30";
-      if (text.includes("shim")) return "codex-cli 0.140.0";
-      return "codex-cli 0.133.0";
-    };
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: {
+        "C:\\configured\\codex.exe": "codex-cli 0.145.0-alpha.30",
+        "C:\\shim\\codex.exe": "codex-cli 0.140.0",
+        "C:\\shim\\wrapper.cmd": "codex-cli 0.140.0",
+        "C:\\path-old\\codex.exe": "codex-cli 0.133.0",
+        "C:\\path-old\\codex.cmd": "codex-cli 0.133.0",
+      },
+    });
     const result = resolveCodexRuntime({
       configDir,
       env: { PATH: "C:\\path-old" },
@@ -424,6 +462,60 @@ describe("resolveCodexRuntime", () => {
     });
     expect(result.runtime.command).toBe("C:\\configured\\codex.exe");
     expect(result.runtime.source).toBe("configured");
+  });
+
+  test("rejects configured runtime that cannot load bundled catalog", () => {
+    const configDir = tempConfigDir();
+    persistCodexRuntime({
+      command: "/Users/me/.local/bin/codex",
+      version: "0.153.2",
+      source: "configured",
+    }, { configDir });
+    const bundled = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: {
+        "/Users/me/.local/bin/codex": "codex-cli 0.153.2",
+        [bundled]: "codex-cli 0.153.2",
+      },
+      bundledByPath: {
+        "/Users/me/.local/bin/codex": null,
+        [bundled]: BUNDLED_CATALOG_FIXTURE,
+      },
+    });
+    const result = resolveCodexRuntime({
+      configDir,
+      env: { PATH: "" },
+      platform: "darwin",
+      existsSync: path => ["/Users/me/.local/bin/codex", bundled].includes(String(path)),
+      execFileSync,
+    });
+    expect(result.runtime.command).toBe(bundled);
+    expect(result.runtime.source).toBe("bundled");
+    expect(result.replacedConfigured?.from.command).toBe("/Users/me/.local/bin/codex");
+    expect(result.failures.some(item => (
+      item.command === "/Users/me/.local/bin/codex"
+      && item.reason.includes("bundled catalog unavailable")
+    ))).toBe(true);
+  });
+
+  test("discovers macOS app bundle codex before generic PATH entries", () => {
+    const bundled = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const pathCodex = "/usr/local/bin/codex";
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: {
+        [bundled]: "codex-cli 0.153.2",
+        [pathCodex]: "codex-cli 0.120.0",
+      },
+    });
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { PATH: "/usr/local/bin" },
+      platform: "darwin",
+      existsSync: path => [bundled, pathCodex].includes(String(path)),
+      execFileSync,
+    });
+    expect(result.runtime.command).toBe(bundled);
+    expect(result.runtime.source).toBe("bundled");
   });
 
   test("stale shim path is rejected", () => {
@@ -442,18 +534,20 @@ describe("resolveCodexRuntime", () => {
       env: { PATH: "" },
       platform: "win32",
       existsSync: (path) => !String(path).includes("gone"),
-      execFileSync: () => "codex-cli 0.145.0",
+      execFileSync: createBundledCatalogExec(),
     });
     expect(result.failures.some(item => item.source === "shim" && item.reason.includes("does not exist"))).toBe(true);
   });
 
   test("persisted valid runtime survives a new resolve when PATH has an older binary", () => {
     const configDir = tempConfigDir();
-    const execFileSync: RuntimeExecFile = (file) => {
-      const text = String(file);
-      if (text.includes("keep")) return "codex-cli 0.145.0-alpha.30";
-      return "codex-cli 0.133.0";
-    };
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: {
+        "C:\\keep\\codex.exe": "codex-cli 0.145.0-alpha.30",
+        "C:\\old\\codex.exe": "codex-cli 0.133.0",
+        "C:\\old\\codex.cmd": "codex-cli 0.133.0",
+      },
+    });
     resolveAndPersistCodexRuntime({
       configDir,
       env: { CODEX_CLI_PATH: "C:\\keep\\codex.exe", PATH: "C:\\old" },
@@ -478,25 +572,27 @@ describe("resolveCodexRuntime", () => {
 
   test("reports newerAvailable when an older runtime is selected", () => {
     const configDir = tempConfigDir();
+    const oldBin = "/tmp/ccx-runtime-old/codex.exe";
+    const newBin = "/tmp/ccx-runtime-new/codex.exe";
     persistCodexRuntime({
-      command: "C:\\old\\codex.exe",
+      command: oldBin,
       version: "0.133.0",
       source: "configured",
     }, { configDir });
-    const execFileSync: RuntimeExecFile = (file) => {
-      const text = String(file);
-      if (text.includes("old")) return "codex-cli 0.133.0";
-      if (text.includes("new")) return "codex-cli 0.145.0-alpha.30";
-      return "codex-cli 0.120.0";
-    };
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: {
+        [oldBin]: "codex-cli 0.133.0",
+        [newBin]: "codex-cli 0.145.0-alpha.30",
+      },
+    });
     const result = resolveCodexRuntime({
       configDir,
-      env: { PATH: "C:\\new" },
+      env: { PATH: "/tmp/ccx-runtime-new" },
       platform: "win32",
-      existsSync: () => true,
+      existsSync: path => [oldBin, newBin].includes(String(path)),
       execFileSync,
     });
-    expect(result.runtime.command).toBe("C:\\old\\codex.exe");
+    expect(result.runtime.command).toBe(oldBin);
     expect(result.newerAvailable?.command).toContain("new");
     expect(result.newerAvailable?.version).toBe("0.145.0-alpha.30");
   });
@@ -530,7 +626,9 @@ describe("resolveCodexRuntime", () => {
       env: { CODEX_CLI_PATH: "C:\\same\\codex.exe", PATH: "" },
       platform: "win32",
       existsSync: () => true,
-      execFileSync: () => "codex-cli 0.145.0-alpha.30",
+      execFileSync: createBundledCatalogExec({
+        versionByPath: { "C:\\same\\codex.exe": "codex-cli 0.145.0-alpha.30" },
+      }),
     });
     expect(result.runtime.source).toBe("environment");
     expect(result.replacedConfigured).toBeUndefined();
@@ -587,7 +685,9 @@ describe("resolveCodexRuntime", () => {
       env: { CODEX_CLI_PATH: "C:\\keep\\codex.exe", PATH: "" },
       platform: "win32",
       existsSync: () => true,
-      execFileSync: () => "codex-cli 0.145.0-alpha.30",
+      execFileSync: createBundledCatalogExec({
+        versionByPath: { "C:\\keep\\codex.exe": "codex-cli 0.145.0-alpha.30" },
+      }),
     });
     expect(failed.runtime.command).toBe("C:\\keep\\codex.exe");
     expect(typeof failed.persistError).toBe("string");
@@ -699,7 +799,9 @@ describe("resolveCodexRuntime", () => {
       env: { CODEX_CLI_PATH: "C:\\keep\\codex.exe", PATH: "" },
       platform: "win32" as const,
       existsSync: () => true,
-      execFileSync: (() => "codex-cli 0.145.0-alpha.30") as RuntimeExecFile,
+      execFileSync: createBundledCatalogExec({
+        versionByPath: { "C:\\keep\\codex.exe": "codex-cli 0.145.0-alpha.30" },
+      }),
       now: () => ++now,
     };
 
@@ -730,7 +832,21 @@ describe("resolveCodexRuntime", () => {
     const previousHome = process.env.CODEXCOMMANDER_HOME;
     process.env.CODEXCOMMANDER_HOME = configDir;
     resetCodexRuntimeResolveCacheForTests();
-    const deps = { env: { PATH: "" }, discoverAlternatives: false };
+    const deps = {
+      env: { PATH: "" },
+      platform: "win32" as const,
+      discoverAlternatives: false,
+      existsSync: () => false,
+      execFileSync: createBundledCatalogExec({
+        versionByPath: { codex: "codex-cli 0.0.0" },
+        bundledByPath: { codex: null },
+      }),
+    };
+    const cacheDeps = {
+      env: { PATH: "" },
+      platform: "win32" as const,
+      discoverAlternatives: false,
+    };
 
     try {
       const cached = resolveCodexRuntime(deps);
@@ -738,7 +854,7 @@ describe("resolveCodexRuntime", () => {
       setCodexRuntimeResolveCacheForTests({
         runtime: { command: "codex", version: null, source: "environment" },
         failures: cached.failures,
-      }, deps);
+      }, cacheDeps);
       const before = readFileSync(statePath, "utf8");
 
       resolveAndPersistCodexRuntime(deps);
@@ -811,6 +927,10 @@ describe("resolveCodexRuntime", () => {
           `  echo codex-cli ${version}`,
           "  exit /b 0",
           ")",
+          `if "%~1"=="debug" if "%~2"=="models" if "%~3"=="--bundled" (`,
+          `  type "%~dp0catalog.json"`,
+          "  exit /b 0",
+          ")",
           `type "%~dp0catalog.json"`,
           "",
         ].join("\r\n"), "utf8");
@@ -819,6 +939,10 @@ describe("resolveCodexRuntime", () => {
           "#!/bin/sh",
           `if [ "$1" = "--version" ]; then`,
           `  echo "codex-cli ${version}"`,
+          "  exit 0",
+          "fi",
+          `if [ "$1" = "debug" ] && [ "$2" = "models" ] && [ "$3" = "--bundled" ]; then`,
+          `  cat "$(dirname "$0")/catalog.json"`,
           "  exit 0",
           "fi",
           `cat "$(dirname "$0")/catalog.json"`,
@@ -837,13 +961,40 @@ describe("resolveCodexRuntime", () => {
     process.env.PATH = "";
     resetCodexRuntimeResolveCacheForTests();
     resetBundledCatalogCacheForTests();
+    const isolatedDeps = {
+      configDir: home,
+      env: process.env as NodeJS.ProcessEnv,
+      platform: process.platform,
+      existsSync: (path: string) => [oldBin, newBin].includes(path),
+      execFileSync: ((file, args) => {
+        const command = String(file);
+        if (args[0] === "--version") {
+          if (command === oldBin) return "codex-cli 0.133.0";
+          if (command === newBin) return "codex-cli 0.145.0-alpha.30";
+        }
+        if (args[0] === "debug" && args[1] === "models" && args[2] === "--bundled") {
+          const efforts = command === newBin
+            ? ["low", "medium", "high", "max", "ultra"]
+            : ["low", "medium", "high"];
+          return JSON.stringify({
+            models: [{
+              slug: "gpt-5.5",
+              base_instructions: "x",
+              supported_reasoning_levels: efforts.map(effort => ({ effort, description: effort })),
+              default_reasoning_level: "medium",
+            }],
+          });
+        }
+        throw new Error(`unexpected codex invocation: ${command} ${args.join(" ")}`);
+      }) as RuntimeExecFile,
+    };
 
     try {
       process.env.CODEX_CLI_PATH = oldBin;
-      const first = resolveAndPersistCodexRuntime();
+      const first = resolveAndPersistCodexRuntime(isolatedDeps);
       expect(first.runtime.version).toBe("0.133.0");
 
-      const oldCatalog = loadBundledCodexCatalog();
+      const oldCatalog = loadBundledCodexCatalog(isolatedDeps);
       expect(oldCatalog?.models?.[0]?.supported_reasoning_levels?.some(
         level => (level as { effort?: string }).effort === "max",
       )).toBe(false);
@@ -854,13 +1005,13 @@ describe("resolveCodexRuntime", () => {
         command: newBin,
         version: "0.145.0-alpha.30",
         source: "configured",
-      }, { configDir: home });
+      }, isolatedDeps);
 
-      const second = resolveCodexRuntime();
+      const second = resolveCodexRuntime(isolatedDeps);
       expect(second.runtime.command).toBe(newBin);
       expect(second.runtime.version).toBe("0.145.0-alpha.30");
 
-      const newCatalog = loadBundledCodexCatalog();
+      const newCatalog = loadBundledCodexCatalog(isolatedDeps);
       expect(newCatalog?.models?.[0]?.supported_reasoning_levels?.some(
         level => (level as { effort?: string }).effort === "max",
       )).toBe(true);
