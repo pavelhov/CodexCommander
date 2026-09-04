@@ -466,19 +466,20 @@ describe("resolveCodexRuntime", () => {
 
   test("rejects configured runtime that cannot load bundled catalog", () => {
     const configDir = tempConfigDir();
+    const configured = join(tempConfigDir(), "local", "bin", "codex");
     persistCodexRuntime({
-      command: "/Users/me/.local/bin/codex",
+      command: configured,
       version: "0.153.2",
       source: "configured",
     }, { configDir });
     const bundled = "/Applications/ChatGPT.app/Contents/Resources/codex";
     const execFileSync = createBundledCatalogExec({
       versionByPath: {
-        "/Users/me/.local/bin/codex": "codex-cli 0.153.2",
+        [configured]: "codex-cli 0.153.2",
         [bundled]: "codex-cli 0.153.2",
       },
       bundledByPath: {
-        "/Users/me/.local/bin/codex": null,
+        [configured]: null,
         [bundled]: BUNDLED_CATALOG_FIXTURE,
       },
     });
@@ -486,14 +487,14 @@ describe("resolveCodexRuntime", () => {
       configDir,
       env: { PATH: "" },
       platform: "darwin",
-      existsSync: path => ["/Users/me/.local/bin/codex", bundled].includes(String(path)),
+      existsSync: path => [configured, bundled].includes(String(path)),
       execFileSync,
     });
     expect(result.runtime.command).toBe(bundled);
     expect(result.runtime.source).toBe("bundled");
-    expect(result.replacedConfigured?.from.command).toBe("/Users/me/.local/bin/codex");
+    expect(result.replacedConfigured?.from.command).toBe(configured);
     expect(result.failures.some(item => (
-      item.command === "/Users/me/.local/bin/codex"
+      item.command === configured
       && item.reason.includes("bundled catalog unavailable")
     ))).toBe(true);
   });
