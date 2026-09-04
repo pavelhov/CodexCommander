@@ -526,14 +526,13 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-function mutateStoreConditionally<T>(fn:(store:AuthStore)=>Promise<{ changed: boolean; value: T }> | { changed: boolean; value: T }, retainedValues: readonly unknown[] = [], options?: { waitMs?: number }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const store = loadAuthStoreInternal();
     const result = await fn(store);
-    if (result.changed) persist(store);
-    return result.value;
+    persist(store);
+    return result;
   }finally{guard.release();}}, retainedValues, options?.waitMs);
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number }):Promise<T>{return mutateStoreConditionally(async store=>({changed:true,value:await fn(store)}),retainedValues,options);}
 
 /** The ACTIVE account's credential for a provider (what requests should use). */
 export function getCredential(provider: string): OAuthCredentials | null {
@@ -608,95 +607,6 @@ export async function removeCredential(provider: string): Promise<void> {
 
 export function getAccountSet(provider: string): ProviderAccountSet | null {
   return loadAuthStore()[provider] ?? null;
-}
-
-/**
- * Secret-free CAS revision for human-authorized active-account changes. Account
- * ids and ordering are already management-public; credentials never enter the
- * revision. Ordering is included because removing the active row promotes the
- * first remaining account.
- */
-export function oauthAccountSetRevision(set: ProviderAccountSet | null): number {
-  const semantic = JSON.stringify({
-    activeAccountId: set?.activeAccountId ?? null,
-    accountIds: set?.accounts.map(account => account.id) ?? [],
-  });
-  return Number.parseInt(createHash("sha256")
-    .update("codexcommander-oauth-account-set-v1\0")
-    .update(semantic)
-    .digest("hex")
-    .slice(0, 12), 16);
-}
-
-export type GuardedOAuthAccountMutationResult =
-  | "applied"
-  | "unchanged"
-  | "missing"
-  | "forbidden"
-  | "stale";
-
-interface GuardedOAuthAccountMutationOptions {
-  allowActiveIdentityChange: boolean;
-  expectedRevision?: number;
-}
-
-function guardedAuthorizationResult(
-  set: ProviderAccountSet,
-  options: GuardedOAuthAccountMutationOptions,
-): "allowed" | "forbidden" | "stale" {
-  if (!options.allowActiveIdentityChange) return "forbidden";
-  if (
-    options.expectedRevision !== undefined
-    && oauthAccountSetRevision(set) !== options.expectedRevision
-  ) return "stale";
-  return "allowed";
-}
-
-/** Atomically switch an account only when the locked billing-identity guard allows it. */
-export async function setActiveAccountGuarded(
-  provider: string,
-  accountId: string,
-  options: GuardedOAuthAccountMutationOptions,
-): Promise<GuardedOAuthAccountMutationResult> {
-  return await mutateStoreConditionally(store => {
-    const set = store[provider];
-    if (!set || !set.accounts.some(account => account.id === accountId)) {
-      return { changed: false, value: "missing" as const };
-    }
-    if (set.activeAccountId === accountId) {
-      return { changed: false, value: "unchanged" as const };
-    }
-    const authorization = guardedAuthorizationResult(set, options);
-    if (authorization !== "allowed") {
-      return { changed: false, value: authorization };
-    }
-    set.activeAccountId = accountId;
-    return { changed: true, value: "applied" as const };
-  }, [provider, accountId, options]);
-}
-
-/** Atomically remove an account, guarding only the active billing identity. */
-export async function removeAccountGuarded(
-  provider: string,
-  accountId: string,
-  options: GuardedOAuthAccountMutationOptions,
-): Promise<GuardedOAuthAccountMutationResult> {
-  return await mutateStoreConditionally(store => {
-    const set = store[provider];
-    if (!set || !set.accounts.some(account => account.id === accountId)) {
-      return { changed: false, value: "missing" as const };
-    }
-    if (set.activeAccountId === accountId) {
-      const authorization = guardedAuthorizationResult(set, options);
-      if (authorization !== "allowed") {
-        return { changed: false, value: authorization };
-      }
-    }
-    set.accounts = set.accounts.filter(account => account.id !== accountId);
-    if (set.accounts.length === 0) delete store[provider];
-    else if (set.activeAccountId === accountId) set.activeAccountId = set.accounts[0]!.id;
-    return { changed: true, value: "applied" as const };
-  }, [provider, accountId, options]);
 }
 
 export function listAccounts(provider: string): ProviderAccount[] {

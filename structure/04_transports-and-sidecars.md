@@ -289,10 +289,10 @@ or the fixed interval, capped at `maxIntervalMs`) and replays the identical requ
 key before any failover, up to `attempts` extra times per request (the budget lives outside the
 recovery loop, so a 413/401 replay cannot re-arm it). The same wait-and-replay applies to every
 other key-auth surface that bypasses that loop: the Responses passthrough wire (e.g. the
-built-in DeepSeek preset), the image/video bridge and web-search sidecar loops (before their
+built-in DeepSeek preset), the web-search sidecar loop (before its
 `on429` key rotation), and Anthropic terminal-guard continuations (before key/account
-failover). The policy covers HTTP-capable adapters only: custom `runTurn` transports in the
-image loop run through an event queue and never receive an HTTP status, so they are outside
+failover). The policy covers HTTP-capable adapters only: custom `runTurn` transports never receive
+an HTTP status, so they are outside
 the HTTP retry scope and cannot replay a 429. Codex never retries 429 client-side (openai/codex#30471), so this is the only
 defense for those providers; the final 429 still carries `Retry-After` for clients that honor
 it. Concurrent requests each honor their own policy — there is no process-wide shared cooldown
@@ -300,7 +300,7 @@ it. Concurrent requests each honor their own policy — there is no process-wide
 `attempts + poolKeys` per request (same-key replays, then failover keys; the pool size is the
 operator-configured `apiKeyPool` length, fixed for the duration of the request). Every surface
 releases (and awaits the cancellation of) the unread 429 body before the backoff, records the
-`rate-limit-429` recovery kind on replay sends, and the bridge loops clear the old
+`rate-limit-429` recovery kind on replay sends, and the web-search loop clears the old
 response-header deadline before the wait and start a fresh one afterward — client cancellation
 is re-checked after the wait, so 499 always wins over a stale-deadline edge, and backoffs never
 consume the connect budget or surface as a 504. The wait is abort-aware:
@@ -580,63 +580,6 @@ combo whose remaining eligible targets use other providers.
 - 장점, 단점 및 영향: Same-account model fallback works without weakening explicit upstream backoff; the account health map intentionally does not remember that one deferred reset-derived failure, while the combo target map does.
 ```
 
-## Grok Imagine media transport invariants
-
-`src/images/` owns a shared xAI media credential binding, but image and video remain independently
-planned capabilities. `images.bridgeEnabled` and `images.videoBridgeEnabled` must never be coupled:
-off/off preserves native image behavior, and video-only must not alter the native/OpenAI image route.
-The selected `images.authSource` is exactly `subscription_oauth` or `api_key`; media must never
-fall back between them after absence, 401, 403, 429, or a network failure. This source is separate
-from the routed xAI/Grok chat credential path.
-
-Each media operation binds a stable credential slot and identity digest before dispatch. An accepted
-video keeps that binding and its absolute deadline through changes, disconnects, and restart. OAuth
-polling may resolve the same binding's generation-aware token and replay one complete rejected poll;
-it may not retarget the account or resubmit the job. A changed/missing key becomes `needs_auth`, not
-an OAuth lookup. Credential values, prompts, provider request ids, and signed result URLs never enter
-the durable job projection or logs.
-
-Every paid video POST has a durable prompt-free `submitting` fence before dispatch. A known returned
-request id is durably accepted before polling. An ambiguous post-dispatch result is `outcome_unknown`:
-no automatic POST replay, retained admission, and a privileged human acknowledgement before release.
-GET polling/downloading may retry within the already-persisted deadline. The first release accepts one
-text-to-video job per current human-intent turn; auxiliary web, image, and video budgets are
-independent, while the global iteration cap remains a shared runaway guard.
-
-Media artifacts are immediately downloaded through the credentialless SSRF-safe path into private
-storage. Artifact identifiers are opaque; MIME/magic, size, ownership, and retention are validated.
-The authenticated artifact endpoint supports MP4/WebM `GET`, `HEAD`, and one byte range without
-full-file buffering. The durable job store is the retention pin authority, so pruning records
-`artifact_pruned` rather than leaving a silently dangling completion. Video completion and startup
-recovery own the shared retention pass; legacy image pruning consults those live pins and cannot
-delete a protected video. Provider-visible media tool results are a narrow replay contract with only
-authenticated proxy-relative artifact references and renderer hints, never local paths, prompts,
-model ids, provider URLs, signed URLs, or raw errors.
-
-Recovery uses an exclusive owner lease and stable journal inode through inspection, fencing, and
-quarantine. An active, busy, or locked journal remains read-only and cannot be quarantined out from
-under its owner. Artifact publication is a no-replace hard link; only the exact `nlink=2` interrupted
-publication shape with an explicit durable video reservation may be reconciled; transient image
-delivery guards and arbitrary hard links never authorize repair. Every normal artifact operation
-validates a single private link before serving, retaining, or deleting it. Windows recovery is
-inspection-only because its SQLite VFS cannot preserve the exclusive proof handle across rename;
-quarantine therefore fails closed before fencing or moving journal bytes.
-
-Video-journal quarantine is one manifest-backed authority transaction over the primary database,
-its fixed SQLite sidecars, the durable replay secret, and the recovery-owner database plus its
-sidecars. An unacknowledged canonical recovery fence blocks every video store admission, including
-custom-path stores; acknowledgement resumes partial POSIX moves under the same global coordinator
-and moves the owner last. Legacy coherent bundles migrate through the same manifest protocol, while
-incoherent or unsupported Windows bundles remain read-only and fail closed.
-
-Subscription OAuth media is experimental. The fixed capability operation is one image plus a
-one-second 1080p video for one bound account with API-key fallback disabled. It is a paid action
-behind preflight, explicit confirmation, and a single-flight durable operation; capability evidence
-does not prove billing attribution or packaged release verification. The image step must durably
-settle before video can submit. Accepted probe video runs through the background driver and startup
-recovery, which reconcile GET/download outcomes into the existing probe evidence without another
-POST. Production preflight remains disabled until explicit U8 approval.
-
 ## Transport inventory
 
 The sections above cover the transports with load-bearing invariants. The rest of the transport
@@ -653,7 +596,6 @@ surface is listed here so a maintainer can find the owner without grepping:
 | Claude Messages | `src/server/claude-messages.ts` | Routed translation, a native Anthropic passthrough branch, and `count_tokens`. |
 | Chat Completions inbound | `src/server/chat-completions.ts`, `src/chat/` | Inbound translation onto the same routing pipeline. |
 | Hosted search relay | `src/server/search.ts` | Direct relay; distinct from the web-search sidecar loop below. |
-| Image/video generation loop | `src/images/loop.ts`, `src/images/plan.ts`, `src/images/fulfill.ts`, `src/images/xai-client.ts`, `src/images/xai-video-client.ts`, `src/images/artifacts.ts` | A provider-returned image URL is downloaded into a local artifact once, then served locally; warnings stay URL-free because provider CDN URLs may embed credentials. |
 | GitHub Copilot | `src/providers/xai-transport.ts` (`resolveProviderTransport`), `src/providers/github-copilot-transport.ts` | `resolveProviderTransport` selects the Copilot transport when the routed provider name is `github-copilot`; the Copilot module then resolves its headers and base URL, and the registry seeds the provider row and model fallback. |
 | API-key pools | `src/providers/key-failover.ts` | A 429 rotates the active key and records a cooldown; `provider.apiKey` keeps mirroring the active entry so routing stays single-key. |
 | Discovery and quota | `src/providers/model-discovery.ts`, `src/providers/quota.ts` | Discovery rejects a response over 4 MiB or past 2,000 raw rows before caching it. |

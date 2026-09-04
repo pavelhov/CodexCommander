@@ -29,12 +29,11 @@ export interface OAuthAccount {
 export interface ApiKeyEntry { id: string; label?: string; masked: string; active: boolean }
 
 export async function keyMutationFailure(
-  provider: string,
   response: Response,
   refresh: () => Promise<void>,
 ): Promise<{ error?: string }> {
   const data = await response.json().catch(() => ({})) as { error?: string };
-  if (provider === "xai" && response.status === 409) await refresh().catch(() => {});
+  if (response.status === 409) await refresh().catch(() => {});
   return data;
 }
 
@@ -73,7 +72,6 @@ export function useProviderAccountPools(deps: {
   const [switchingAccount, setSwitchingAccount] = useState<{ provider: string; accountId: string } | null>(null);
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
   const [keyPools, setKeyPools] = useState<Record<string, ApiKeyEntry[]>>({});
-  const [keyPoolRevisions, setKeyPoolRevisions] = useState<Record<string, number>>({});
   const [addingKeyFor, setAddingKeyFor] = useState<string | null>(null);
   const [newKeyValue, setNewKeyValue] = useState("");
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
@@ -136,27 +134,18 @@ export function useProviderAccountPools(deps: {
     const entries = await Promise.all(providers.map(async name => {
       const data = await fetch(`${apiBase}/api/providers/keys?name=${encodeURIComponent(name)}`).then(async r => {
         if (!r.ok) throw new Error(String(r.status));
-        const parsed = await r.json() as { revision?: number; keys?: ApiKeyEntry[] };
-        if (!Number.isSafeInteger(parsed.revision)) throw new Error("invalid key-pool revision");
-        return parsed as { revision: number; keys?: ApiKeyEntry[] };
+        return await r.json() as { activeId?: string | null; keys?: ApiKeyEntry[] };
       }).catch(() => null);
       return [name, data] as const;
     }));
-    // A failed reconciliation must not look like a successful empty pool: keeping the last
-    // known-good keys and revision lets the user retry with the canonical stale-state error.
-    const refreshed = entries.filter((entry): entry is readonly [string, { revision: number; keys?: ApiKeyEntry[] }] => entry[1] !== null);
+    // A failed reconciliation must not look like a successful empty pool: keep the last
+    // known-good keys so the user can retry after a transient management API failure.
+    const refreshed = entries.filter((entry): entry is readonly [string, { activeId?: string | null; keys?: ApiKeyEntry[] }] => entry[1] !== null);
     if (refreshed.length === 0) return;
     setKeyPools(current => ({
       ...current,
       ...Object.fromEntries(refreshed.map(([name, data]) => [name, data.keys ?? []])),
     }));
-    setKeyPoolRevisions(current => {
-      const next = { ...current };
-      for (const [name, data] of refreshed) {
-        next[name] = data.revision;
-      }
-      return next;
-    });
   }, [apiBase]);
 
   const switchAccount = async (provider: string, account: OAuthAccount) => {
@@ -184,36 +173,25 @@ export function useProviderAccountPools(deps: {
 
   const switchApiKey = async (provider: string, entry: ApiKeyEntry) => {
     if (entry.active) return;
-    const revision = keyPoolRevisions[provider];
-    if (provider === "xai" && !Number.isSafeInteger(revision)) {
-      notify(t("prov.keySwitchFail"), false);
-      return;
-    }
     const res = await fetch(`${apiBase}/api/providers/keys/active`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: provider, id: entry.id, ...(provider === "xai" ? { expectedRevision: revision } : {}) }),
+      body: JSON.stringify({ name: provider, id: entry.id }),
     });
     if (res.ok) {
       notify(t("prov.keySwitched", { key: entry.label ?? entry.masked }), true);
       void fetchKeyPools(Object.keys(keyPools));
       void fetchProviderQuotas(true);
     } else {
-      const data = await keyMutationFailure(provider, res, () => fetchKeyPools(Object.keys(keyPools)));
+      const data = await keyMutationFailure(res, () => fetchKeyPools(Object.keys(keyPools)));
       notify(data.error || t("prov.keySwitchFail"), false);
     }
   };
 
   const removeApiKey = async (provider: string, entry: ApiKeyEntry) => {
     if (!window.confirm(t("prov.keyRemoveConfirm", { key: entry.label ?? entry.masked }))) return;
-    const revision = keyPoolRevisions[provider];
-    if (provider === "xai" && !Number.isSafeInteger(revision)) return;
     const res = await fetch(`${apiBase}/api/providers/keys?name=${encodeURIComponent(provider)}&id=${encodeURIComponent(entry.id)}`, {
       method: "DELETE",
-      ...(provider === "xai" ? {
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: provider, id: entry.id, expectedRevision: revision }),
-      } : {}),
     });
     if (res.ok) {
       notify(t("prov.keyRemoved", { key: entry.label ?? entry.masked }), true);
@@ -221,7 +199,7 @@ export function useProviderAccountPools(deps: {
       void fetchConfig();
       void fetchProviderQuotas(true);
     } else {
-      const data = await keyMutationFailure(provider, res, () => fetchKeyPools(Object.keys(keyPools)));
+      const data = await keyMutationFailure(res, () => fetchKeyPools(Object.keys(keyPools)));
       notify(data.error || t("prov.keyRemoveFail"), false);
     }
   };
@@ -229,20 +207,15 @@ export function useProviderAccountPools(deps: {
   const addApiKeyValue = async (provider: string, rawKey: string): Promise<boolean> => {
     const key = rawKey.trim();
     if (!key) return false;
-    const revision = keyPoolRevisions[provider];
-    if (provider === "xai" && !Number.isSafeInteger(revision)) {
-      notify(t("prov.keyAddFail"), false);
-      return false;
-    }
     try {
       const res = await fetch(`${apiBase}/api/providers/keys`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: provider, key, ...(provider === "xai" ? { expectedRevision: revision } : {}) }),
+        body: JSON.stringify({ name: provider, key }),
       });
       if (!res.ok) {
         const providers = Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider];
-        const data = await keyMutationFailure(provider, res, () => fetchKeyPools(providers));
+        const data = await keyMutationFailure(res, () => fetchKeyPools(providers));
         notify(data.error || t("prov.keyAddFail"), false);
         return false;
       }
@@ -268,20 +241,15 @@ export function useProviderAccountPools(deps: {
     const entered = window.prompt(t("prov.aliasPrompt"), current ?? "");
     if (entered === null) return;
     const alias = entered.trim();
-    const xaiRevision = provider === "xai" && type === "api-key" ? keyPoolRevisions[provider] : undefined;
-    if (provider === "xai" && type === "api-key" && !Number.isSafeInteger(xaiRevision)) {
-      notify(t("prov.aliasSaveFailed"), false);
-      return;
-    }
     const response = await fetch(type === "oauth" ? `${apiBase}/api/oauth/accounts/alias` : `${apiBase}/api/providers/keys/alias`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(type === "oauth"
         ? { provider, accountId: id, alias }
-        : { name: provider, id, alias, ...(xaiRevision === undefined ? {} : { expectedRevision: xaiRevision }) }),
+        : { name: provider, id, alias }),
     });
     if (!response.ok) {
       const providers = Object.keys(keyPools).includes(provider) ? Object.keys(keyPools) : [...Object.keys(keyPools), provider];
-      const data = await keyMutationFailure(provider, response, () => fetchKeyPools(providers));
+      const data = await keyMutationFailure(response, () => fetchKeyPools(providers));
       notify(data.error || t("prov.aliasSaveFailed"), false);
       return;
     }
@@ -352,7 +320,7 @@ export function useProviderAccountPools(deps: {
   );
 
   return {
-    accountSets, accountLoadStates, switchingAccount, openAccounts, keyPools, keyPoolRevisions, addingKeyFor, newKeyValue,
+    accountSets, accountLoadStates, switchingAccount, openAccounts, keyPools, addingKeyFor, newKeyValue,
     setAccountSets, setAccountLoadStates, setSwitchingAccount, setOpenAccounts, setKeyPools, setAddingKeyFor, setNewKeyValue,
     fetchAccountSets, fetchKeyPools, switchAccount, switchApiKey, removeApiKey, addApiKeyValue, addApiKey, editCredentialAlias, removeAccount,
     oauthCardProviders, keyCardProviders, activeAccountNeedsReauth,

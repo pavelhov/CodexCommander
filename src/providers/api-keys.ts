@@ -18,12 +18,6 @@ export interface ProviderApiKeyInfo {
   addedAt?: number;
 }
 
-export interface ProviderApiKeyList {
-  revision: number;
-  activeId: string | null;
-  keys: ProviderApiKeyInfo[];
-}
-
 export const PROVIDER_API_KEY_LABEL_MAX_LENGTH = 80;
 const UNSAFE_PROVIDER_API_KEY_LABEL = /[\\/\p{Cc}\p{Cf}\p{Cs}]/u;
 
@@ -46,13 +40,9 @@ export function sanitizeProviderApiKeyLabel(
   ) {
     return { ok: false, error: "label must be at most 80 printable characters without path separators" };
   }
-  const secrets = typeof keyMaterial === "string"
-    ? [keyMaterial]
-    : keyMaterial ?? [];
-  for (const secret of secrets) {
-    if (secret && (label === secret || (secret.length >= 8 && label.includes(secret)))) {
-      return { ok: false, error: "label must not contain API key material" };
-    }
+  const secrets = typeof keyMaterial === "string" ? [keyMaterial] : keyMaterial ?? [];
+  if (secrets.some(secret => secret && label.includes(secret))) {
+    return { ok: false, error: "label must not contain API key material" };
   }
   return { ok: true, label };
 }
@@ -83,18 +73,6 @@ export function isKeyAuthProvider(provider: CodexCommanderProviderConfig): boole
   return true;
 }
 
-/**
- * Whether the management plane may maintain a dormant key pool for this provider row.
- * Canonical xAI is dual-source for media: its chat route may remain OAuth while media binds
- * an explicitly selected API-key slot. Managing that pool must never mutate chat authMode.
- */
-export function supportsManagedProviderApiKeys(
-  name: string,
-  provider: CodexCommanderProviderConfig,
-): boolean {
-  return isKeyAuthProvider(provider) || (name === "xai" && provider.authMode === "oauth");
-}
-
 /** Trim and reject blank / CRLF-bearing secrets. Shared by pool writes and OAuth upsert. */
 export function sanitizeApiKeyValue(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -119,80 +97,41 @@ export function currentProviderApiKeyPool(
     if (!entry || typeof entry !== "object") return undefined;
     if (typeof entry.id !== "string" || !entry.id || entry.id.trim() !== entry.id || ids.has(entry.id)) return undefined;
     if (sanitizeApiKeyValue(entry.key) !== entry.key || keys.has(entry.key)) return undefined;
+    if (entry.label !== undefined && (typeof entry.label !== "string" || !entry.label.trim())) return undefined;
     if (entry.addedAt !== undefined && (!Number.isFinite(entry.addedAt) || entry.addedAt < 0)) return undefined;
     ids.add(entry.id);
     keys.add(entry.key);
   }
-  const poolKeyMaterial = pool.map(entry => entry.key);
+  const keyMaterial = [provider.apiKey, ...pool.map(entry => entry.key)];
   for (const entry of pool) {
-    const label = sanitizeProviderApiKeyLabel(entry.label, poolKeyMaterial);
+    const label = sanitizeProviderApiKeyLabel(entry.label, keyMaterial);
     if (!label.ok || label.label !== entry.label) return undefined;
   }
   return pool.some(entry => entry.key === provider.apiKey) ? pool : undefined;
 }
 
-function providerApiKeyPoolRevision(
-  activeId: string | null,
-  keys: ProviderApiKeyInfo[],
-  keyMaterial: readonly string[] = [],
-): number {
-  const semantic = JSON.stringify({
-    activeId,
-    keys: keys.map((key, index) => ({
-      id: key.id,
-      label: key.label ?? null,
-      // The returned revision changes when a noncanonical/colliding row swaps
-      // secret bytes, while neither the key nor this digest is projected.
-      secretDigest: createHash("sha256")
-        .update("codexcommander-provider-api-key-revision-v1\0")
-        .update(keyMaterial[index] ?? "")
-        .digest("hex"),
-    })),
-  });
-  return Number.parseInt(createHash("sha256").update(semantic).digest("hex").slice(0, 12), 16);
-}
-
-export function listProviderApiKeys(config: CodexCommanderConfig, name: string): ProviderApiKeyList {
+export function listProviderApiKeys(config: CodexCommanderConfig, name: string): { activeId: string | null; keys: ProviderApiKeyInfo[] } {
   const provider = config.providers[name];
-  if (!provider || !supportsManagedProviderApiKeys(name, provider)) {
-    return { revision: providerApiKeyPoolRevision(null, []), activeId: null, keys: [] };
-  }
+  if (!provider || !isKeyAuthProvider(provider)) return { activeId: null, keys: [] };
   const pool = currentProviderApiKeyPool(provider);
-  if (!pool) return { revision: providerApiKeyPoolRevision(null, []), activeId: null, keys: [] };
+  if (!pool) return { activeId: null, keys: [] };
   const activeId = pool.find(entry => entry.key === provider.apiKey)!.id;
-  const keys = pool.map(entry => ({
-    id: entry.id,
-    ...(entry.label ? { label: entry.label } : {}),
-    masked: maskApiKey(entry.key),
-    active: entry.id === activeId,
-    ...(entry.addedAt !== undefined ? { addedAt: entry.addedAt } : {}),
-  }));
   return {
-    revision: providerApiKeyPoolRevision(activeId, keys, pool.map(entry => entry.key)),
     activeId,
-    keys,
+    keys: pool.map(entry => ({
+      id: entry.id,
+      ...(entry.label ? { label: entry.label } : {}),
+      masked: maskApiKey(entry.key),
+      active: entry.id === activeId,
+      ...(entry.addedAt !== undefined ? { addedAt: entry.addedAt } : {}),
+    })),
   };
 }
 
-type ProviderApiKeyMutationOptions = { persist?: boolean };
-
-function persistProviderApiKeyMutation(
-  config: CodexCommanderConfig,
-  options: ProviderApiKeyMutationOptions | undefined,
-): void {
-  if (options?.persist !== false) saveConfigPreservingClaudeCode(config);
-}
-
-/** Add (or upsert) a key and make it ACTIVE. Persists config unless explicitly composed inside a persisted-config mutation. */
-export function addProviderApiKey(
-  config: CodexCommanderConfig,
-  name: string,
-  key: string,
-  label?: string,
-  options?: ProviderApiKeyMutationOptions,
-): { id: string } | { error: string } {
+/** Add (or upsert) a key and make it ACTIVE. Persists config. */
+export function addProviderApiKey(config: CodexCommanderConfig, name: string, key: string, label?: string): { id: string } | { error: string } {
   const provider = config.providers[name];
-  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return { error: "provider does not use API-key auth" };
+  if (!provider || !isKeyAuthProvider(provider)) return { error: "provider does not use API-key auth" };
   if (typeof key !== "string" || !key.trim()) return { error: "key is required" };
   const trimmed = sanitizeApiKeyValue(key);
   if (!trimmed) return { error: "key must not include line breaks" };
@@ -213,59 +152,43 @@ export function addProviderApiKey(
   // Dual-mode OAuth presets (Cursor) keep oauth as default until a key is pasted.
   // Routing only honors the key when authMode is explicitly "key".
   if (provider.adapter === "cursor") provider.authMode = "key";
-  persistProviderApiKeyMutation(config, options);
+  saveConfigPreservingClaudeCode(config);
   return { id };
 }
 
-/** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config unless composed inside a persisted-config mutation. */
-export function setActiveProviderApiKey(
-  config: CodexCommanderConfig,
-  name: string,
-  id: string,
-  options?: ProviderApiKeyMutationOptions,
-): boolean {
+/** Switch the ACTIVE key (mirrors into `provider.apiKey`). Persists config. */
+export function setActiveProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
   const provider = config.providers[name];
-  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
+  if (!provider || !isKeyAuthProvider(provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
   if (!pool) return false;
   const entry = pool.find(e => e.id === id);
   if (!entry) return false;
   provider.apiKey = entry.key;
-  persistProviderApiKeyMutation(config, options);
+  saveConfigPreservingClaudeCode(config);
   return true;
 }
 
 /** Rename a key slot without changing its id, secret, or active routing state. */
-export function setProviderApiKeyLabel(
-  config: CodexCommanderConfig,
-  name: string,
-  id: string,
-  label: string | undefined,
-  options?: ProviderApiKeyMutationOptions,
-): boolean {
+export function setProviderApiKeyLabel(config: CodexCommanderConfig, name: string, id: string, label: string | undefined): boolean {
   const provider = config.providers[name];
-  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
+  if (!provider || !isKeyAuthProvider(provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
   if (!pool) return false;
   const entry = pool.find(e => e.id === id);
   if (!entry) return false;
-  const sanitized = sanitizeProviderApiKeyLabel(label, pool.map(candidate => candidate.key));
-  if (!sanitized.ok) return false;
-  if (sanitized.label) entry.label = sanitized.label;
+  const sanitizedLabel = sanitizeProviderApiKeyLabel(label, pool.map(candidate => candidate.key));
+  if (!sanitizedLabel.ok) return false;
+  if (sanitizedLabel.label) entry.label = sanitizedLabel.label;
   else delete entry.label;
-  persistProviderApiKeyMutation(config, options);
+  saveConfigPreservingClaudeCode(config);
   return true;
 }
 
-/** Remove one key; removing the active one promotes the first remaining. Persists config unless composed inside a persisted-config mutation. */
-export function removeProviderApiKey(
-  config: CodexCommanderConfig,
-  name: string,
-  id: string,
-  options?: ProviderApiKeyMutationOptions,
-): boolean {
+/** Remove one key; removing the active one promotes the first remaining. Persists config. */
+export function removeProviderApiKey(config: CodexCommanderConfig, name: string, id: string): boolean {
   const provider = config.providers[name];
-  if (!provider || !supportsManagedProviderApiKeys(name, provider)) return false;
+  if (!provider || !isKeyAuthProvider(provider)) return false;
   const pool = currentProviderApiKeyPool(provider);
   if (!pool) return false;
   const entry = pool.find(e => e.id === id);
@@ -277,6 +200,6 @@ export function removeProviderApiKey(
     else delete provider.apiKey;
   }
   if (provider.apiKeyPool.length === 0) delete provider.apiKeyPool;
-  persistProviderApiKeyMutation(config, options);
+  saveConfigPreservingClaudeCode(config);
   return true;
 }

@@ -25,7 +25,7 @@ import {
   isNativeAliasCombo,
   listComboIds,
   targetKey,
-} from "../../combos";
+} from "../../combos/types";
 import type { NormalizedComboConfig } from "../../combos/types";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
@@ -33,12 +33,177 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
 import type { RawEntry } from "./parsing";
-import { readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
+import { bundledCatalogCacheState, loadBundledCodexCatalog, readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
-import { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
+import { LEGACY_NATIVE_OPENAI_MODELS } from "./native-models";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
-export { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
+export {
+  LEGACY_NATIVE_OPENAI_MODELS,
+  LEGACY_NATIVE_OPENAI_MODELS as NATIVE_OPENAI_MODELS,
+  LEGACY_SUPPORTED_NATIVE_OPENAI_SLUGS,
+  LEGACY_SUPPORTED_NATIVE_OPENAI_SLUGS as SUPPORTED_NATIVE_OPENAI_SLUGS,
+} from "./native-models";
+
+export type NativeCatalogMode = "bundled-all" | "bundled-listed";
+
+export const DEFAULT_NATIVE_CATALOG_MODE: NativeCatalogMode = "bundled-all";
+
+export interface NativeCatalogSelectionOptions extends BundledCatalogDeps {
+  nativeCatalogMode?: NativeCatalogMode;
+}
+
+function resolveNativeCatalogMode(mode?: NativeCatalogMode): NativeCatalogMode {
+  return mode === "bundled-listed" ? "bundled-listed" : DEFAULT_NATIVE_CATALOG_MODE;
+}
+
+export function isBareBundledNativeCatalogEntry(entry: RawEntry): boolean {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  return slug.length > 0
+    && !slug.includes("/")
+    && !isNativeAliasCatalogEntry(entry)
+    && entry.owned_by !== COMBO_NAMESPACE;
+}
+
+function matchesNativeCatalogVisibility(
+  entry: RawEntry,
+  mode: NativeCatalogMode,
+): boolean {
+  if (mode === "bundled-all") return true;
+  return entry.visibility === "list";
+}
+
+export function bundledNativeCatalogEntries(
+  deps: BundledCatalogDeps = {},
+  mode: NativeCatalogMode = DEFAULT_NATIVE_CATALOG_MODE,
+): RawEntry[] {
+  const catalog = loadBundledCodexCatalog(deps);
+  const resolvedMode = resolveNativeCatalogMode(mode);
+  return (catalog?.models ?? []).filter(entry =>
+    isBareBundledNativeCatalogEntry(entry)
+    && matchesNativeCatalogVisibility(entry, resolvedMode),
+  );
+}
+
+export function bundledNativeCatalogSlugs(
+  deps: BundledCatalogDeps = {},
+  mode: NativeCatalogMode = DEFAULT_NATIVE_CATALOG_MODE,
+): string[] {
+  return unique(bundledNativeCatalogEntries(deps, mode).flatMap(entry => {
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    return slug.length > 0 ? [slug] : [];
+  }));
+}
+
+function onDiskBareNativeRecoverySlugs(
+  deps: BundledCatalogDeps = {},
+  mode: NativeCatalogMode = DEFAULT_NATIVE_CATALOG_MODE,
+): string[] {
+  const supportedOnDisk = new Set([
+    ...bundledNativeCatalogSlugs(deps, mode),
+    ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS,
+  ]);
+  if (supportedOnDisk.size === 0) return [];
+  const cat = readCurrentCatalogOrCache(deps);
+  return unique((cat?.models ?? []).flatMap(entry => {
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    return isBareBundledNativeCatalogEntry(entry)
+      && /^(?:gpt|codex)-/.test(slug)
+      && supportedOnDisk.has(slug)
+      ? [slug]
+      : [];
+  }));
+}
+
+type SupportedNativeSlugMemo = {
+  key: string;
+  slugs: string[];
+  slugSet: Set<string>;
+};
+
+let supportedNativeSlugMemo: SupportedNativeSlugMemo | null = null;
+
+function hasInjectedNativeCatalogDeps(options: NativeCatalogSelectionOptions): boolean {
+  return Boolean(
+    options.commandCandidates
+      || options.execFileSync
+      || options.configDir
+      || options.env
+      || options.platform
+      || options.existsSync
+      || options.readFileSync
+      || options.now
+      || options.discoverAlternatives,
+  );
+}
+
+function supportedNativeSlugMemoKey(mode: NativeCatalogMode): string {
+  return `${mode}\0${bundledCatalogCacheState().epoch}`;
+}
+
+function computeSupportedNativeOpenAiSlugs(
+  options: NativeCatalogSelectionOptions = {},
+): string[] {
+  const mode = resolveNativeCatalogMode(options.nativeCatalogMode);
+  const bundled = bundledNativeCatalogSlugs(options, mode);
+  if (bundled.length > 0) {
+    return unique([...bundled, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS, ...onDiskBareNativeRecoverySlugs(options)]);
+  }
+  const recovered = onDiskBareNativeRecoverySlugs(options);
+  if (recovered.length > 0) {
+    return unique([...recovered, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
+  }
+  return [...LEGACY_NATIVE_OPENAI_MODELS];
+}
+
+function shouldMemoizeSupportedNativeSlugs(slugs: readonly string[]): boolean {
+  if (slugs.length === 0) return false;
+  if (slugs.length !== LEGACY_NATIVE_OPENAI_MODELS.length) return true;
+  const legacy = new Set(LEGACY_NATIVE_OPENAI_MODELS);
+  return slugs.every(slug => legacy.has(slug));
+}
+
+export function supportedNativeOpenAiSlugs(
+  options: NativeCatalogSelectionOptions = {},
+): string[] {
+  if (hasInjectedNativeCatalogDeps(options)) {
+    return computeSupportedNativeOpenAiSlugs(options);
+  }
+  const mode = resolveNativeCatalogMode(options.nativeCatalogMode);
+  const key = supportedNativeSlugMemoKey(mode);
+  if (supportedNativeSlugMemo?.key === key) {
+    return supportedNativeSlugMemo.slugs;
+  }
+  const slugs = computeSupportedNativeOpenAiSlugs(options);
+  if (shouldMemoizeSupportedNativeSlugs(slugs)) {
+    supportedNativeSlugMemo = { key, slugs, slugSet: new Set(slugs) };
+  } else {
+    supportedNativeSlugMemo = null;
+  }
+  return slugs;
+}
+
+export function supportedNativeOpenAiSlugSet(
+  options: NativeCatalogSelectionOptions = {},
+): Set<string> {
+  if (hasInjectedNativeCatalogDeps(options)) {
+    return new Set(computeSupportedNativeOpenAiSlugs(options));
+  }
+  const mode = resolveNativeCatalogMode(options.nativeCatalogMode);
+  const key = supportedNativeSlugMemoKey(mode);
+  if (supportedNativeSlugMemo?.key === key) {
+    return supportedNativeSlugMemo.slugSet;
+  }
+  const slugs = supportedNativeOpenAiSlugs(options);
+  return supportedNativeSlugMemo?.slugSet ?? new Set(slugs);
+}
+
+export function isSupportedNativeOpenAiSlug(
+  slug: string,
+  options: NativeCatalogSelectionOptions = {},
+): boolean {
+  return supportedNativeOpenAiSlugSet(options).has(slug);
+}
 
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   "gpt-5.3-codex-spark",
@@ -46,13 +211,15 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
 ];
 
 export function configuredNativeAliasSlugs(
-  config: Pick<CodexCommanderConfig, "combos">,
+  config: Pick<CodexCommanderConfig, "combos" | "nativeCatalogMode">,
+  deps: BundledCatalogDeps = {},
 ): Set<string> {
   const aliases = new Set<string>();
+  const supported = supportedNativeOpenAiSlugSet({ ...deps, nativeCatalogMode: config.nativeCatalogMode });
   for (const raw of Object.values(config.combos ?? {})) {
     if (!isNativeAliasCombo(raw)) continue;
     const alias = raw.alias!.trim();
-    if (SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) aliases.add(alias);
+    if (supported.has(alias)) aliases.add(alias);
   }
   return aliases;
 }
@@ -63,12 +230,13 @@ export function configuredNativeAliasSlugs(
  * omitting disabled native rows is therefore part of the explicit native-alias opt-in.
  */
 export function desktopAllowlistSuppressedNativeSlugs(
-  config: Pick<CodexCommanderConfig, "combos" | "disabledModels">,
+  config: Pick<CodexCommanderConfig, "combos" | "disabledModels" | "nativeCatalogMode">,
+  deps: BundledCatalogDeps = {},
 ): Set<string> {
-  const suppressed = configuredNativeAliasSlugs(config);
+  const suppressed = configuredNativeAliasSlugs(config, deps);
   if (suppressed.size === 0) return suppressed;
   const disabled = disabledNativeSlugs(config);
-  for (const slug of NATIVE_OPENAI_MODELS) {
+  for (const slug of supportedNativeOpenAiSlugs({ ...deps, nativeCatalogMode: config.nativeCatalogMode })) {
     if (disabled.has(slug)) suppressed.add(slug);
   }
   return suppressed;
@@ -78,10 +246,23 @@ export function isNativeAliasCatalogEntry(entry: RawEntry): boolean {
   return entry.codexcommander_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
 }
 
-export function isUnsupportedOpenAiNativeSlug(slug: string): boolean {
+export function isUnsupportedOpenAiNativeSlug(
+  slug: string,
+  options: NativeCatalogSelectionOptions = {},
+): boolean {
   if (slug.includes("/")) return false;
-  if (SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) return false;
+  if (isSupportedNativeOpenAiSlug(slug, options)) return false;
   return /^(?:gpt|codex)-/.test(slug);
+}
+
+/** Drop the process-local supported-native slug memo after bundled catalog or sync changes. */
+export function invalidateSupportedNativeSlugMemo(): void {
+  supportedNativeSlugMemo = null;
+}
+
+/** Test-only: clear the supported-native slug memo (sync.ts calls this via resetCatalogRuntimeStateForTests). */
+export function resetSupportedNativeSlugMemoForTests(): void {
+  invalidateSupportedNativeSlugMemo();
 }
 
 export const NATIVE_GPT56_CONTEXT_WINDOW = 372_000;
@@ -103,7 +284,7 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
 const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
   ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
     .filter(m => typeof m.slug === "string"
-      && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string))
+      && /^(?:gpt|codex)-/.test(m.slug as string))
     .map(m => [m.slug as string, m]),
 );
 
@@ -165,10 +346,13 @@ export function disabledNativeSlugs(config: Pick<CodexCommanderConfig, "disabled
   return new Set((config.disabledModels ?? []).filter(id => !id.includes("/")));
 }
 
-export function visibleNativeSlugs(config: Pick<CodexCommanderConfig, "disabledModels" | "combos">): string[] {
+export function visibleNativeSlugs(
+  config: Pick<CodexCommanderConfig, "disabledModels" | "combos" | "nativeCatalogMode">,
+  deps: BundledCatalogDeps = {},
+): string[] {
   const disabled = disabledNativeSlugs(config);
-  const shadowed = configuredNativeAliasSlugs(config);
-  return nativeOpenAiSlugs().filter(slug => !disabled.has(slug) && !shadowed.has(slug));
+  const shadowed = configuredNativeAliasSlugs(config, deps);
+  return nativeOpenAiSlugs(deps, config.nativeCatalogMode).filter(slug => !disabled.has(slug) && !shadowed.has(slug));
 }
 
 /** Whether an enabled canonical OpenAI provider can serve exact account-qualified routes. */
@@ -194,15 +378,23 @@ export function shouldIncludeNativeOpenAi(config: Pick<CodexCommanderConfig, "pr
 }
 
 /** Native slugs exposed to Claude Desktop show/export/apply (opt-out via claudeCode.desktopNativeModels). */
-export function desktopVisibleNativeSlugs(config: Pick<CodexCommanderConfig, "claudeCode" | "disabledModels" | "combos">): string[] {
+export function desktopVisibleNativeSlugs(
+  config: Pick<CodexCommanderConfig, "claudeCode" | "disabledModels" | "combos" | "nativeCatalogMode">,
+  deps: BundledCatalogDeps = {},
+): string[] {
   if (config.claudeCode?.desktopNativeModels === false) return [];
-  return visibleNativeSlugs(config);
+  return visibleNativeSlugs(config, deps);
 }
 
-export function nativeModelRows(config: Pick<CodexCommanderConfig, "disabledModels" | "combos">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
+export function nativeModelRows(
+  config: Pick<CodexCommanderConfig, "disabledModels" | "combos" | "nativeCatalogMode">,
+  deps: BundledCatalogDeps = {},
+): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
   const disabled = disabledNativeSlugs(config);
-  const shadowed = configuredNativeAliasSlugs(config);
-  return NATIVE_OPENAI_MODELS.filter(slug => !shadowed.has(slug)).map(slug => {
+  const shadowed = configuredNativeAliasSlugs(config, deps);
+  return supportedNativeOpenAiSlugs({ ...deps, nativeCatalogMode: config.nativeCatalogMode })
+    .filter(slug => !shadowed.has(slug))
+    .map(slug => {
     const contextWindow = nativeOpenAiContextWindow(slug);
     return { slug, disabled: disabled.has(slug), ...(contextWindow !== undefined ? { contextWindow } : {}) };
   });
@@ -212,7 +404,10 @@ export function applyNativeVisibility(
   entries: RawEntry[],
   disabledModels: ReadonlySet<string>,
   hideBareNative = false,
+  options: NativeCatalogSelectionOptions = {},
+  supportedNativeSlugs?: ReadonlySet<string>,
 ): RawEntry[] {
+  const supported = supportedNativeSlugs ?? supportedNativeOpenAiSlugSet(options);
   for (const entry of entries) {
     if (isNativeAliasCatalogEntry(entry)) continue;
     const slug = typeof entry.slug === "string" ? entry.slug : "";
@@ -220,7 +415,7 @@ export function applyNativeVisibility(
     const nativeSlug = accountBoundSlug ?? slug;
     if (!nativeSlug
       || (!accountBoundSlug && slug.includes("/"))
-      || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug)) continue;
+      || !supported.has(nativeSlug)) continue;
     const disabled = disabledModels.has(nativeSlug)
       || (accountBoundSlug !== undefined && disabledModels.has(slug));
     entry.visibility = disabled || (!accountBoundSlug && hideBareNative)
@@ -233,7 +428,7 @@ export function applyNativeVisibility(
 export const UPSTREAM_NATIVE_ENTRIES: Map<string, RawEntry> = new Map(
   ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
     .filter(m => typeof m.slug === "string"
-      && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string)
+      && /^(?:gpt|codex)-/.test(m.slug as string)
       && (m.slug as string).startsWith("gpt-5.6-"))
     .map(m => [m.slug as string, m]),
 );
@@ -252,26 +447,31 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
     && entry.display_name === entry.slug;
 }
 
-export function nativeOpenAiSlugs(deps: BundledCatalogDeps = {}): string[] {
-  const live = listCatalogNativeSlugs(deps);
-  return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+export function nativeOpenAiSlugs(
+  deps: BundledCatalogDeps = {},
+  mode?: NativeCatalogMode,
+): string[] {
+  return supportedNativeOpenAiSlugs({ ...deps, nativeCatalogMode: mode });
 }
 
-export function listCatalogNativeSlugs(deps: BundledCatalogDeps = {}): string[] {
-  const cat = readCurrentCatalogOrCache(deps);
-  const models = cat?.models ?? [];
-  const live = models.flatMap(entry => {
-    const slug = typeof entry.slug === "string" ? entry.slug : "";
-    return !slug.includes("/") && SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug) ? [slug] : [];
-  });
+export function listCatalogNativeSlugs(
+  deps: BundledCatalogDeps = {},
+  mode?: NativeCatalogMode,
+): string[] {
+  const resolvedMode = resolveNativeCatalogMode(mode);
+  const bundled = bundledNativeCatalogSlugs(deps, resolvedMode);
+  const recovered = onDiskBareNativeRecoverySlugs(deps);
+  const models = readCurrentCatalogOrCache(deps)?.models ?? [];
   const accountBound = models.flatMap(entry => {
     const slug = trustedAccountBoundNativeCatalogSlug(entry);
-    return slug !== undefined && SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug) ? [slug] : [];
+    return slug !== undefined && isSupportedNativeOpenAiSlug(slug, { ...deps, nativeCatalogMode: resolvedMode })
+      ? [slug]
+      : [];
   });
   // Deliberately ignore `visibility`: it is a rendered projection of disabledModels and account
   // selectors, so treating it as fresh availability would shrink the supported set between syncs.
   // visibleNativeSlugs applies the current disabledModels source of truth for public consumers.
   // Ensure documented additions (e.g. gpt-5.3-codex-spark) appear even when the bundled catalog
   // predates the slug — mirrors nativeOpenAiSlugs() which already merges them for /v1/models.
-  return unique([...live, ...accountBound, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
+  return unique([...bundled, ...recovered, ...accountBound, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
 }

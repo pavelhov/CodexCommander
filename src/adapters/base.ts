@@ -18,13 +18,6 @@ export interface ProviderAdapter {
   name: string;
 
   /**
-   * Pure provider-wire collision key for replayed tool-call ids. Adapters that transform ids on
-   * serialization must expose the same transformation here so proxy-owned paid auxiliary calls
-   * can reject a colliding id before dispatch.
-   */
-  toolCallIdCollisionKey?(id: string): string;
-
-  /**
    * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and
    * return fully redacted output: callers may pass untrusted provider headers and payload text.
    */

@@ -19,7 +19,7 @@ let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let root: Root | null = null;
 let switchKey: (() => Promise<void>) | null = null;
-let snapshot: { keys: ApiKeyEntry[]; revision: number | undefined } | null = null;
+let snapshot: ApiKeyEntry[] | null = null;
 let notifications: Array<{ message: string; ok: boolean | undefined }> = [];
 
 function HookHarness() {
@@ -41,7 +41,7 @@ function HookHarness() {
     codexActiveNeedsReauth: false,
   });
   useEffect(() => {
-    snapshot = { keys: pools.keyPools.xai ?? [], revision: pools.keyPoolRevisions.xai };
+    snapshot = pools.keyPools.xai ?? [];
     switchKey = () => pools.switchApiKey("xai", staleKeys[1]!);
   });
   return null;
@@ -74,7 +74,10 @@ afterEach(async () => {
   }
 });
 
-async function mountStalePool(refresh: () => Response): Promise<{ mutation: Record<string, unknown> | null; getCalls: () => number }> {
+async function mountKeyPool(
+  mutate: () => Response,
+  refresh: () => Response,
+): Promise<{ mutation: Record<string, unknown> | null; getCalls: () => number }> {
   let mutation: Record<string, unknown> | null = null;
   let keyGets = 0;
   Object.defineProperty(globalThis, "fetch", {
@@ -84,12 +87,12 @@ async function mountStalePool(refresh: () => Response): Promise<{ mutation: Reco
       if (url.pathname === "/api/providers/keys" && (!init?.method || init.method === "GET")) {
         keyGets += 1;
         return keyGets === 1
-          ? Response.json({ revision: 7, keys: staleKeys })
+          ? Response.json({ activeId: "stale-active", keys: staleKeys })
           : refresh();
       }
       if (url.pathname === "/api/providers/keys/active" && init?.method === "PUT") {
         mutation = JSON.parse(String(init.body)) as Record<string, unknown>;
-        return Response.json({ error: "stale xAI key pool revision" }, { status: 409 });
+        return mutate();
       }
       return Response.json({});
     },
@@ -101,35 +104,40 @@ async function mountStalePool(refresh: () => Response): Promise<{ mutation: Reco
     await Promise.resolve();
     await Promise.resolve();
   });
-  expect(snapshot).toEqual({ keys: staleKeys, revision: 7 });
+  expect(snapshot).toEqual(staleKeys);
   return { get mutation() { return mutation; }, getCalls: () => keyGets };
 }
 
-test("xAI stale key mutation refreshes canonical keys and revision before reporting the conflict", async () => {
-  const observed = await mountStalePool(() => Response.json({ revision: 8, keys: freshKeys }));
+test("xAI key switching uses the ordinary provider-key contract and refreshes the pool", async () => {
+  const observed = await mountKeyPool(
+    () => Response.json({ ok: true, name: "xai", activeId: "stale-inactive" }),
+    () => Response.json({ activeId: "fresh-active", keys: freshKeys }),
+  );
 
   await act(async () => {
     await switchKey?.();
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
   });
 
-  expect(observed.mutation).toEqual({ name: "xai", id: "stale-inactive", expectedRevision: 7 });
+  expect(observed.mutation).toEqual({ name: "xai", id: "stale-inactive" });
   expect(observed.getCalls()).toBe(2);
-  expect(snapshot).toEqual({ keys: freshKeys, revision: 8 });
-  expect(notifications).toEqual([{ message: "stale xAI key pool revision", ok: false }]);
+  expect(snapshot).toEqual(freshKeys);
+  expect(notifications).toEqual([{ message: "prov.keySwitched", ok: true }]);
 });
 
-test("a failed xAI stale-state refresh keeps the last known-good keys and revision", async () => {
-  const observed = await mountStalePool(() => Response.json({ error: "unavailable" }, { status: 503 }));
+test("a provider-key conflict refreshes canonical keys before reporting the error", async () => {
+  const observed = await mountKeyPool(
+    () => Response.json({ error: "provider key state changed" }, { status: 409 }),
+    () => Response.json({ activeId: "fresh-active", keys: freshKeys }),
+  );
 
   await act(async () => {
     await switchKey?.();
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
   });
 
+  expect(observed.mutation).toEqual({ name: "xai", id: "stale-inactive" });
   expect(observed.getCalls()).toBe(2);
-  expect(snapshot).toEqual({ keys: staleKeys, revision: 7 });
-  expect(notifications).toEqual([{ message: "stale xAI key pool revision", ok: false }]);
+  expect(snapshot).toEqual(freshKeys);
+  expect(notifications).toEqual([{ message: "provider key state changed", ok: false }]);
 });

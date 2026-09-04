@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { cmdAccount } from "../src/cli/account";
 import { apiError } from "../src/cli/account-api";
 import { nativeMainCodexLoginInvocation } from "../src/cli/account-main";
+import { createBundledCatalogExec } from "./helpers/codex-runtime-fixture";
 
 const originalLog = console.log;
 const originalError = console.error;
@@ -58,6 +59,12 @@ describe("ccx account main", () => {
   test("official login honors an explicit Windows runtime outside PATH through ComSpec", () => {
     const codexShim = "C:\\Portable Codex\\codex.cmd";
     const comSpec = "C:\\Windows\\System32\\cmd.exe";
+    const execFileSync = createBundledCatalogExec({
+      versionByPath: {
+        [codexShim]: "codex-cli 9.9.9",
+        [comSpec]: "codex-cli 9.9.9",
+      },
+    });
     const env = {
       CODEX_CLI_PATH: codexShim,
       PATH: "",
@@ -68,11 +75,7 @@ describe("ccx account main", () => {
       env,
       exists: path => path.toLowerCase() === codexShim.toLowerCase(),
       existsSync: path => path.toLowerCase() === codexShim.toLowerCase(),
-      execFileSync: (file, args) => {
-        expect(file).toBe(comSpec);
-        expect(args.at(-1)).toContain("codex.cmd");
-        return "codex-cli 9.9.9";
-      },
+      execFileSync,
       configDir: tempConfigDir("ccx-native-profile-explicit-runtime-"),
     });
 
@@ -86,6 +89,7 @@ describe("ccx account main", () => {
   test("official login honors a persisted runtime outside PATH", () => {
     const runtime = "C:\\Portable Codex\\codex.exe";
     const configDir = tempConfigDir("ccx-native-profile-persisted-runtime-");
+    const execFileSync = createBundledCatalogExec({ versionByPath: { [runtime]: "codex-cli 8.8.8" } });
     writeFileSync(join(configDir, "codex-runtime.json"), `${JSON.stringify({
       version: 1,
       command: runtime,
@@ -98,11 +102,7 @@ describe("ccx account main", () => {
       env: { PATH: "", PATHEXT: ".EXE" },
       exists: path => path.toLowerCase() === runtime.toLowerCase(),
       existsSync: path => path.toLowerCase() === runtime.toLowerCase(),
-      execFileSync: (file, args) => {
-        expect(file).toBe(runtime);
-        expect(args).toEqual(["--version"]);
-        return "codex-cli 8.8.8";
-      },
+      execFileSync,
       configDir,
     });
 

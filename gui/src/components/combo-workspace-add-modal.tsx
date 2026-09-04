@@ -20,6 +20,7 @@ export function AddComboModal({
   providerMap,
   providers,
   models,
+  supportedNativeSlugs,
   onClose,
   onSubmit,
 }: {
@@ -28,6 +29,7 @@ export function AddComboModal({
   providerMap: Readonly<Record<string, { disabled?: boolean }>>;
   providers: ProviderOption[];
   models: ModelOption[];
+  supportedNativeSlugs: ReadonlySet<string>;
   onClose: () => void;
   onSubmit: (item: ComboItem) => Promise<{ ok: boolean; error?: string }>;
 }) {
@@ -68,6 +70,7 @@ export function AddComboModal({
       existingAliases,
       isCreate: true,
       providers: providerMap,
+      supportedNativeSlugs,
     });
     if (code) {
       setError(t(`cws.err.${code}`));

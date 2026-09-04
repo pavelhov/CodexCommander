@@ -3,25 +3,11 @@ import { managementFetch as fetch } from "./helpers/management-auth";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../src/config";
+import { saveConfig } from "../src/config";
+import { addProviderApiKey, listProviderApiKeys, setProviderApiKeyLabel } from "../src/providers/api-keys";
 import { startServer } from "../src/server";
-import { handleManagementAPI } from "../src/server/management-api";
-import {
-  addProviderApiKey,
-  listProviderApiKeys,
-  sanitizeProviderApiKeyLabel,
-  setProviderApiKeyLabel,
-} from "../src/providers/api-keys";
-import type { MediaManagementRuntime } from "../src/server/management/media-routes";
-import {
-  createMediaActionAttestationProof,
-  type MediaActionAttestationInput,
-  verifyMediaActionAttestationProof,
-} from "../src/lib/media-action-attestation";
-import { createLocalAttestationSecret } from "../src/lib/local-management-attestation";
 import type { CodexCommanderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
-import { ManagementRequest } from "./helpers/management-auth";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -53,7 +39,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setPersistedConfigMutationBeforeCommitForTests(null);
   if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -62,415 +47,29 @@ afterEach(() => {
 });
 
 describe("provider API key pool", () => {
-  test("key revisions bind secret replacements without projecting key bytes", () => {
-    const cfg = baseConfig();
-    cfg.providers.xai = {
-      adapter: "openai-chat",
-      baseUrl: "https://api.x.ai/v1",
-      authMode: "oauth",
-      apiKey: "xai-secret-first-000111222333",
-      apiKeyPool: [{ id: "stable-row", key: "xai-secret-first-000111222333", label: "Media key" }],
-    };
-    const first = listProviderApiKeys(cfg, "xai");
-    cfg.providers.xai.apiKey = "xai-secret-second-444555666777";
-    cfg.providers.xai.apiKeyPool = [{ id: "stable-row", key: "xai-secret-second-444555666777", label: "Media key" }];
-    const second = listProviderApiKeys(cfg, "xai");
-
-    expect(second.revision).not.toBe(first.revision);
-    expect(JSON.stringify(first)).not.toContain("xai-secret-first");
-    expect(JSON.stringify(second)).not.toContain("xai-secret-second");
-  });
-
-  test("key labels reject secrets, controls, paths, and unbounded display text", () => {
-    const key = "xai-secret-first-000111222333";
-    expect(sanitizeProviderApiKeyLabel("Media primary", key)).toEqual({ ok: true, label: "Media primary" });
-    expect(sanitizeProviderApiKeyLabel(`copied ${key}`, key)).toMatchObject({ ok: false });
-    expect(sanitizeProviderApiKeyLabel("line\nbreak", key)).toMatchObject({ ok: false });
-    expect(sanitizeProviderApiKeyLabel("/private/credentials/key", key)).toMatchObject({ ok: false });
-    expect(sanitizeProviderApiKeyLabel("x".repeat(81), key)).toMatchObject({ ok: false });
-
-    const cfg = baseConfig();
-    cfg.providers.xai = {
-      adapter: "openai-chat",
-      baseUrl: "https://api.x.ai/v1",
-      authMode: "oauth",
-      apiKey: key,
-      apiKeyPool: [{ id: "xai-first", key, label: "/private/key/path" }],
-    };
-    expect(listProviderApiKeys(cfg, "xai").keys).toEqual([]);
-
-    const writable = baseConfig();
-    writable.providers.xai = {
-      adapter: "openai-chat",
-      baseUrl: "https://api.x.ai/v1",
-      authMode: "oauth",
-    };
-    const before = structuredClone(writable.providers.xai);
-    expect(addProviderApiKey(writable, "xai", key, `copied ${key}`, { persist: false }))
-      .toMatchObject({ error: "label must not contain API key material" });
-    expect(writable.providers.xai).toEqual(before);
-  });
-
-  test("xAI labels cannot expose another credential from the same pool", () => {
-    const first = "xai-secret-first-000111222333";
-    const second = "xai-secret-second-444555666777";
-    const cfg = baseConfig();
-    cfg.providers.xai = {
-      adapter: "openai-chat",
-      baseUrl: "https://api.x.ai/v1",
-      authMode: "oauth",
-      apiKey: first,
-      apiKeyPool: [{ id: "xai-first", key: first, label: "Primary media" }],
-    };
-
-    const beforeAdd = structuredClone(cfg.providers.xai);
-    expect(addProviderApiKey(cfg, "xai", second, `copied ${first}`, { persist: false }))
-      .toMatchObject({ error: "label must not contain API key material" });
-    expect(cfg.providers.xai).toEqual(beforeAdd);
-
-    cfg.providers.xai.apiKeyPool!.push({ id: "xai-second", key: second, label: "Secondary media" });
-    expect(setProviderApiKeyLabel(cfg, "xai", "xai-second", first, { persist: false })).toBe(false);
-    expect(cfg.providers.xai.apiKeyPool![1]!.label).toBe("Secondary media");
-
-    cfg.providers.xai.apiKeyPool![1]!.label = `legacy ${first}`;
-    const projected = listProviderApiKeys(cfg, "xai");
-    expect(projected.keys).toEqual([]);
-    expect(JSON.stringify(projected)).not.toContain(first);
-    expect(JSON.stringify(projected)).not.toContain(second);
-  });
-
-  test("every managed provider pool rejects unsafe and cross-credential labels", () => {
+  test("rejects labels containing new or pooled API-key material without projecting secrets", () => {
     const first = "key-first-000111222333";
     const second = "key-second-444555666777";
-    const cfg = baseConfig();
-    cfg.providers["opencode-go"]!.apiKey = first;
-    cfg.providers["opencode-go"]!.apiKeyPool = [
-      { id: "first-key", key: first, label: "Primary" },
-    ];
+    const config = baseConfig();
+    const provider = config.providers["opencode-go"]!;
 
-    const before = structuredClone(cfg.providers["opencode-go"]);
-    expect(addProviderApiKey(cfg, "opencode-go", second, `copied ${first}`, { persist: false }))
-      .toMatchObject({ error: "label must not contain API key material" });
-    expect(cfg.providers["opencode-go"]).toEqual(before);
-    expect(addProviderApiKey(cfg, "opencode-go", second, "/private/key", { persist: false }))
-      .toMatchObject({ error: "label must be at most 80 printable characters without path separators" });
-    expect(addProviderApiKey(cfg, "opencode-go", second, "Secondary", { persist: false }))
+    expect(addProviderApiKey(config, "opencode-go", second, `copied ${second}`))
+      .toEqual({ error: "label must not contain API key material" });
+    expect(provider.apiKeyPool).toEqual([{ id: "first-key", key: first }]);
+
+    expect(addProviderApiKey(config, "opencode-go", second, "Secondary"))
       .toEqual({ id: expect.any(String) });
+    const secondId = provider.apiKeyPool!.find(entry => entry.key === second)!.id;
+    expect(addProviderApiKey(config, "opencode-go", second, `copied ${first}`))
+      .toEqual({ error: "label must not contain API key material" });
+    expect(setProviderApiKeyLabel(config, "opencode-go", secondId, `copied ${first}`)).toBe(false);
+    expect(provider.apiKeyPool!.find(entry => entry.id === secondId)?.label).toBe("Secondary");
 
-    const secondId = cfg.providers["opencode-go"]!.apiKeyPool!.find(entry => entry.key === second)!.id;
-    expect(setProviderApiKeyLabel(cfg, "opencode-go", secondId, first, { persist: false })).toBe(false);
-    cfg.providers["opencode-go"]!.apiKeyPool!.find(entry => entry.id === secondId)!.label = `legacy ${first}`;
-    const projected = listProviderApiKeys(cfg, "opencode-go");
+    provider.apiKeyPool!.find(entry => entry.id === secondId)!.label = `legacy ${first}`;
+    const projected = listProviderApiKeys(config, "opencode-go");
     expect(projected.keys).toEqual([]);
     expect(JSON.stringify(projected)).not.toContain(first);
     expect(JSON.stringify(projected)).not.toContain(second);
-  });
-
-  test("raw admin cannot pre-position zero-key xAI chat billing before a confirmed first media-key add", async () => {
-    const cfg = baseConfig();
-    cfg.defaultProvider = "xai";
-    cfg.providers = {
-      xai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.x.ai/v1",
-        authMode: "oauth",
-      },
-    };
-    saveConfig(cfg);
-    const direct = async (
-      path: string,
-      init: RequestInit = {},
-      principal: "admin-token" | "confirmed-gui-session" = "admin-token",
-    ) => {
-      const req = new ManagementRequest(`http://127.0.0.1:10100${path}`, init);
-      return (await handleManagementAPI(req, new URL(req.url), cfg, {}, principal))!;
-    };
-
-    const staged = await direct("/api/providers?name=xai", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ authMode: "key" }),
-    });
-    expect(staged.status).toBe(403);
-    expect(await staged.json()).toMatchObject({ code: "xai_media_key_attestation_required" });
-    expect(cfg.providers.xai!.authMode).toBe("oauth");
-    expect(loadDiskConfig().providers.xai!.authMode).toBe("oauth");
-
-    const revision = listProviderApiKeys(cfg, "xai").revision;
-    const added = await direct("/api/providers/keys", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "xai",
-        key: "xai-first-media-key-000111222333",
-        expectedRevision: revision,
-      }),
-    }, "confirmed-gui-session");
-    expect(added.status).toBe(201);
-    expect(cfg.providers.xai).toMatchObject({
-      authMode: "oauth",
-      apiKey: "xai-first-media-key-000111222333",
-    });
-    expect(loadDiskConfig().providers.xai).toMatchObject({
-      authMode: "oauth",
-      apiKey: "xai-first-media-key-000111222333",
-    });
-  });
-
-  test("raw admin cannot mutate the canonical xAI media key pool", async () => {
-    const cfg = baseConfig();
-    cfg.defaultProvider = "xai";
-    cfg.providers = {
-      xai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.x.ai/v1",
-        authMode: "oauth",
-        apiKey: "xai-media-key-000111222333",
-        apiKeyPool: [
-          { id: "xai-first", key: "xai-media-key-000111222333" },
-          { id: "xai-second", key: "xai-media-key-444555666777" },
-        ],
-      },
-    };
-    saveConfig(cfg);
-    const server = startServer(0);
-    try {
-      const before = await fetch(new URL("/api/providers/keys?name=xai", server.url)).then(response => response.json()) as {
-        revision: number;
-      };
-      const add = await fetch(new URL("/api/providers/keys", server.url), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "xai", key: "xai-media-key-new", expectedRevision: before.revision }),
-      });
-      expect(add.status).toBe(403);
-      const select = await fetch(new URL("/api/providers/keys/active", server.url), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "xai", id: "xai-second", expectedRevision: before.revision }),
-      });
-      expect(select.status).toBe(403);
-      const alias = await fetch(new URL("/api/providers/keys/alias", server.url), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "xai", id: "xai-first", alias: "raw admin", expectedRevision: before.revision }),
-      });
-      expect(alias.status).toBe(403);
-      const remove = await fetch(new URL("/api/providers/keys?name=xai&id=xai-first", server.url), {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "xai", id: "xai-first", expectedRevision: before.revision }),
-      });
-      expect(remove.status).toBe(403);
-      expect(loadDiskConfig().providers.xai).toMatchObject({
-        authMode: "oauth",
-        apiKey: "xai-media-key-000111222333",
-        apiKeyPool: [{ id: "xai-first" }, { id: "xai-second" }],
-      });
-    } finally {
-      await server.stop(true);
-    }
-  });
-
-  test("confirmed GUI and exact single-use CLI proof mutate xAI without changing chat auth", async () => {
-    const cfg = baseConfig();
-    cfg.defaultProvider = "xai";
-    cfg.providers = {
-      xai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.x.ai/v1",
-        authMode: "oauth",
-        apiKey: "xai-media-key-first",
-        apiKeyPool: [{ id: "xai-first", key: "xai-media-key-first" }],
-      },
-    };
-    saveConfig(cfg);
-    const secret = createLocalAttestationSecret();
-    const pid = 4_321;
-    const port = 10_100;
-    const now = 2_000_000_000_000;
-    const consumed = new Set<string>();
-    const runtime: MediaManagementRuntime = {
-      state: "ready",
-      authorizeInteractiveCliAction: (input, proof) => {
-        if (consumed.has(input.nonce) || !verifyMediaActionAttestationProof(secret, input, pid, port, proof, now)) return false;
-        consumed.add(input.nonce);
-        return true;
-      },
-    };
-    const direct = async (
-      path: string,
-      init: RequestInit = {},
-      principal: "admin-token" | "confirmed-gui-session" = "admin-token",
-    ) => {
-      const req = new ManagementRequest(`http://127.0.0.1:10100${path}`, init);
-      return (await handleManagementAPI(req, new URL(req.url), cfg, { mediaManagement: runtime }, principal))!;
-    };
-
-    let listed = await (await direct("/api/providers/keys?name=xai")).json() as { revision: number; activeId: string };
-    const added = await direct("/api/providers/keys", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "xai", key: "xai-media-key-second", expectedRevision: listed.revision }),
-    }, "confirmed-gui-session");
-    expect(added.status).toBe(201);
-    expect(cfg.providers.xai!.authMode).toBe("oauth");
-
-    listed = await (await direct("/api/providers/keys?name=xai")).json() as typeof listed;
-    const aliasEnvelope = {
-      action: "xai_key_alias",
-      target: "xai_key",
-      name: "xai",
-      id: "xai-first",
-      alias: "Media primary",
-      expectedRevision: listed.revision,
-      confirmation: true,
-      caller: "interactive_cli",
-      nonce: "a".repeat(43),
-      issuedAt: now,
-    } satisfies MediaActionAttestationInput;
-    const sendAlias = (body: MediaActionAttestationInput, proof: string | null) => direct("/api/providers/keys/alias", {
-      method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        ...(proof ? { "x-codexcommander-media-action-proof": proof } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-    const aliasProof = createMediaActionAttestationProof(secret, aliasEnvelope, pid, port);
-    expect((await sendAlias({ ...aliasEnvelope, alias: "Changed after confirmation" }, aliasProof)).status).toBe(403);
-    expect((await sendAlias(aliasEnvelope, aliasProof)).status).toBe(200);
-    expect(cfg.providers.xai!.apiKeyPool?.find(key => key.id === "xai-first")?.label).toBe("Media primary");
-
-    listed = await (await direct("/api/providers/keys?name=xai")).json() as typeof listed;
-    const envelope = {
-      action: "xai_key_select",
-      target: "xai_key",
-      name: "xai",
-      id: "xai-first",
-      expectedRevision: listed.revision,
-      confirmation: true,
-      caller: "interactive_cli",
-      nonce: "x".repeat(43),
-      issuedAt: now,
-    } satisfies MediaActionAttestationInput;
-    const send = (body: MediaActionAttestationInput, proof: string | null) => direct("/api/providers/keys/active", {
-      method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        ...(proof ? { "x-codexcommander-media-action-proof": proof } : {}),
-      },
-      body: JSON.stringify(body),
-    });
-    const changed = { ...envelope, id: "not-the-confirmed-key" };
-    expect((await send(envelope, createMediaActionAttestationProof(secret, changed, pid, port))).status).toBe(403);
-    const proof = createMediaActionAttestationProof(secret, envelope, pid, port);
-    expect((await send(envelope, proof)).status).toBe(200);
-    expect(cfg.providers.xai!.apiKey).toBe("xai-media-key-first");
-    expect((await send(envelope, proof)).status).toBe(403);
-    expect(cfg.providers.xai!.authMode).toBe("oauth");
-  });
-
-  test("attested xAI key mutation rejects a stale persisted revision without erasing a competing writer", async () => {
-    const cfg = baseConfig();
-    cfg.defaultProvider = "xai";
-    cfg.providers = {
-      xai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.x.ai/v1",
-        authMode: "oauth",
-        apiKey: "xai-media-key-first",
-        apiKeyPool: [{ id: "xai-first", key: "xai-media-key-first" }],
-      },
-    };
-    saveConfig(cfg);
-    const revision = listDiskXaiRevision();
-    setPersistedConfigMutationBeforeCommitForTests(() => {
-      const competing = loadConfig();
-      const key = "xai-media-key-competing";
-      competing.providers.xai!.apiKey = key;
-      competing.providers.xai!.apiKeyPool = [{ id: "xai-competing", key }];
-      saveConfig(competing);
-    });
-
-    const req = new ManagementRequest("http://127.0.0.1:10100/api/providers/keys", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "xai",
-        key: "xai-media-key-proposed",
-        expectedRevision: revision,
-      }),
-    });
-    const response = (await handleManagementAPI(
-      req,
-      new URL(req.url),
-      cfg,
-      {},
-      "confirmed-gui-session",
-    ))!;
-    expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: "stale xAI key pool revision" });
-
-    const persisted = loadDiskConfig();
-    expect(persisted.providers.xai).toMatchObject({
-      authMode: "oauth",
-      apiKey: "xai-media-key-competing",
-      apiKeyPool: [{ id: "xai-competing", key: "xai-media-key-competing" }],
-    });
-    expect(JSON.stringify(persisted)).not.toContain("xai-media-key-proposed");
-    expect(listProviderApiKeys(cfg, "xai").revision).toBe(listProviderApiKeys(persisted, "xai").revision);
-  });
-
-  test("xAI alias CAS cannot restore a key removed by a competing persisted writer", async () => {
-    const first = "xai-media-key-first";
-    const second = "xai-media-key-second";
-    const cfg = baseConfig();
-    cfg.defaultProvider = "xai";
-    cfg.providers = {
-      xai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.x.ai/v1",
-        authMode: "oauth",
-        apiKey: first,
-        apiKeyPool: [
-          { id: "xai-first", key: first },
-          { id: "xai-second", key: second },
-        ],
-      },
-    };
-    saveConfig(cfg);
-    const revision = listProviderApiKeys(cfg, "xai").revision;
-    setPersistedConfigMutationBeforeCommitForTests(() => {
-      const competing = loadConfig();
-      competing.providers.xai!.apiKey = second;
-      competing.providers.xai!.apiKeyPool = [{ id: "xai-second", key: second }];
-      saveConfig(competing);
-    });
-
-    const req = new ManagementRequest("http://127.0.0.1:10100/api/providers/keys/alias", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        name: "xai",
-        id: "xai-first",
-        alias: "must not restore",
-        expectedRevision: revision,
-      }),
-    });
-    const response = (await handleManagementAPI(
-      req,
-      new URL(req.url),
-      cfg,
-      {},
-      "confirmed-gui-session",
-    ))!;
-    expect(response.status).toBe(409);
-    expect(loadDiskConfig().providers.xai).toMatchObject({
-      apiKey: second,
-      apiKeyPool: [{ id: "xai-second", key: second }],
-    });
-    expect(cfg.providers.xai!.apiKeyPool?.some(key => key.id === "xai-first")).toBe(false);
   });
 
   test("GET does not salvage a legacy bare apiKey", async () => {
@@ -555,9 +154,4 @@ describe("provider API key pool", () => {
 
 function loadDiskConfig(): CodexCommanderConfig {
   return JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8")) as CodexCommanderConfig;
-}
-
-function listDiskXaiRevision(): number {
-  const { revision } = listProviderApiKeys(loadDiskConfig(), "xai");
-  return revision;
 }

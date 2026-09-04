@@ -21,7 +21,6 @@ import {
   terminateAllBackgroundShells,
 } from "../adapters/cursor/native-exec-shell";
 import type { CodexAccountSelectionAdmission } from "../codex/auth-context";
-import type { ServerMediaRuntime } from "../images/media-runtime";
 import { releaseNativeMainStartupLifecycle } from "../codex/native-profile-startup";
 import {
   AgentActivityRegistry,
@@ -59,39 +58,9 @@ let recyclingForExit = false;
 let _serverRef: ReturnType<typeof Bun.serve> | undefined;
 let serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
 let serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
-let serverMediaRuntimes = new WeakMap<ReturnType<typeof Bun.serve>, ServerMediaRuntime>();
-let serverMediaShutdownFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
 let releaseServerStartupLifecycleImpl: typeof releaseNativeMainStartupLifecycle = releaseNativeMainStartupLifecycle;
 
 export function setServerRef(server: ReturnType<typeof Bun.serve> | undefined): void { _serverRef = server; }
-
-export function bindServerMediaRuntime(
-  server: ReturnType<typeof Bun.serve>,
-  runtime: ServerMediaRuntime,
-): void {
-  serverMediaRuntimes.set(server, runtime);
-}
-
-export function beginServerMediaRuntimeShutdown(
-  server: ReturnType<typeof Bun.serve> | undefined = _serverRef,
-): void {
-  if (!server) return;
-  serverMediaRuntimes.get(server)?.beginShutdown();
-}
-
-export function stopServerMediaRuntime(
-  server: ReturnType<typeof Bun.serve> | undefined = _serverRef,
-): Promise<void> {
-  if (!server) return Promise.resolve();
-  const existing = serverMediaShutdownFlights.get(server);
-  if (existing) return existing;
-  const runtime = serverMediaRuntimes.get(server);
-  if (!runtime) return Promise.resolve();
-  runtime.beginShutdown();
-  const flight = runtime.shutdown().finally(() => serverMediaRuntimes.delete(server));
-  serverMediaShutdownFlights.set(server, flight);
-  return flight;
-}
 function temporaryDrainCount(): number {
   return temporaryDrainOwners.size + nativeMainDrainOwners.size;
 }
@@ -178,8 +147,6 @@ export function resetLifecycleDrainStateForTests(): void {
   shutdownDraining = false;
   serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
-  serverMediaRuntimes = new WeakMap<ReturnType<typeof Bun.serve>, ServerMediaRuntime>();
-  serverMediaShutdownFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   releaseServerStartupLifecycleImpl = releaseNativeMainStartupLifecycle;
 }
 export function tryAdmitTurn(activity?: AgentActivityStart): ActiveTurnLease | null {
@@ -430,9 +397,6 @@ export async function drainAndShutdown(
   // ordinary in-flight turns. A stuck scoped owner must not pin shutdown forever.
   const deadline = Date.now() + Math.max(0, timeoutMs);
   beginShutdownDrain();
-  // Video work is server-owned, not turn-owned. Fence submissions immediately,
-  // detach waiters, and abort only safe GET/download runners.
-  beginServerMediaRuntimeShutdown(s);
   const temporaryDrainsSettled = await waitForTemporaryDrainsUntil(deadline);
   if (!temporaryDrainsSettled) {
     console.warn("Temporary drain lease did not settle before the shutdown deadline; forcing shutdown");

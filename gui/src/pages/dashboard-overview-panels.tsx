@@ -7,7 +7,6 @@ import {
   DashboardMaintenancePanel,
   DashboardSidecarPanels,
 } from "./dashboard-overview-sections";
-import { MediaSettingsCard } from "./media-settings-card";
 
 type Dash = ReturnType<typeof useDashboardData>;
 
@@ -20,7 +19,6 @@ export function DashboardOverviewPanels(props: Dash) {
         <DashboardMaintenancePanel d={props} />
       </div>
       <DashboardSidecarPanels d={props} />
-      <MediaSettingsCard apiBase={props.apiBase} />
       <DashboardPlanQuotaSection apiBase={props.apiBase} />
       <MemoryObservabilityCard apiBase={props.apiBase} />
     </>

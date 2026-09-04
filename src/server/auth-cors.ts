@@ -151,6 +151,7 @@ export function corsHeaders(req?: Request, config?: CodexCommanderConfig): Recor
   return {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    // Idempotency-Key and X-Client-Request-Id remain part of the generic OpenAI image relay.
     // ChatGPT-Account-Id is required for browser/Electron ChatGPT & Codex App voice preflights
     // (direct forward auth matches the bearer to this account id). The OpenAI-Alpha .. X-OAI-Attestation
     // block covers GPT-Live voice protocol headers relayed by the /v1/live call-create path.

@@ -68,7 +68,7 @@ function resolveVertexApiKey(optKey?: string): string | undefined {
  * the call/response pairing is preserved. Returns `undefined` for an empty id so the caller omits the
  * field entirely rather than inventing a non-matching one.
  */
-export function geminiToolCallId(rawId: string | undefined): string | undefined {
+function geminiToolCallId(rawId: string | undefined): string | undefined {
   const raw = rawId ?? "";
   if (raw.length === 0) return undefined;
   const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -305,8 +305,6 @@ export function createGoogleAdapter(provider: CodexCommanderProviderConfig): Pro
   let restoreGoogleToolName = (name: string): string => name;
   return {
     name: "google",
-    toolCallIdCollisionKey: id => geminiToolCallId(id) ?? "",
-
     // Vertex + Antigravity get Kiro-style retry/timeout + classified, redacted errors. AI-Studio
     // Gemini keeps the default server fetch path (fetchResponse stays undefined so server.ts falls back).
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"

@@ -1,5 +1,4 @@
 import type { AdapterEvent, CodexCommanderMessagePhase, CodexCommanderProviderContinuationState, CodexCommanderUsage } from "./types";
-import { isIncompleteAdapterTerminalEvent } from "./types";
 import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type CodexCommanderErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
@@ -1170,7 +1169,8 @@ export function bridgeToResponsesSSE(
               flushKiroRedactedReasoning();
               if (
                 options?.compaction
-                && !isIncompleteAdapterTerminalEvent(event)
+                && event.stopReason !== "max_tokens"
+                && event.stopReason !== "content_filter"
               ) {
                 // Exactly one compaction item per turn; codex-rs takes the first and fatals on 0.
                 const item = {
@@ -1181,7 +1181,7 @@ export function bridgeToResponsesSSE(
                 retainFinishedItem(item as OutputItem, compactionTextBytes);
                 outputIndex++;
               }
-              if (isIncompleteAdapterTerminalEvent(event)) {
+              if (event.stopReason === "max_tokens" || event.stopReason === "content_filter") {
                 // Upstream stopped before a normal completion. Surface as incomplete so the
                 // client can distinguish a truncated/filtered turn from a finished one.
                 const response = {
@@ -1812,10 +1812,10 @@ function buildResponseJSONWithBudget(
         sawTerminal = true;
         usage = e.usage;
         endTurn = e.endTurn;
-        cleanDone = !isIncompleteAdapterTerminalEvent(e) && e.stopReason === undefined;
+        cleanDone = e.stopReason === undefined;
         if (e.providerState) options?.onProviderState?.(e.providerState);
         // Match streaming: max_tokens and content_filter both terminate as incomplete.
-        if (isIncompleteAdapterTerminalEvent(e)) stopReason = e.stopReason;
+        if (e.stopReason === "max_tokens" || e.stopReason === "content_filter") stopReason = e.stopReason;
         break;
     }
     if (budget) releaseTranslatedEvent(e, budget);

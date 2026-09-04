@@ -41,6 +41,7 @@ import {
   peekCodexRuntimeProcessCache,
   resolveAndPersistCodexRuntime,
 } from "../runtime";
+import { invalidateSupportedNativeSlugMemo } from "./metadata";
 import type {
   DeepReadonly,
   EffortClampDiagnostic,
@@ -116,11 +117,13 @@ function publishBundledCatalogCache(
     valueIdentity: `bundled:${epoch}`,
     value: value === null ? null : cloneAndDeepFreeze(value),
   };
+  invalidateSupportedNativeSlugMemo();
 }
 
 function clearBundledCatalogCache(): void {
   bundledCatalogEpoch += 1;
   bundledCatalogCache = null;
+  invalidateSupportedNativeSlugMemo();
 }
 
 export function bundledCatalogCacheState(): Readonly<BundledCatalogCacheState> {

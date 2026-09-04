@@ -28,6 +28,7 @@ import {
   usageSummaryRetainedStoreSnapshot,
 } from "../src/server/management/usage-summary-cache";
 import { deriveStartupHealth } from "../src/codex/autostart-health";
+import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 
 let TEST_DIR = "";
 const previousHome = process.env.CODEXCOMMANDER_HOME;
@@ -132,23 +133,14 @@ describe("GET /api/settings", () => {
   });
 
   test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
-    const { chmodSync } = await import("node:fs");
     const {
       persistEffortClamp,
       resetCodexRuntimeResolveCacheForTests,
     } = await import("../src/codex/runtime");
     resetCodexRuntimeResolveCacheForTests();
 
-    const fakeCodex = process.platform === "win32"
-      ? join(TEST_DIR, "bin", "codex.cmd")
-      : join(TEST_DIR, "bin", "codex");
-    mkdirSync(join(TEST_DIR, "bin"), { recursive: true });
-    if (process.platform === "win32") {
-      writeFileSync(fakeCodex, "@echo off\r\necho codex-cli 0.133.0\r\n", "utf8");
-    } else {
-      writeFileSync(fakeCodex, "#!/bin/sh\necho 'codex-cli 0.133.0'\n", "utf8");
-      chmodSync(fakeCodex, 0o755);
-    }
+    const runtimeDir = mkdtempSync(join(tmpdir(), "ccx-settings-runtime-"));
+    const fakeCodex = createCodexRuntimeFixture(runtimeDir, { version: "0.133.0" });
     persistEffortClamp({
       runtimePath: fakeCodex,
       runtimeVersion: "0.133.0",
@@ -196,6 +188,7 @@ describe("GET /api/settings", () => {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
       resetCodexRuntimeResolveCacheForTests();
+      rmSync(runtimeDir, { recursive: true, force: true });
     }
   });
 });

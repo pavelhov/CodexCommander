@@ -21,33 +21,6 @@ CodexCommander state.
   caps.
 - [Agents, routing, and integrations](/reference/cli/agents/) — multi-agent controls, combos,
   observability, admission keys, client integrations, runtime settings, and validated configuration.
-- `ccx media` — attested media settings, safe status, durable-job recovery, and human-confirmed
-  experimental capability actions.
-
-## Media commands
-
-`ccx media status` and `ccx media jobs [list]` read the authenticated `/api/media` resource and
-return safe, redacted state. `ccx media settings --images on|off --videos on|off --source
-subscription_oauth|api_key` changes the two independent switches or selected source without changing
-xAI chat authentication. The saved source applies to new work only; accepted jobs retain their
-original credential binding. Settings are human-only: the command requires fresh confirmation, both
-stdin and stdout to be TTYs, and a second attestation of the exact same runtime after the prompt.
-It cannot be performed by a bare admin-token request.
-
-`ccx media jobs wait <opaque-job-id> --revision <n>` follows one job. `open`, `reveal`, and
-`ack-job` require an opaque job ID and its revision; the server derives and revalidates any artifact
-path, then uses a fixed platform opener with a scrubbed environment. `ccx media recovery status`,
-`reset`, and `acknowledge` expose read-only/future-journal recovery without replaying uncertain work.
-Active or locked journals cannot be quarantined. The runtime reconciles a proven hard-link publication
-crash alias safely and owns video retention during completion and startup recovery.
-
-`ccx media probe` is a paid, human-only action, not a normal health check. It rejects `--yes`,
-requires both stdin and stdout to be TTYs, and re-attests the same live management target before the
-request. The fixed OAuth-only operation is one image and one-second 1080p video; API-key fallback is
-disabled, billing attribution is unknown, and ambiguous submission may consume quota without a
-result. The image step must settle before video submission; accepted video is reconciled in the
-background and at startup without a new POST. The probe remains preflight-disabled until explicit U8
-safety approval.
 
 ## Headless behavior
 

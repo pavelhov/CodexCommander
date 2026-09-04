@@ -28,11 +28,8 @@ import type {
 } from "../proxy-lifecycle-authority";
 import type { ProxyLifecycleLockLease } from "../proxy-lifecycle-protocol";
 import type { inspectCodexDelegation, mutateCodexDelegation } from "../../codex/delegation-installer";
-import type { MediaManagementRuntime } from "./media-routes";
 
 export interface ManagementApiDeps {
-  /** Server-owned durable media state. Tests inject a fully isolated implementation. */
-  mediaManagement?: MediaManagementRuntime;
   /** Delegation installer seams keep management-route tests off user-owned homes. */
   inspectCodexDelegation?: typeof inspectCodexDelegation;
   mutateCodexDelegation?: typeof mutateCodexDelegation;

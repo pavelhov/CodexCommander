@@ -31,7 +31,13 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, nativeMultiAgentVersion } from "./metadata";
+import {
+  NATIVE_OPENAI_CONTEXT_OVERRIDES,
+  UPSTREAM_NATIVE_ENTRIES,
+  isSupportedNativeOpenAiSlug,
+  nativeMultiAgentVersion,
+  type NativeCatalogMode,
+} from "./metadata";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 
@@ -420,10 +426,18 @@ export function catalogModelSlug(model: CatalogModel): string {
   return model.alias ?? routedSlug(model.provider, model.id);
 }
 
-export function filterSupportedNativeSlugs(models: RawEntry[]): string[] {
-  return models
-    .filter(m => typeof m.slug === "string" && !(m.slug as string).includes("/") && m.visibility === "list" && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string))
-    .map(m => m.slug as string);
+export function filterSupportedNativeSlugs(
+  models: RawEntry[],
+  catalogMode: NativeCatalogMode = "bundled-all",
+): string[] {
+  const slugs = models.flatMap(m => {
+    const slug = typeof m.slug === "string" ? m.slug : "";
+    if (!slug || slug.includes("/")) return [];
+    if (!/^(?:gpt|codex)-/.test(slug)) return [];
+    if (catalogMode === "bundled-listed" && m.visibility !== "list") return [];
+    return [slug];
+  });
+  return [...new Set(slugs)];
 }
 
 export function readCatalogBackup(catalogPath: string): RawCatalog | null {
