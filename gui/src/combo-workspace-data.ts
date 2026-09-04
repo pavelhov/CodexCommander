@@ -306,7 +306,7 @@ export function validateComboDraft(
     isCreate: boolean;
     providers: Readonly<Record<string, { disabled?: boolean }>>;
     /** Bare native OpenAI slugs from GET /api/models (native === true). */
-    supportedNativeSlugs: ReadonlySet<string>;
+    supportedNativeSlugs?: ReadonlySet<string>;
   },
 ): ComboDraftError | null {
   const id = item.id.trim();
@@ -334,7 +334,7 @@ export function validateComboDraft(
     && (displayName.length > 128 || displayNameHasControlCharacter)) {
     return "invalidDisplayName";
   }
-  if (item.nativeAlias && !isSupportedNativeOpenAiSlug(alias, options.supportedNativeSlugs)) return "unsupportedNativeAlias";
+  if (item.nativeAlias && !isSupportedNativeOpenAiSlug(alias, options.supportedNativeSlugs ?? new Set())) return "unsupportedNativeAlias";
   if (item.nativeAlias && !displayName) return "missingNativeAliasDisplayName";
   if (item.targets.length < 1) return "noTargets";
 
