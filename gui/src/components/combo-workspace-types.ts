@@ -19,6 +19,8 @@ export interface ComboWorkspaceProps {
   combos: ComboItem[];
   providers: ProviderOption[];
   models: ModelOption[];
+  /** Bare native OpenAI slugs from GET /api/models (`native === true`). */
+  supportedNativeSlugs: ReadonlySet<string>;
   /** Combo ids currently present in the live catalog (`provider === "combo"`). */
   cataloguedComboIds?: ReadonlySet<string>;
   loading?: boolean;

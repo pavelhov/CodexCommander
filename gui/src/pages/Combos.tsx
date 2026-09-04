@@ -21,7 +21,7 @@ type ProviderOption = {
   adapter?: string;
   baseUrl?: string;
 };
-type ModelOption = { provider: string; id: string; namespaced?: string; reasoningEfforts?: string[] };
+type ModelOption = { provider: string; id: string; namespaced?: string; reasoningEfforts?: string[]; native?: boolean };
 type ProviderDto = {
   adapter: string;
   baseUrl: string;
@@ -85,6 +85,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
     return () => window.clearTimeout(timer);
   }, [status, statusTone]);
 
+
   const loadCombos = useCallback(async (): Promise<CachedCombosPage> => {
     // Keep all three requests parallel: this workspace is only coherent once every input arrives.
     const [combosRes, configRes, modelsRes] = await Promise.all([
@@ -124,6 +125,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
         id?: unknown;
         namespaced?: unknown;
         disabled?: unknown;
+        native?: unknown;
         reasoningEfforts?: unknown;
       };
       if (typeof model.provider !== "string" || typeof model.id !== "string") continue;
@@ -142,6 +144,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
         provider,
         id,
         namespaced: typeof model.namespaced === "string" ? model.namespaced : undefined,
+        ...(model.native === true ? { native: true } : {}),
         ...(reasoningEfforts ? { reasoningEfforts } : {}),
       });
     }
@@ -172,6 +175,11 @@ export default function Combos({ apiBase }: { apiBase: string }) {
   const providers = data?.providers ?? [];
   const models = data?.models ?? [];
   const cataloguedComboIds = new Set(data?.cataloguedComboIds ?? []);
+
+  const supportedNativeSlugs = useMemo(
+    () => new Set(models.filter((model) => model.native === true).map((model) => model.id)),
+    [models],
+  );
 
   const saveCombo = async (item: ComboItem, isCreate: boolean, renameFrom?: string) => {
     try {
@@ -272,6 +280,7 @@ export default function Combos({ apiBase }: { apiBase: string }) {
           combos={combos}
           providers={providers}
           models={models}
+          supportedNativeSlugs={supportedNativeSlugs}
           cataloguedComboIds={cataloguedComboIds}
           loading={false}
           onRefresh={() => resource.refresh()}

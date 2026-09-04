@@ -20,6 +20,7 @@ export default function ComboWorkspace({
   combos,
   providers,
   models,
+  supportedNativeSlugs,
   cataloguedComboIds,
   loading,
   onRefresh,
@@ -174,6 +175,7 @@ export default function ComboWorkspace({
             providerMap={providerMap}
             providers={providers}
             models={models}
+            supportedNativeSlugs={supportedNativeSlugs}
             onBack={() => trySelect(null)}
             onSaved={(item) => {
               setDetailDirty(false);
@@ -201,6 +203,7 @@ export default function ComboWorkspace({
             providerMap={providerMap}
             providers={providers}
             models={models}
+            supportedNativeSlugs={supportedNativeSlugs}
             onSaved={(item) => {
               setDetailDirty(false);
               setSelectedId(item.id);
@@ -227,6 +230,7 @@ export default function ComboWorkspace({
           providerMap={providerMap}
           providers={providers}
           models={models}
+          supportedNativeSlugs={supportedNativeSlugs}
           onClose={onCloseAdd}
           onSubmit={async (item) => {
             const res = await onSave(item, true);
