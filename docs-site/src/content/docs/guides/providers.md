@@ -157,8 +157,9 @@ also preserve known independent quota groups: `gpt-5.3-codex-spark` does not pre
 from trying the shared GPT-5.6 Terra/Luna quota, while models in that shared group still protect one
 another. Explicit `Retry-After` and default cooldowns always remain account-wide.
 
-**Session affinity.** Codex thread→account affinity is process-local (in-memory only; not persisted
-across proxy restarts). On credential failures (`401` / `403`) the account is quarantined for
+**Session affinity.** Healthy Codex tasks keep their account across quota-ranking changes and
+proxy restarts through a bounded private ownership cache. Missing or invalid cache entries are
+treated as unbound. On credential failures (`401` / `403`) the account is quarantined for
 reauth and affinities for that account are cleared. On `429`, the account enters cooldown, affinities
 are cleared, and pool selection may rotate — threads are not pinned through a rate-limit response.
 
