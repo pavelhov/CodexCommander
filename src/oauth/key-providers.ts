@@ -1,4 +1,4 @@
-import { createDispatchRequest, dispatchAlias, type DispatchAttempt } from "../usage/dispatch";
+import { createDispatchRequest, type DispatchAttempt } from "../usage/dispatch";
 import { dispatchHttpFetch, observeDispatch, responseDispatch, cleanupResponseDispatch } from "../usage/dispatch-http";
 import type { CodexCommanderProviderConfig } from "../types";
 import { validateCursorApiKey } from "../adapters/cursor/run-bearer";
@@ -82,7 +82,7 @@ export async function validateApiKey(
       const base = provider.baseUrl.replace(/\/v1\/?$/, "");
       let attempt: DispatchAttempt | undefined;
       observeDispatch(() => {
-        attempt = createDispatchRequest().attempt({ surface: "validation", reason: "key-validation", protocol: "messages", routeRef: dispatchAlias(provider) });
+        attempt = createDispatchRequest().attempt({ surface: "validation", reason: "key-validation", protocol: "messages" });
       });
       const res = await dispatchHttpFetch(fetch, `${base}/v1/messages`, {
         method: "POST",

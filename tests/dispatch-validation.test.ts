@@ -57,6 +57,7 @@ test("Anthropic key validation counts inference while model discovery does not c
   const journal = readDispatchJournal();
   expect(journal.requests).toHaveLength(1);
   expect(journal.sends).toHaveLength(1);
+  expect(journal.sends[0]?.start.metadata?.routeRef).toBeUndefined();
   expect(journal.sends[0]).toMatchObject({ outcome: "unknown", start: { metadata: { surface: "validation", reason: "key-validation" } } });
   globalThis.fetch = (async () => new Response('{"data":[]}')) as typeof fetch;
   expect(await validateApiKey("fixture", { ...provider, adapter: "openai-chat" }, "fixture")).toBe(true);
