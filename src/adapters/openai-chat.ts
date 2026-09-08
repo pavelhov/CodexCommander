@@ -11,6 +11,7 @@ import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
+import { closeAdapterObservation, observeDispatchUsage, responseDispatch } from "../usage/dispatch-http";
 import {
   isTranslatorBudgetExceededError,
   retainTranslatedEventBatch,
@@ -1259,6 +1260,11 @@ export function createOpenAIChatAdapter(provider: CodexCommanderProviderConfig):
         }
         yield* flushToolCalls();
         // Graceful close that omitted [DONE] but delivered finish_reason and/or answer text.
+        if (!sawFinish) {
+          // Compatibility done is not evidence of a provider terminal; retain known usage.
+          observeDispatchUsage(responseDispatch(response), pendingUsage);
+          closeAdapterObservation(response);
+        }
         const stopReason = stopReasonFor(finishReason);
         yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
       } catch (error) {

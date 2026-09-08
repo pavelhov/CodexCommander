@@ -3,6 +3,8 @@ import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "..
 import { bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { createDispatchRequest, foldDispatchEvents, type DispatchEvent } from "../src/usage/dispatch";
+import { dispatchHttpFetch, observeAdapterStream } from "../src/usage/dispatch-http";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
   withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
@@ -16,6 +18,27 @@ async function collect(gen: AsyncGenerator<AdapterEvent>): Promise<AdapterEvent[
 }
 
 describe("openai-chat stream EOF fail-closed", () => {
+  test("dispatch completion requires a provider terminal while compatibility done preserves usage", async () => {
+    for (const terminal of ["", "data: [DONE]\n\n", 'data: {"choices":[{"finish_reason":"stop"}]}\n\n']) {
+      const journal: DispatchEvent[] = [];
+      const attempt = createDispatchRequest(event => journal.push(event)).attempt();
+      const body = 'data: {"choices":[{"delta":{"content":"partial"}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}\n\n' + terminal;
+      const response = await dispatchHttpFetch(
+        (async () => new Response(body)) as typeof fetch,
+        "http://127.0.0.1:1/v1/chat/completions", {}, { attempt },
+      );
+      const adapter = createOpenAIChatAdapter(provider);
+      const events = await collect(observeAdapterStream(response, adapter.parseStream(response)));
+      const unobserved = await collect(adapter.parseStream(new Response(body)));
+      expect(events).toEqual(unobserved);
+      expect(events.at(-1)).toMatchObject({ type: "done", usage: { inputTokens: 7, outputTokens: 2 } });
+      const send = foldDispatchEvents(journal).sends[0]!;
+      expect(send.outcome).toBe(terminal ? "protocol_success" : "unknown");
+      expect(send.usage).toMatchObject({ inputTokens: 7, outputTokens: 2 });
+      expect(send.outputObserved).toBe(true);
+    }
+  });
+
   test("truncated stream (no [DONE], no finish_reason) yields done when content was emitted", async () => {
     const response = new Response('data: {"choices":[{"delta":{"content":"par"}}]}\n\n');
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
