@@ -2327,7 +2327,9 @@ async function handleResponsesInner(
       const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0
         ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite ?? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)), translatorBudget)
         : nativeBody;
-      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => { observeDispatch(() => responseDispatch(upstreamResponse)?.cancel("client")); clientGone.abort(reason); });
+      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream,
+        reason => { observeDispatch(() => responseDispatch(upstreamResponse)?.cancel("client")); clientGone.abort(reason); },
+        reason => clientGone.abort(reason));
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,

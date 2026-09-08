@@ -60,6 +60,16 @@ for (const streamMode of ["safe-tee", "eager-relay"] as const) {
 }
 
 describe("inference recovery defaults", () => {
+  test("normal protocol completion is distinct from client cancellation", async () => {
+    let cancellations = 0;
+    let completions = 0;
+    const source = new Response('data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n');
+    const relayed = relaySseWithFailedTail(source.body!, new AbortController(),
+      () => { cancellations++; }, () => { completions++; });
+    expect(await new Response(relayed).text()).toContain("response.completed");
+    expect(completions).toBe(1);
+    expect(cancellations).toBe(0);
+  });
   for (const helper of [fetchWithResetRetry, fetchWithTransientRetry]) {
     test(`${helper.name} never replays an ambiguous reset by default`, async () => {
       let sends = 0;

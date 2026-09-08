@@ -182,6 +182,7 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
+  onTerminalEnd?: (reason?: unknown) => void,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
@@ -207,9 +208,9 @@ export function relaySseWithFailedTail(
     controller.close();
     const reason = "Responses terminal event received";
     // Notify the tee inspection branch as well. It has already received the
-    // same terminal-bearing upstream chunk, so its bounded drain records the
-    // real terminal and then releases the turn/upstream keep-alive connection.
-    onClientGone?.(reason);
+    // same terminal-bearing upstream chunk. Release the connection without
+    // misclassifying normal protocol completion as a client cancellation.
+    (onTerminalEnd ?? onClientGone)?.(reason);
     reader.cancel(reason).catch(() => {});
     terminalBoundary.dispose();
     return "terminal";
