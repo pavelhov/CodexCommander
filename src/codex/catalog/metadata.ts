@@ -33,7 +33,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
 import type { RawEntry } from "./parsing";
-import { bundledCatalogCacheState, loadBundledCodexCatalog, readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
+import { bundledCatalogCacheState, peekBundledNativeCatalogEntry, loadBundledCodexCatalog, readCurrentCatalogOrCache, unique, type BundledCatalogDeps } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { LEGACY_NATIVE_OPENAI_MODELS } from "./native-models";
@@ -287,52 +287,47 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
     .map(m => [m.slug as string, m]),
 );
 
+/** Source-first capability lookup; the bundled accessor is strictly process-local. */
+function nativeCapabilityEntry(slug: string) {
+  return peekBundledNativeCatalogEntry(slug) ?? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
+}
+
 export function nativeOpenAiContextWindow(slug: string): number | undefined {
-  return NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.contextWindow
-    ?? (typeof PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.context_window === "number"
-      ? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)!.context_window as number
-      : undefined);
+  const source = nativeCapabilityEntry(slug);
+  if (source) return typeof source.context_window === "number" && source.context_window > 0
+    ? source.context_window : undefined;
+  // Historical defaults apply only when neither installed nor pinned metadata exists.
+  return NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.contextWindow;
 }
 
 export function nativeInputModalities(slug: string): string[] {
-  const upstream = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
-  if (Array.isArray(upstream?.input_modalities) && upstream!.input_modalities!.length > 0) {
-    return [...upstream!.input_modalities as string[]];
-  }
-  // gpt-5.3-codex-spark is not in the upstream snapshot; all supported natives are
-  // text+image capable, so default to the family baseline rather than text-only.
+  const source = nativeCapabilityEntry(slug);
+  if (source) return Array.isArray(source.input_modalities)
+    ? source.input_modalities.filter((value): value is string => typeof value === "string") : [];
   return ["text", "image"];
 }
 
 export function nativeReasoningEfforts(slug: string): string[] {
-  const upstream = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
-  const levels = Array.isArray(upstream?.supported_reasoning_levels)
-    ? upstream!.supported_reasoning_levels as Array<{ effort?: string }>
-    : [];
-  if (levels.length > 0) {
-    // Preserve the exact pinned per-model ladder. In particular, GPT-5.6 Sol and Terra
-    // include ultra while Luna intentionally ends at max.
-    return levels.flatMap(l => typeof l.effort === "string" ? [l.effort] : []);
-  }
-  // gpt-5.3-codex-spark is not in upstream snapshot — use the standard old-ladder default.
+  const source = nativeCapabilityEntry(slug);
+  if (source) return Array.isArray(source.supported_reasoning_levels)
+    ? source.supported_reasoning_levels.flatMap(level =>
+      level && typeof level === "object" && "effort" in level && typeof level.effort === "string"
+        ? [level.effort] : []) : [];
   return ["low", "medium", "high", "xhigh"];
 }
 
-/** Upstream-pinned default for a native slug, when present and non-empty. */
 export function nativeDefaultReasoningEffort(slug: string): string | undefined {
-  const level = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.default_reasoning_level;
+  const level = nativeCapabilityEntry(slug)?.default_reasoning_level;
   return typeof level === "string" && level.length > 0 ? level : undefined;
 }
 
-/** Upstream-pinned multi-agent surface for a supported native slug, when present. */
 export function nativeMultiAgentVersion(slug: string): string | undefined {
-  const version = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.multi_agent_version;
+  const version = nativeCapabilityEntry(slug)?.multi_agent_version;
   return typeof version === "string" && version.length > 0 ? version : undefined;
 }
 
 export function nativeParallelToolCalls(slug: string): boolean {
-  return PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.supports_parallel_tool_calls === true
-    || false;
+  return nativeCapabilityEntry(slug)?.supports_parallel_tool_calls === true;
 }
 
 export function hasComboTargets(config: { combos?: Record<string, { targets?: unknown[] }> }): boolean {

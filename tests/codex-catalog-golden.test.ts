@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { buildCatalogEntries } from "../src/codex/catalog";
 
 // Behavior-preservation ORACLE for the future codex-catalog.ts split (implementation contract).
@@ -144,4 +144,62 @@ test("source absence stays absent and missing source is marked as fallback", () 
   const [fallback] = buildCatalogEntries(null, ["future-native"], []);
   expect(fallback!.codexcommander_native_source).toBe("synthetic-fallback");
   expect(fallback!.context_window).toBe(128000);
+});
+
+import { setBundledCatalogCacheForTests, resetBundledCatalogCacheForTests } from "../src/codex/catalog/bundled";
+import { setCodexRuntimeResolveCacheForTests, resetCodexRuntimeResolveCacheForTests } from "../src/codex/runtime";
+import { nativeOpenAiContextWindow, nativeInputModalities, nativeReasoningEfforts, nativeDefaultReasoningEffort, nativeParallelToolCalls, nativeMultiAgentVersion } from "../src/codex/catalog/metadata";
+
+test("native capability getters use cached authoritative source without a runtime probe", () => {
+  const runtime = { command: "/fixture/native-codex", version: "0.153.4", source: "environment" as const };
+  try {
+    setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+    setBundledCatalogCacheForTests(runtime, { models: nativeSource.models });
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(272000);
+    const source = { slug: "gpt-5.6-sol", context_window: 123456, input_modalities: ["text"],
+      supported_reasoning_levels: [{ effort: "low" }], default_reasoning_level: "low",
+      supports_parallel_tool_calls: true, multi_agent_version: "v1" };
+    setBundledCatalogCacheForTests(runtime, { models: [source] });
+    expect(nativeOpenAiContextWindow(source.slug)).toBe(123456);
+    expect(nativeInputModalities(source.slug)).toEqual(["text"]);
+    expect(nativeReasoningEfforts(source.slug)).toEqual(["low"]);
+    expect(nativeDefaultReasoningEffort(source.slug)).toBe("low");
+    expect(nativeParallelToolCalls(source.slug)).toBe(true);
+    expect(nativeMultiAgentVersion(source.slug)).toBe("v1");
+    nativeInputModalities(source.slug).push("image");
+    expect(nativeInputModalities(source.slug)).toEqual(["text"]);
+    setBundledCatalogCacheForTests(runtime, { models: [{ slug: source.slug }] });
+    expect(nativeOpenAiContextWindow(source.slug)).toBeUndefined();
+    expect(nativeReasoningEfforts(source.slug)).toEqual([]);
+    expect(nativeInputModalities(source.slug)).toEqual([]);
+    expect(nativeDefaultReasoningEffort(source.slug)).toBeUndefined();
+    setBundledCatalogCacheForTests(runtime, { models: [source] }, { expiresAt: 0 });
+    expect(nativeOpenAiContextWindow(source.slug)).toBe(123456);
+    const futureNow = Date.now() + 24 * 60 * 60 * 1000;
+    const clock = spyOn(Date, "now").mockReturnValue(futureNow);
+    try {
+      expect(nativeOpenAiContextWindow(source.slug)).toBe(123456);
+    } finally {
+      clock.mockRestore();
+    }
+    resetCodexRuntimeResolveCacheForTests();
+    expect(nativeOpenAiContextWindow(source.slug)).toBe(372000);
+    setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+    setBundledCatalogCacheForTests(runtime, { models: [source] });
+    setCodexRuntimeResolveCacheForTests({ runtime: { ...runtime, version: "different" }, failures: [] });
+    expect(nativeOpenAiContextWindow(source.slug)).toBe(372000);
+    const mismatchedClock = spyOn(Date, "now").mockReturnValue(futureNow);
+    try {
+      expect(nativeOpenAiContextWindow(source.slug)).toBe(372000);
+    } finally {
+      mismatchedClock.mockRestore();
+    }
+    setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+    expect(nativeOpenAiContextWindow(source.slug)).toBe(123456);
+    resetBundledCatalogCacheForTests();
+    expect(nativeOpenAiContextWindow(source.slug)).toBe(372000);
+  } finally {
+    resetBundledCatalogCacheForTests();
+    resetCodexRuntimeResolveCacheForTests();
+  }
 });
