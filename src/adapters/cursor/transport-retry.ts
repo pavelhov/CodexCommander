@@ -69,7 +69,9 @@ export async function runCursorTurnWithRetry(
 ): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     if (signal?.aborted) throw abortError(signal);
-    const transport = makeTransport(input);
+    const transport = makeTransport(attempt > 0 && input.dispatch
+      ? { ...input, dispatch: { ...input.dispatch, reason: "retry" } }
+      : input);
     let emittedAny = false;
     let closed = false;
     // Best-effort close: a cleanup failure must never replace the run outcome (or kill

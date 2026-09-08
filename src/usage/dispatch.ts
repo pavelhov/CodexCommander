@@ -1,12 +1,22 @@
 import { appendDispatchEvent } from "./dispatch-log";
 
-export type DispatchOutcome = "protocol_success" | "protocol_failure" | "transport_failure" | "upstream_abort" | "unknown";
+const enums = {
+  transport: ["http", "websocket", "sidecar"],
+  reason: ["initial", "retry", "recovery", "compaction", "continuation", "fallback", "warmup", "key-validation"],
+  surface: ["responses", "chat", "messages", "compact", "images", "realtime", "search", "sidecar", "validation"],
+  sidecarKind: ["vision", "web_search"],
+  protocol: ["responses", "chat", "messages", "provider"],
+} as const;
+const outcomes = ["protocol_success", "protocol_failure", "transport_failure", "upstream_abort", "unknown"] as const;
+
+export type DispatchOutcome = typeof outcomes[number];
 export interface DispatchAlias { readonly ref: string }
 export interface DispatchMetadata {
-  transport?: "http" | "websocket" | "sidecar";
-  reason?: "initial" | "retry" | "recovery" | "compaction" | "continuation" | "fallback";
-  surface?: "responses" | "chat" | "messages" | "compact" | "images" | "realtime" | "sidecar";
-  protocol?: "responses" | "chat" | "messages" | "provider";
+  transport?: typeof enums.transport[number];
+  reason?: typeof enums.reason[number];
+  surface?: typeof enums.surface[number];
+  sidecarKind?: typeof enums.sidecarKind[number];
+  protocol?: typeof enums.protocol[number];
   accountRef?: DispatchAlias;
   routeRef?: DispatchAlias;
   sessionPresent?: boolean;
@@ -77,13 +87,6 @@ export function dispatchAlias(identity: object): DispatchAlias {
 let observerFailures = 0;
 export function recordDispatchObserverFailure(): void { observerFailures++; }
 export function dispatchObserverHealth(): { observerFailures: number } { return { observerFailures }; }
-const enums = {
-  transport: ["http", "websocket", "sidecar"],
-  reason: ["initial", "retry", "recovery", "compaction", "continuation", "fallback"],
-  surface: ["responses", "chat", "messages", "compact", "images", "realtime", "sidecar"],
-  protocol: ["responses", "chat", "messages", "provider"],
-};
-const outcomes = ["protocol_success", "protocol_failure", "transport_failure", "upstream_abort", "unknown"];
 const ref = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v);
 const number = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER;
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -108,7 +111,7 @@ export function normalizeDispatchEvent(raw: unknown): DispatchEvent | null {
     if (raw.kind === "request" || raw.kind === "attempt") { delete result.sendRef; delete result.sendOrdinal; }
     if ((raw.kind === "start" || raw.kind === "attempt") && record(raw.metadata)) {
       const metadata: Record<string, unknown> = {};
-      for (const [key, values] of Object.entries(enums)) if (values.includes(raw.metadata[key] as string)) metadata[key] = raw.metadata[key];
+      for (const [key, values] of Object.entries(enums)) if ((values as readonly unknown[]).includes(raw.metadata[key])) metadata[key] = raw.metadata[key];
       for (const key of ["accountRef", "routeRef"]) if (ref(raw.metadata[key])) metadata[key] = raw.metadata[key];
       for (const key of ["sessionPresent", "continuationPresent", "routingHintPresent"]) if (typeof raw.metadata[key] === "boolean") metadata[key] = raw.metadata[key];
       result.metadata = metadata as DispatchEvent["metadata"];
@@ -118,7 +121,7 @@ export function normalizeDispatchEvent(raw: unknown): DispatchEvent | null {
       result.status = raw.status as number;
     }
     if (raw.kind === "terminal") {
-      if (!outcomes.includes(raw.outcome as string)) return null;
+      if (!(outcomes as readonly unknown[]).includes(raw.outcome)) return null;
       result.outcome = raw.outcome as DispatchOutcome;
     }
     if (raw.kind === "cancel") {

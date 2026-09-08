@@ -1,3 +1,4 @@
+import { dispatchHttpFetch, cleanupResponseDispatch, observeAdapterStream } from "../usage/dispatch-http";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderThinkingContent, CodexCommanderUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName } from "../types";
@@ -411,6 +412,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
+              dispatch: deps.incomingMeta.dispatch,
             });
           } else {
             response = await fetchWithResetRetry(
@@ -421,12 +423,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 deps.onAttemptSend?.(retryRecovery ?? recovery);
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
-                return fetch(request.url, {
+                return dispatchHttpFetch(fetch, request.url, {
                   method: request.method,
                   headers: h,
                   body: request.body,
                   signal: headerDeadline.signal,
-                });
+                }, deps.incomingMeta.dispatch);
               },
               { abortSignal: headerDeadline.signal, label: "web-search-loop" },
             );
@@ -451,6 +453,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // The old header deadline must not stay armed across the deliberate wait: clear it
         // before sleeping so a stale expiry can never race the client-cancel path.
         headerDeadline.clear();
+        cleanupResponseDispatch(prepared.response);
         try {
           yield* prepareSameTarget429Wait({
             body: prepared.response.body,
@@ -479,6 +482,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // Never let a broken body's cancel promise outlive the cumulative header deadline. Observe
         // it, but proceed immediately to the rotated fetch under the SAME deadline signal.
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        cleanupResponseDispatch(prepared.response);
         adapter = rotated;
         // Stall-watchdog seam between bounded retry fetches (audit 011 B3).
         yield { type: "heartbeat" };
@@ -492,6 +496,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         try {
           body = await readBoundedResponseBody(prepared.response, { signal });
         } catch {
+          cleanupResponseDispatch(prepared.response);
           // The response status is authoritative even when its untrusted error body fails while
           // being read (including a synchronous getReader() failure). Never route that failure
           // through the adapter formatter or the generic transport error, which could expose its
@@ -499,6 +504,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
           throw new LoopError(prepared.response.status, `Provider error ${prepared.response.status}`);
         }
+        cleanupResponseDispatch(prepared.response);
         let formatted = "";
         if (body.displaySafe && !body.truncated && body.text.trim() && prepared.responseAdapter.formatErrorBody) {
           try {
@@ -539,11 +545,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     const events: AdapterEvent[] = [];
     try {
       const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
-      for await (const event of parseStreamWithProgress(prepared.response, parse, {
+      for await (const event of observeAdapterStream(prepared.response, parseStreamWithProgress(prepared.response, parse, {
         signal,
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
-      })) {
+      }))) {
         if (event.type === "heartbeat") yield event;
         // Kiro's explicit-completion protocol marks ordinary assistant text as commentary while
         // it performs a bounded final-answer retry. That text is safe to surface immediately and
@@ -618,8 +624,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // signal would otherwise look like an ordinary degradable failure).
         try {
           outcome = backend === "anthropic" && anthropicSidecar
-            ? await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal)
-            : await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome);
+            ? await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal, deps.incomingMeta.dispatch?.attempt)
+            : await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome, deps.incomingMeta.dispatch?.attempt);
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
         } catch (e) {
           if (e instanceof LoopError) throw e;

@@ -1,3 +1,5 @@
+import { createDispatchRequest, foldDispatchEvents, type DispatchEvent } from "../src/usage/dispatch";
+import { cleanupResponseDispatch } from "../src/usage/dispatch-http";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createCommandCodeAdapter } from "../src/adapters/command-code";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../src/oauth/command-code";
@@ -247,8 +249,13 @@ describe("Command Code provider", () => {
     }) as typeof globalThis.fetch;
     const adapter = createCommandCodeAdapter({ ...provider, fetch } as CodexCommanderProviderConfig);
     const request = await adapter.buildRequest({ ...parsed(), options: { reasoning: "max" } });
-    const response = await adapter.fetchResponse!(request);
+    const dispatchEvents: DispatchEvent[] = [];
+    const attempt = createDispatchRequest(event => dispatchEvents.push(event)).attempt();
+    const response = await adapter.fetchResponse!(request, { dispatch: { attempt } });
     expect(response.ok).toBe(true);
+    expect(foldDispatchEvents(dispatchEvents).sends.map(send => send.outcome)).toEqual(["protocol_failure", "unknown"]);
+    expect(dispatchEvents.filter(event => event.kind === "start").map(event => event.metadata?.reason)).toEqual(["initial", "retry"]);
+    cleanupResponseDispatch(response);
     expect(commandCodeReasoningEfforts("deepseek/deepseek-v4-flash")).toEqual(["high"]);
     const generated = requests.filter(request => request.url.endsWith("/alpha/generate"));
     expect(JSON.parse(generated[1]!.body!).params).not.toHaveProperty("reasoning_effort");

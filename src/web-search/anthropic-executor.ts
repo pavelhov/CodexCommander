@@ -1,3 +1,6 @@
+import type { DispatchAttempt } from "../usage/dispatch";
+import { dispatchHttpFetch, cleanupResponseDispatch, observeDispatch, responseDispatch } from "../usage/dispatch-http";
+import { sidecarDispatch, observeSidecarFrame } from "../usage/dispatch-sidecar";
 import type { CodexCommanderProviderConfig } from "../types";
 import { getValidAccessToken } from "../oauth";
 import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../oauth/anthropic";
@@ -44,6 +47,7 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
   let buffer = "";
 
   const handleFrame = (data: Record<string, unknown>): void => {
+    observeSidecarFrame(res, data);
     const type = typeof data.type === "string" ? data.type : "";
     if (type === "content_block_start") {
       const block = isRec(data.content_block) ? data.content_block : {};
@@ -97,6 +101,7 @@ export async function parseAnthropicSidecarSSE(res: Response): Promise<SidecarOu
     buffer = (buffer + decoder.decode()).replace(/\r\n/g, "\n");
     if (buffer.trim().length > 0) processFrame(buffer);
   } catch {
+    observeDispatch(() => responseDispatch(res)?.terminal("protocol_failure"));
     /* mid-stream abort/decode failure: fall through with whatever text/sources were gathered */
   }
 
@@ -120,6 +125,7 @@ export async function runAnthropicWebSearch(
   provider: CodexCommanderProviderConfig,
   settings: SidecarSettings,
   abortSignal?: AbortSignal,
+  dispatchParent?: DispatchAttempt,
 ): Promise<SidecarOutcome> {
   const base = provider.baseUrl.replace(/\/v1\/?$/, "");
   const url = `${base}/v1/messages`;
@@ -161,11 +167,14 @@ export async function runAnthropicWebSearch(
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("web-search");
   const t0 = Date.now();
+  const dispatch = sidecarDispatch(dispatchParent, "messages", abortSignal, "web_search");
+  let observedResponse: Response | undefined;
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: linkedSignal.signal }),
+      () => dispatchHttpFetch(fetch, url, { method: "POST", headers, body: JSON.stringify(body), signal: linkedSignal.signal }, dispatch),
       { abortSignal: linkedSignal.signal, label: "web-search-sidecar-anthropic" },
     );
+    observedResponse = res;
     if (!res.ok) {
       const t = await res.text().catch(() => "");
       console.warn(`[web-search] anthropic sidecar HTTP ${res.status} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
@@ -183,6 +192,10 @@ export async function runAnthropicWebSearch(
     console.warn(`[web-search] anthropic sidecar ${kind} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
     return { text: "", sources: [], error: e instanceof Error ? e.message : String(e) };
   } finally {
+    if (observedResponse) {
+      observeDispatch(() => responseDispatch(observedResponse!)?.terminal("unknown"));
+      cleanupResponseDispatch(observedResponse);
+    }
     sidecarExit();
     linkedSignal.cleanup();
   }

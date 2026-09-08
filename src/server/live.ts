@@ -558,6 +558,8 @@ export async function handleLive(
   const linkedSignal = signalWithTimeout(LIVE_UPSTREAM_TIMEOUT_MS, req.signal);
   const sidecarExit = sidecarEnter("live");
   try {
+    // Excluded from inference dispatch: this POST negotiates an SDP/realtime call session.
+    // Explicit generation requests are observed on the live sideband response.create send.
     const upstreamResponse = await fetch(url, {
       method: "POST",
       headers,

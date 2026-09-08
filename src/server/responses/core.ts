@@ -1762,6 +1762,7 @@ async function handleResponsesInner(
       options.abortSignal,
       recordSidecarOutcome,
       translatorBudget,
+      requestDispatchContext(logCtx, options.abortSignal ?? req.signal).attempt,
     );
   } else if (modelInList(route.provider.noVisionModels, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
@@ -2453,7 +2454,7 @@ async function handleResponsesInner(
     }
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
-      incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget, dispatch: requestDispatchContext(logCtx, options.abortSignal ?? req.signal) },
       toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
@@ -2518,7 +2519,7 @@ async function handleResponsesInner(
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);
         await adapter.runTurn?.(
           parsed,
-          { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal, translatorBudget },
+          { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal, translatorBudget, dispatch: requestDispatchContext(logCtx, options.abortSignal ?? req.signal) },
           queue.push,
         );
       } catch (err) {

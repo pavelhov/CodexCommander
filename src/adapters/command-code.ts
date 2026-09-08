@@ -1,3 +1,4 @@
+import { dispatchHttpFetch, cleanupResponseDispatch, closeAdapterObservation, observeAdapterEvent, observeDispatch, responseDispatch } from "../usage/dispatch-http";
 import { randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -269,7 +270,11 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
     }
     const final = buffer.trim();
     if (final) { try { yield JSON.parse(stripEventFrame(final)) as Record<string, unknown>; } catch { /* ignore */ } }
+  } catch (error) {
+    observeDispatch(() => responseDispatch(response)?.terminal("protocol_failure"));
+    throw error;
   } finally {
+    cleanupResponseDispatch(response);
     budget.releaseRetained(bufferBytes, { kind: "live_transient" });
     try { await reader.cancel(); } catch { /* already closed */ }
     reader.releaseLock();
@@ -301,13 +306,13 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
   const timer = setTimeout(() => timeout.abort(new DOMException("Timeout elapsed", "TimeoutError")), ctx?.timeoutMs ?? 200_000);
   const callerSignal = ctx?.abortSignal ?? new AbortController().signal;
   try {
-    return await executor(request.url, {
+    return await dispatchHttpFetch(executor, request.url, {
       method: request.method,
       headers: request.headers,
       body: request.body,
       redirect: "manual",
       signal: AbortSignal.any([callerSignal, timeout.signal]),
-    });
+    }, ctx?.dispatch);
   } finally {
     clearTimeout(timer);
   }
@@ -400,11 +405,17 @@ export function createCommandCodeAdapter(provider: CodexCommanderProviderConfig)
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;
       try { void response.body?.cancel(); } catch { /* already closed */ }
+      cleanupResponseDispatch(response);
       return fetchCommandCode(retry, ctx, executor);
     },
     async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       let sawFinish = false;
       for await (const event of ndjson(response, budget)) {
+        observeDispatch(() => {
+          const send = responseDispatch(response);
+          if (event.type === "text-delta" || event.type === "reasoning-delta" || event.type === "tool-call") send?.output();
+          if (event.type === "error") send?.terminal("protocol_failure");
+        });
         switch (event.type) {
           case "text-delta": if (typeof event.text === "string") yield { type: "text_delta", text: event.text }; break;
           case "reasoning-delta": if (typeof event.text === "string") yield { type: "thinking_delta", thinking: event.text }; break;
@@ -434,7 +445,9 @@ export function createCommandCodeAdapter(provider: CodexCommanderProviderConfig)
             sawFinish = true;
             const usageValue = event.totalUsage ?? event.usage;
             const stopReason = typeof event.rawFinishReason === "string" ? event.rawFinishReason : typeof event.finishReason === "string" ? event.finishReason : undefined;
-            yield { type: "done", usage: usage(usageValue), stopReason };
+            const terminal: AdapterEvent = { type: "done", usage: usage(usageValue), stopReason };
+            observeAdapterEvent(response, terminal);
+            yield terminal;
             break;
           }
           case "error": yield { type: "error", message: eventError(event.error), status: 502 }; break;
@@ -442,6 +455,7 @@ export function createCommandCodeAdapter(provider: CodexCommanderProviderConfig)
       }
       // A stream that ends without a finish event still needs a terminal done so the
       // server does not wait on an adapter that silently stopped emitting.
+      closeAdapterObservation(response);
       if (!sawFinish) yield { type: "done", usage: undefined, stopReason: undefined };
     },
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {

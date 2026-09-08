@@ -1,3 +1,4 @@
+import { sendLiveInferenceFrame, closeLiveInferenceObservation } from "../usage/dispatch-live";
 import { markActivity } from "../lib/sidecar-tracker";
 import { darwinPlaintextEagerRuntimeWarning } from "../lib/bun-stream-caps";
 import {
@@ -312,6 +313,7 @@ function finalizeLiveSideband(ws: ServerWebSocket<WsData>, upstream?: WebSocket)
     clearTimeout(ws.data.liveCloseFallback);
     ws.data.liveCloseFallback = undefined;
   }
+  closeLiveInferenceObservation(ws.data);
   ws.data.liveUpstream = undefined;
   ws.data.livePending = undefined;
   ws.data.cancel = undefined;
@@ -392,7 +394,7 @@ function attachLiveSidebandUpstream(
   }
   ws.data.liveUpstream = upstream;
   ws.data.liveClosing = false;
-  ws.data.cancel = () => closeLiveSideband(ws, 1000, "client closed");
+  ws.data.cancel = () => { closeLiveInferenceObservation(ws.data, true); closeLiveSideband(ws, 1000, "client closed"); };
 
   upstream.addEventListener("open", () => {
     if (ws.data.liveUpstream !== upstream || ws.data.liveClosing) return;
@@ -401,7 +403,7 @@ function attachLiveSidebandUpstream(
     ws.data.livePending = undefined;
     for (const frame of pending) {
       try {
-        upstream.send(frame);
+        sendLiveInferenceFrame(ws.data, frame, () => upstream.send(frame));
       } catch {
         closeLiveSideband(ws, 1011, "upstream send failed");
         return;
@@ -1377,7 +1379,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             return;
           }
           try {
-            upstream.send(raw);
+            sendLiveInferenceFrame(ws.data, raw, () => upstream.send(raw));
           } catch {
             closeLiveSideband(ws, 1011, "upstream send failed");
           }
@@ -1536,6 +1538,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       },
       close(ws: ServerWebSocket<WsData>) {
         if (ws.data.kind === "live-sideband") {
+          closeLiveInferenceObservation(ws.data, true);
           closeLiveSideband(ws);
           return;
         }

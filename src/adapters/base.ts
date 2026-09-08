@@ -4,6 +4,8 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
+  /** Process-local observation, never a wire field. */
+  dispatch?: DispatchHttpContext;
   headers: Headers;
   translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;

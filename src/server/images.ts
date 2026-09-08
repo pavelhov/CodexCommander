@@ -1,3 +1,5 @@
+import { dispatchHttpFetch, cleanupResponseDispatch, observeDispatch, responseDispatch } from "../usage/dispatch-http";
+import { dispatchAlias } from "../usage/dispatch";
 /**
  * /v1/images/{generations,edits} relay (issue #83).
  *
@@ -30,7 +32,7 @@ import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../provid
 import { getProviderRegistryEntry } from "../providers/registry";
 import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
-import type { RequestLogContext } from "./request-log";
+import { initializeRequestDispatch, type RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import { getValidAccessToken, getOAuthCredentialProjectId } from "../oauth/index";
 import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
@@ -173,10 +175,12 @@ async function tryCcaImageGeneration(
       sessionId: `ccx-img-${crypto.randomUUID().slice(0, 8)}`,
     },
   };
-  let upstream: Response;
+  observeDispatch(() => { logCtx.dispatchAttempt = logCtx.dispatchRequest?.attempt({ surface: "images", protocol: "provider", routeRef: dispatchAlias(provider), reason: "fallback" }); });
+  const dispatch = { attempt: logCtx.dispatchAttempt, clientSignal: signal };
+  let upstream: Response | undefined;
   try {
     try {
-      upstream = await fetch(`${baseUrl}/v1internal:generateContent`, {
+      upstream = await dispatchHttpFetch(fetch, `${baseUrl}/v1internal:generateContent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -185,7 +189,7 @@ async function tryCcaImageGeneration(
         },
         body: JSON.stringify(envelope),
         signal: linkedSignal.signal,
-      });
+      }, dispatch);
     } catch (err) {
       if (signal.aborted) return formatErrorResponse(499, "client_closed_request", "CCA image request canceled by client");
       if (err instanceof Error && err.name === "TimeoutError") {
@@ -279,6 +283,11 @@ async function tryCcaImageGeneration(
     // prompt that will never succeed). Two blocking signals exist in the Gemini
     // API: promptFeedback.blockReason (prompt rejected before generation) and
     // candidate.finishReason (generation cut off by a content filter).
+    observeDispatch(() => {
+      const send = responseDispatch(upstream!);
+      if (resp.promptFeedback?.blockReason || resp.candidates?.some(c => c.finishReason && CCA_BLOCKING_FINISH_REASONS.has(c.finishReason))) send?.terminal("protocol_failure");
+      else if (resp.candidates?.some(c => c.finishReason === "STOP")) send?.terminal("protocol_success");
+    });
     const blockReason = resp.promptFeedback?.blockReason;
     if (typeof blockReason === "string" && blockReason.trim()) {
       return formatErrorResponse(400, "invalid_request_error", `CCA image generation blocked by safety filter (promptFeedback.blockReason: ${blockReason})`);
@@ -318,6 +327,10 @@ async function tryCcaImageGeneration(
       headers: { "content-type": "application/json" },
     });
   } finally {
+    if (upstream) {
+      observeDispatch(() => responseDispatch(upstream!)?.terminal("unknown"));
+      cleanupResponseDispatch(upstream);
+    }
     linkedSignal.cleanup();
   }
 }
@@ -329,6 +342,7 @@ export async function handleImages(
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
+  initializeRequestDispatch(logCtx, "images");
   const candidates = selectImagesProvider(config);
   if (candidates.error) {
     return formatErrorResponse(400, "invalid_request_error", candidates.error);
@@ -440,15 +454,19 @@ export async function handleImages(
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, req.signal);
   const sidecarExit = sidecarEnter("images");
+  observeDispatch(() => { logCtx.dispatchAttempt = logCtx.dispatchRequest?.attempt({ surface: "images", protocol: "provider", ...((candidates.keyed?.providerName ?? forward?.providerName) ? { routeRef: dispatchAlias(config.providers[(candidates.keyed?.providerName ?? forward?.providerName)!]) } : {}) }); });
+  const dispatch = { attempt: logCtx.dispatchAttempt, clientSignal: req.signal };
+  let observedResponse: Response | undefined;
   try {
     // Images POSTs create paid, non-idempotent work. One fetch only: no reset retry without a
     // source-proven idempotency contract.
-    const upstreamResponse = await fetch(url, {
+    const upstreamResponse = await dispatchHttpFetch(fetch, url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       signal: linkedSignal.signal,
-    });
+    }, dispatch);
+    observedResponse = upstreamResponse;
     // Buffer rather than stream: the payload is one JSON document (base64 image, typically a few
     // MB), and buffering keeps the timeout window covering the whole exchange. Cap the size to
     // prevent an oversized response from exhausting process memory.
@@ -479,6 +497,10 @@ export async function handleImages(
       `image ${endpoint} relay failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   } finally {
+    if (observedResponse) {
+      observeDispatch(() => responseDispatch(observedResponse!)?.terminal("unknown"));
+      cleanupResponseDispatch(observedResponse);
+    }
     sidecarExit();
     linkedSignal.cleanup();
   }
