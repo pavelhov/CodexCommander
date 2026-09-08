@@ -2,11 +2,11 @@ name: CodexCommander cross-platform verification
 
 # Pull requests deliberately do not trigger this workflow. The stable Ubuntu
 # `ci` job is the repository's only required PR check; macOS and Windows verify
-# the integrated result after it reaches `main`, or when an owner asks for a
+# the integrated result on `development` and `main`, or when an owner asks for a
 # run explicitly.
 on:
   push:
-    branches: [main]
+    branches: [main, development]
   workflow_dispatch:
 
 permissions:

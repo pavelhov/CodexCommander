@@ -9,8 +9,10 @@ Thanks for helping with this project.
 
 ## Branches
 
-- `main` — the sole integration branch, the default branch, and the target of
-  every pull request. There is no `dev` or `preview` line.
+- `development` — the latest integration branch. Start feature/fix branches here
+  and target their pull requests to `development`.
+- `main` — the stable default branch. A separate `development` → `main` promotion
+  pull request follows successful combined validation.
 
 Rebase pull requests are welcome: bringing a stale branch onto the current head
 is normal contribution. Note the source commits in the description.

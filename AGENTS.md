@@ -92,13 +92,14 @@ commit-derived drafts and the review guidance below.
 
 ## Branch policy
 
-- `main` — the sole integration branch, the default branch, and the target
-  for every pull request. There is no `dev`, `development`, or `preview`
-  line.
+- `development` — the latest integration branch. Branch new feature/fix work from
+  it and target those pull requests to it.
+- `main` — the stable default branch. Promote `development` to `main` through a
+  separate pull request only after the combined fixes and qualification checks pass.
 
-Bun-native TypeScript on `main` is the only runtime line. If native code
-returns, the expectation is an incremental module (for example Rust via N-API)
-landing on `main`, not a second full-runtime branch.
+Both branches use the same Bun-native TypeScript runtime. `development` is a
+staging branch, not a separate runtime port. If native code returns, introduce
+it incrementally through the same feature-PR and promotion workflow.
 
 Merge requirements are enforced by a GitHub **ruleset** on `main`, configured
 in repository settings (not in this repository's files). Two invariants:
@@ -129,7 +130,8 @@ reviewers (Codex and similar bots).
   language. Be detailed and specific: name the file and line, describe the
   concrete failure mode, and suggest a fix. Avoid vague or purely stylistic
   commentary.
-- **Branch targeting:** flag any pull request that does not target `main`.
+- **Branch targeting:** feature and fix PRs target `development`; promotion PRs
+  from `development` target `main`. Flag other targets unless explicitly authorized.
 - **Security boundary (highest priority):** changes touching authentication,
   credential/token handling, OAuth flows, GitHub Actions workflows, publishing
   or release distribution, or

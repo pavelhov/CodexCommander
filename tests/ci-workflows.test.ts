@@ -105,9 +105,9 @@ describe("ci.yml is the only pull-request check", () => {
     expect(onBlock(ci)).not.toContain("paths:");
   });
 
-  test("pushes are scoped to main, the sole integration branch", () => {
-    expect(ci).toContain("branches: [main]");
-    expect(ci).not.toMatch(/branches:\s*\[[^\]]*\b(dev|development|preview)\b/);
+  test("pushes verify the stable and development branches", () => {
+    expect(ci).toContain("branches: [main, development]");
+    expect(ci).not.toMatch(/branches:\s*\[[^\]]*\b(dev|preview)\b/);
   });
 
   test("exposes exactly one job, named ci, on GitHub-hosted Ubuntu", () => {
@@ -151,10 +151,10 @@ describe("service lifecycle workflow is manual-only", () => {
 });
 
 describe("cross-platform verification is post-integration only", () => {
-  test("runs on main pushes and manual dispatch, never pull requests", () => {
+  test("runs on main/development pushes and manual dispatch, never pull requests", () => {
     const triggers = onBlock(readWorkflow("cross-platform.yml"));
     expect(triggers).toContain("push:");
-    expect(triggers).toContain("branches: [main]");
+    expect(triggers).toContain("branches: [main, development]");
     expect(triggers).toContain("workflow_dispatch:");
     expect(triggers).not.toContain("pull_request");
   });
@@ -224,10 +224,12 @@ describe("governance documents", () => {
     expect(readRepo("MAINTAINERS.md")).toMatch(/publishing automation is not included/i);
   });
 
-  test("AGENTS.md branch policy names main as the sole integration branch", () => {
+  test("AGENTS.md separates development integration from stable main", () => {
     const agents = readRepo("AGENTS.md");
     const policy = agents.split("## Branch policy")[1]?.split("\n## ")[0] ?? "";
     expect(policy).toContain("`main`");
+    expect(policy).toContain("`development`");
+    expect(policy).toContain("stable default branch");
     expect(policy).not.toContain("enforce-target");
     expect(policy).toMatch(/[Bb]ypass/);
   });

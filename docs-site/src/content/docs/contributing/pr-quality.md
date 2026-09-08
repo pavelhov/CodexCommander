@@ -32,8 +32,9 @@ on your behalf.
 
 ## Target and description
 
-- Target **`main`**. It is the sole default, integration, and pull-request branch.
-- Branch from the current **`main`** tip.
+- Target **`development`** for feature and fix pull requests, branching from its current tip.
+- Reserve **`main`**, the stable default branch, for separately reviewed promotion PRs
+  from `development` after combined validation.
 - Write a real description: a **Summary** of what changed and why, plus how you
   verified it. Empty bodies and placeholder-only text are not review-ready.
 - If the title or description mentions the dashboard UI (`gui`), include a
