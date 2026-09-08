@@ -150,6 +150,32 @@ describe("codex-journal", () => {
     expect(existsSync(journalPath)).toBe(false);
   });
 
+  for (const changed of ["boot", "birth", "neither"] as const) {
+    test(`recovery checks persisted owner identity with a live PID: ${changed}`, () => {
+      if (process.platform !== "darwin" && process.platform !== "linux") return;
+      const original = readFileSync(join(testDir, "config.toml"), "utf8");
+      const modified = 'model_provider = "codexcommander"\n# Auto-injected by CodexCommander\n';
+      const r = runScript(testDir, `
+        const fs = require("node:fs");
+        const path = require("node:path");
+        const { writeJournal, reconcileJournal } = require("./src/codex/journal");
+        writeJournal({ intendedPostimage: { config: ${JSON.stringify(modified)}, profile: null } });
+        const journalPath = path.join(process.env.CODEX_HOME, "codexcommander-journal.json");
+        const journal = JSON.parse(fs.readFileSync(journalPath, "utf8"));
+        if (!journal.ownerIdentity?.birthToken) throw new Error("Missing OS owner identity");
+        if (${JSON.stringify(changed)} === "boot") journal.ownerIdentity.bootId = "00000000-0000-0000-0000-000000000000";
+        if (${JSON.stringify(changed)} === "birth") journal.ownerIdentity.birthToken = "different-original-owner";
+        fs.writeFileSync(journalPath, JSON.stringify(journal));
+        fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), ${JSON.stringify(modified)});
+        console.log(JSON.stringify({ restored: reconcileJournal() }));
+      `);
+      expect(r.status).toBe(0);
+      expect(JSON.parse(r.stdout).restored).toBe(changed !== "neither");
+      expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(changed === "neither" ? modified : original);
+      expect(existsSync(join(testDir, "codexcommander-journal.json"))).toBe(changed === "neither");
+    });
+  }
+
   test("writeJournal persists intended postimage hashes before any native write", () => {
     const original = readFileSync(join(testDir, "config.toml"), "utf8");
     const intendedConfig = [

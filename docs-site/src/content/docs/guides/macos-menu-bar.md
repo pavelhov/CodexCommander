@@ -304,6 +304,11 @@ relocatable and are not moved automatically.
   not expose a quota API.
 - **Restart did not recover** — open **Logs** and use the app's status panel. The companion never
   kills a process or rewrites service state as a fallback.
+- **Recovery after a reboot or unexpected exit** — new recovery checkpoints record the operating
+  system's boot session and the proxy's process identity when available. This lets recovery
+  distinguish the original proxy from another process that reused its process number. Existing
+  routing-file checks still apply. Older checkpoints without this identity remain conservative;
+  if recovery cannot be verified, follow the checkpoint guidance below.
 - **Codex route was not changed / recovery checkpoint could not be verified** — your existing route
   was deliberately left unchanged because CodexCommander could not prove that the saved recovery
   checkpoint and current routing files still belong together. Do not delete the journal. Use

@@ -11,6 +11,12 @@ import {
   readConfigAdmissionSnapshot,
   withConfigMutationLockSync,
 } from "../config";
+import {
+  journalOwnerIsProvenDead,
+  readJournalOwnerIdentity,
+  validJournalOwnerIdentity,
+  type JournalOwnerIdentity,
+} from "./journal-owner";
 import { canonicalizeCodexHome } from "./codex-write-lock";
 import { hasInjectedCodexRouting } from "./injected-marker";
 import {
@@ -63,6 +69,7 @@ interface Journal {
   injectedProfileHash?: string | null;
   pid: number;
   timestamp: string;
+  ownerIdentity?: JournalOwnerIdentity;
 }
 
 interface RestoreJournalResult {
@@ -117,7 +124,8 @@ function validJournalShape(value: unknown): value is Journal {
     && typeof journal.pid === "number"
     && Number.isSafeInteger(journal.pid)
     && journal.pid > 0
-    && typeof journal.timestamp === "string";
+    && typeof journal.timestamp === "string"
+    && (journal.ownerIdentity === undefined || validJournalOwnerIdentity(journal.ownerIdentity));
 }
 
 /**
@@ -168,19 +176,6 @@ function surfaceValue(
   absentValue: "" | null,
 ): string | null {
   return codexSurfaceText(snapshot, absentValue);
-}
-
-function journalOwnerIsProvenDead(pid: number): boolean {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (error) {
-    // EPERM is positive evidence that a process exists but is not signalable.
-    // Every error except the platform's explicit "no such process" stays
-    // unknown and therefore retains the recovery journal.
-    return (error as NodeJS.ErrnoException).code === "ESRCH";
-  }
 }
 
 function reportJournalRestore(): void {
@@ -262,6 +257,7 @@ function writeJournalUnlocked(options: WriteJournalOptions): void {
         }
       : {}),
     pid: process.pid,
+    ownerIdentity: readJournalOwnerIdentity(process.pid),
     timestamp: new Date().toISOString(),
   };
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal));
@@ -286,7 +282,7 @@ function journalAuthorityStillMatches(
   const current = readJournalFileSnapshot();
   return current !== null
     && sameJournalFile(expected, current)
-    && (!requireDeadOwner || journalOwnerIsProvenDead(current.journal.pid));
+    && (!requireDeadOwner || journalOwnerIsProvenDead(current.journal));
 }
 
 function profileIsLegacyOwned(snapshot: SurfaceSnapshot): boolean {
@@ -588,7 +584,7 @@ function reconcileJournalUnderMutationLock(
   authorizeMutation: AuthorizeJournalMutation = authorizeUncoordinatedMutation,
 ): boolean {
   const expected = readJournalFileSnapshot();
-  if (!expected || !journalOwnerIsProvenDead(expected.journal.pid)) return false;
+  if (!expected || !journalOwnerIsProvenDead(expected.journal)) return false;
   const configAtStart = readSurfaceSnapshot(CODEX_CONFIG_PATH);
   const profileAtStart = readSurfaceSnapshot(CODEX_PROFILE_PATH);
 
@@ -600,7 +596,7 @@ function reconcileJournalUnderMutationLock(
   if (
     !beforeRestore
     || !sameJournalFile(expected, beforeRestore)
-    || !journalOwnerIsProvenDead(beforeRestore.journal.pid)
+    || !journalOwnerIsProvenDead(beforeRestore.journal)
   ) return false;
   // Use the captured, revalidated journal rather than re-reading the path. A
   // concurrent replacement can therefore be retained, never restored/deleted
@@ -730,7 +726,7 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
   // for recovery is freshly captured after C is held.
   if (!existsSync(JOURNAL_PATH)) return false;
   const preliminary = readJournalFileSnapshot();
-  if (!preliminary || !journalOwnerIsProvenDead(preliminary.journal.pid)) return false;
+  if (!preliminary || !journalOwnerIsProvenDead(preliminary.journal)) return false;
   const preliminaryConfig = readSurfaceSnapshot(CODEX_CONFIG_PATH);
   const preliminaryProfile = readSurfaceSnapshot(CODEX_PROFILE_PATH);
   if (!preliminaryConfig || !preliminaryProfile) return false;
@@ -744,7 +740,7 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
       const profile = readSurfaceSnapshot(CODEX_PROFILE_PATH);
       return journal !== null
         && sameJournalFile(preliminary, journal)
-        && journalOwnerIsProvenDead(journal.journal.pid)
+        && journalOwnerIsProvenDead(journal.journal)
         && config !== null
         && sameSurfaceSnapshot(preliminaryConfig, config)
         && profile !== null
@@ -837,7 +833,9 @@ export function classifyActiveCodexRoutingJournal(
   }
   const journal = readJournalFileSnapshot();
   if (!journal) return refused("invalid-journal");
-  if (journal.journal.pid !== protectedLiveOwnerPid) return refused("owner-mismatch");
+  if (journal.journal.pid !== protectedLiveOwnerPid || journalOwnerIsProvenDead(journal.journal)) {
+    return refused("owner-mismatch");
+  }
   if (
     journal.journal.injectedConfigHash === undefined
     || journal.journal.injectedProfileHash === undefined
@@ -922,8 +920,9 @@ function samePersistedOffSnapshot(expected: PersistedOffSnapshot): boolean {
 }
 
 function explicitOwnerMatches(journal: Journal, owner: ExplicitNativeEscapeJournalOwner): boolean {
-  if (owner.kind === "dead") return journalOwnerIsProvenDead(journal.pid);
-  return Number.isSafeInteger(owner.pid) && owner.pid > 0 && journal.pid === owner.pid;
+  if (owner.kind === "dead") return journalOwnerIsProvenDead(journal);
+  return Number.isSafeInteger(owner.pid) && owner.pid > 0 && journal.pid === owner.pid
+    && !journalOwnerIsProvenDead(journal);
 }
 
 /**
