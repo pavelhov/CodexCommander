@@ -1,0 +1,20 @@
+import { afterEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { handleResponses, handleResponsesCompact } from "../src/server/responses";
+import type { CodexCommanderConfig } from "../src/types";
+const originalFetch = globalThis.fetch;
+const originalHome = process.env.CODEXCOMMANDER_HOME;
+const originalCodex = process.env.CODEX_HOME;
+const dirs: string[] = [];
+afterEach(() => { globalThis.fetch = originalFetch; if (originalHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = originalHome; if (originalCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodex; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
+for (const compact of [false, true]) test(`qualification native ${compact ? "compact" : "responses"} image and opaque input passthrough`, async () => {
+  const home = mkdtempSync(join(tmpdir(), "ccx-qualification-image-")); dirs.push(home); process.env.CODEXCOMMANDER_HOME = home; process.env.CODEX_HOME = home;
+  const cfg: CodexCommanderConfig = { port: 0, defaultProvider: "openai", multiAgentGuidanceEnabled: false, providers: { openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" } } };
+  const input = [{ type: "message", role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AA==" }] }, { type: "reasoning", id: "rs_fixture", encrypted_content: "fixture-ciphertext", summary: [] }];
+  let sends = 0;
+  globalThis.fetch = (async (url, init) => { expect(String(url)).toBe(`https://chatgpt.com/backend-api/codex/responses${compact ? "/compact" : ""}`); sends++; expect(JSON.parse(String(init?.body)).input).toEqual(input); return Response.json({ id: "resp_fixture", status: "completed", output: [], usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } }); }) as typeof fetch;
+  const response = await (compact ? handleResponsesCompact : handleResponses)(new Request(`http://127.0.0.1/v1/responses${compact ? "/compact" : ""}`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-token" }, body: JSON.stringify({ model: "gpt-5.4", input, stream: false }) }), cfg, {});
+  expect(response.status).toBe(200); await response.text(); expect(sends).toBe(1);
+});
