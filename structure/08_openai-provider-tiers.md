@@ -35,8 +35,7 @@ the auto-switch threshold, cooling down, soft-avoided, paused, or needs reauth; 
 drains a tier, and every tier drained leaves the eligible list untouched. Ordering never admits an
 account that pause, cooldown, health, or reauth already excluded, and never overrides those
 exclusions. It adds no new rebind cause for a bound thread, which still moves only for the reasons it
-already had: a quota-strategy threshold re-evaluation, a failover streak, an account that stopped
-being selectable, or affinity expiry. The stable `__main__` alias carries an order on equal terms with
+already had: a failover streak, an account that stopped being selectable, an account replacement, or affinity expiry. Quota thresholds affect new work only. The stable `__main__` alias carries an order on equal terms with
 added accounts, which is what lets the Desktop login be ordered last. An absent or empty map
 reproduces the prior selection sequence exactly.
 
@@ -75,8 +74,7 @@ openai-apikey/gpt-5.6-sol-pro       # API Pro virtual model
   change catalog, selected, requested, or wire model identity.
 - `openai-apikey` exposes namespaced API rows. Its trusted catalog contains `gpt-5.5`, `gpt-5.6`,
   Sol/Terra/Luna, and the three corresponding Pro variants. No generic `gpt-5.6-pro` alias exists.
-- API GPT-5.6 rows use 1,050,000 context tokens and 922,000 max input tokens. Codex-login rows keep
-  the native 372,000-token contract.
+- API GPT-5.6 rows use 1,050,000 context tokens and 922,000 max input tokens. Codex-login rows preserve the authoritative installed native catalog values, including absent compaction limits and the distinction between context and maximum context.
 - `*-pro` selected ids rewrite to the base wire id with `reasoning.mode: "pro"`; request logs,
   usage, model visibility, subagent state, and injection state retain the selected virtual id.
 - Compact preserves provider/selected identity but sends the base model without a reasoning object.

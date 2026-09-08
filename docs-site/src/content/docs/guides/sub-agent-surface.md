@@ -17,7 +17,7 @@ Choose the mode for **new sessions**. Existing sessions keep the surface they st
 | Mode | What Codex gets | Who should pick it |
 | --- | --- | --- |
 | **V1** | Classic namespaced `spawn_agent`, `send_input`, `resume_agent`, and `close_agent` tools. A spawn can select another model directly. | Beginners who need reliable delegation across different providers, especially native-to-routed children. |
-| **base** (default; **Codex native** in the GUI) | Upstream model pins: GPT-5.6 Sol/Terra use V2, Luna uses V1, and unpinned models follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
+| **base** (default; **Codex native** in the GUI) | Native entries preserve the installed source's collaboration field, including its absence. Routed compatibility entries may follow Codex's `multi_agent_v2` feature flag. | Most users. It follows Codex's intended surface for each model without forcing one globally. |
 | **V2** | Flat `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent`, and agent-list tools, with concurrent sessions. | Users who want the newer concurrent workflow. Mixed-provider parents must also choose the plaintext compatibility delivery policy described below. |
 
 :::tip[Not sure?]
@@ -31,7 +31,7 @@ must delegate to Kimi, Grok, DeepSeek, or another external provider.
 The selected mode controls the `multi_agent_version` field in every catalog entry Codex reads:
 
 - **V1** stamps `multi_agent_version = "v1"` on every model.
-- **base** restores upstream pins. Unpinned entries follow the native `multi_agent_v2` feature flag.
+- **base** restores authoritative native values, including an absent collaboration field. Routed compatibility entries may follow the native `multi_agent_v2` feature flag.
 - **V2** stamps `multi_agent_version = "v2"` on every model.
 
 CodexCommander applies this as the final pass to both the live `/v1/models` catalog and the catalog synced
