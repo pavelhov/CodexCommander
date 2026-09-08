@@ -1,5 +1,5 @@
 import { createDispatchRequest, dispatchAlias, type DispatchRequest, type DispatchAttempt, type DispatchMetadata, type DispatchSend } from "../usage/dispatch";
-import { observeDispatchUsage, observeDispatch, type DispatchHttpContext } from "../usage/dispatch-http";
+import { rawDispatchUsage, observeDispatch, type DispatchHttpContext } from "../usage/dispatch-http";
 import { existsSync, readFileSync } from "node:fs";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
@@ -328,6 +328,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       }
       : {};
     appendUsageEntry({
+      accounting: { version: 1, authority: entry.attempts?.length ? "attempts" : "logical" },
       requestId: entry.requestId,
       timestamp: entry.timestamp,
       provider: entry.provider,
@@ -1107,8 +1108,9 @@ export function inspectDispatchResponse(send: DispatchSend | undefined, parsed: 
   observeDispatch(() => {
     const event = parsed as { type?: unknown; status?: unknown; response?: unknown; usage?: unknown; error?: unknown; object?: unknown };
     const response = event.response && typeof event.response === "object" ? event.response as typeof event : event;
-    const usage = usageFromResponsesPayload(response.usage);
-    observeDispatchUsage(send, usage);
+    const final = event.type === "response.completed" || response.status === "completed" || response.object === "response.compaction";
+    const usage = rawDispatchUsage(response.usage, "responses", final);
+    if (usage) send.usage(usage);
     if (event.type === "response.completed" || response.status === "completed" || response.object === "response.compaction") send.terminal("protocol_success");
     else if (event.type === "response.failed" || event.type === "response.incomplete" || event.type === "error" || response.status === "failed" || response.status === "incomplete" || response.error) send.terminal("protocol_failure");
     if (event.type === "response.output_text.delta" || event.type === "response.function_call_arguments.delta") send.output();

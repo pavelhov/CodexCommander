@@ -52,7 +52,7 @@ export function readDispatchJournal() {
   } finally { if (fd !== undefined) { try { closeSync(fd); } catch { health.readFailures++; readFailed = true; } } }
   const folded = foldDispatchEvents(events);
   const degradation = { ...dispatchJournalHealth(), ...dispatchObserverHealth() };
-  return { ...folded, sourcePresent, degradationScope: "current_process" as const, invalidRows: folded.invalidRows + invalidRows, truncated, degradation,
+  return { ...folded, events, readFailed, sourcePresent, degradationScope: "current_process" as const, invalidRows: folded.invalidRows + invalidRows, truncated, degradation,
     complete: sourcePresent && folded.complete && !invalidRows && !truncated && !readFailed && degradation.appendFailures === 0 && degradation.invalidEvents === 0 && degradation.observerFailures === 0,
   };
 }

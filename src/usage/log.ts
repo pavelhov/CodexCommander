@@ -46,7 +46,11 @@ export interface PersistedUsageAttempt {
   reasoningWireValue?: string | number | boolean;
 }
 
+export interface UsageAccountingAuthority { version: 1; authority: "logical" | "attempts" }
+
 export interface PersistedUsageEntry {
+  /** Absent preserves legacy interpretation. Dispatch observations are never ledger contributions. */
+  accounting?: UsageAccountingAuthority;
   requestId: string;
   timestamp: number;
   provider: string;
@@ -401,6 +405,11 @@ export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): Persiste
   return normalizeUsageEntry(entry);
 }
 
+function isAccountingAuthority(raw: unknown): raw is UsageAccountingAuthority {
+  return isPlainRecord(raw) && hasOnlyKeys(raw, ["version", "authority"])
+    && raw.version === 1 && (raw.authority === "logical" || raw.authority === "attempts");
+}
+
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
   const routeDecision = entry.routeDecision
@@ -408,6 +417,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     : undefined;
   return {
     requestId: entry.requestId,
+    ...(isAccountingAuthority(entry.accounting) ? { accounting: { version: 1 as const, authority: entry.accounting.authority } } : {}),
     timestamp: entry.timestamp,
     provider: entry.provider,
     model: entry.model,
@@ -492,7 +502,7 @@ export function decodeUsageRow(raw: unknown): PersistedUsageEntry | null {
     "reasoningWireField", "reasoningWireValue", "requestedServiceTier", "requestedSpeedLabel", "configuredServiceTier",
     "configuredSpeedLabel", "modelSupportsServiceTier", "responseServiceTier", "status", "durationMs", "firstOutputMs",
     "usageStatus", "usage", "totalTokens", "attempts", "errorCode", "terminalStatus", "closeReason", "upstreamError",
-    "routeDecision", "upstreamRetryAfter",
+    "routeDecision", "upstreamRetryAfter", "accounting",
   ])) return null;
   if (!isNonEmptyString(raw.requestId, 256) || !isNonNegativeFiniteNumber(raw.timestamp)
     || !isNonEmptyString(raw.provider, 256) || !isNonEmptyString(raw.model, 512)
@@ -500,7 +510,8 @@ export function decodeUsageRow(raw: unknown): PersistedUsageEntry | null {
     || (raw.status as number) < 100 || (raw.status as number) > 599
     || !isNonNegativeFiniteNumber(raw.durationMs)
     || typeof raw.usageStatus !== "string" || !USAGE_STATUSES.has(raw.usageStatus as UsageStatus)) return null;
-  if (("apiKeyId" in raw && !isNonEmptyString(raw.apiKeyId, 512))
+  if (("accounting" in raw && !isAccountingAuthority(raw.accounting))
+    || ("apiKeyId" in raw && !isNonEmptyString(raw.apiKeyId, 512))
     || ("admissionKind" in raw && !isKnownAdmissionKind(raw.admissionKind))
     || ("inboundProtocol" in raw && !isKnownInboundProtocol(raw.inboundProtocol))
     || ("conversationId" in raw && !isNonEmptyString(raw.conversationId, 128))

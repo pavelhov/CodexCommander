@@ -1,5 +1,5 @@
 import type { AdapterEvent, CodexCommanderUsage } from "../types";
-import { recordDispatchObserverFailure, type DispatchAttempt, type DispatchMetadata, type DispatchSend } from "./dispatch";
+import { recordDispatchObserverFailure, type DispatchAttempt, type DispatchMetadata, type DispatchSend, type DispatchUsage } from "./dispatch";
 
 /** Process-local observer context. Never spread this into a RequestInit or wire payload. */
 export interface DispatchHttpContext {
@@ -69,6 +69,8 @@ export function observeDispatchUsage(send: DispatchSend | undefined, usage: Code
     outputTokens: usage.outputTokens,
     cacheReadInputTokens: usage.cacheReadInputTokens ?? usage.cachedInputTokens,
     cacheCreationInputTokens: usage.cacheCreationInputTokens,
+    reasoningOutputTokens: usage.reasoningOutputTokens,
+    contextTotalTokens: usage.contextTotalTokens,
   }));
 }
 const adapterTerminals = new WeakSet<Response>();
@@ -97,4 +99,44 @@ export async function* observeAdapterStream(response: Response, events: AsyncIte
     observeDispatch(() => responseDispatch(response)?.terminal("protocol_failure"));
     throw error;
   } finally { cleanupResponseDispatch(response); }
+}
+
+/** Materialized provider fields only. Missing fields never become measured zero.
+ * Anthropic raw input excludes caches; Responses input already includes them. */
+export function rawDispatchUsage(
+  raw: unknown,
+  protocol: "responses" | "messages",
+  final: boolean,
+  previous?: DispatchUsage,
+): DispatchUsage | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return previous;
+  const source = raw as Record<string, unknown>;
+  const measured = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? value : undefined;
+  const detail = (key: string, field: string): number | undefined => {
+    const object = source[key];
+    return object && typeof object === "object" ? measured((object as Record<string, unknown>)[field]) : undefined;
+  };
+  const usage: DispatchUsage = { ...previous, provenance: "provider", completeness: "partial" };
+  const input = measured(source.input_tokens);
+  const output = measured(source.output_tokens);
+  const read = protocol === "messages" ? measured(source.cache_read_input_tokens) : detail("input_tokens_details", "cached_tokens");
+  const creation = protocol === "messages" ? measured(source.cache_creation_input_tokens) : undefined;
+  if (output !== undefined) usage.outputTokens = output;
+  if (protocol === "messages") {
+    const uncached = input ?? (previous?.inputTokens === undefined ? undefined
+      : previous.inputTokens - (previous.cacheReadInputTokens ?? 0) - (previous.cacheCreationInputTokens ?? 0));
+    if (read !== undefined) usage.cacheReadInputTokens = read;
+    if (creation !== undefined) usage.cacheCreationInputTokens = creation;
+    if (uncached !== undefined) usage.inputTokens = uncached + (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0);
+  } else {
+    if (input !== undefined) usage.inputTokens = input;
+    if (read !== undefined) usage.cacheReadInputTokens = read;
+    const reasoning = detail("output_tokens_details", "reasoning_tokens");
+    if (reasoning !== undefined) usage.reasoningOutputTokens = reasoning;
+  }
+  if (usage.inputTokens === undefined && usage.outputTokens === undefined
+    && usage.cacheReadInputTokens === undefined && usage.cacheCreationInputTokens === undefined) return undefined;
+  if (final && usage.inputTokens !== undefined && usage.outputTokens !== undefined
+    && (protocol === "responses" || (usage.cacheReadInputTokens !== undefined && usage.cacheCreationInputTokens !== undefined))) usage.completeness = "complete";
+  return usage;
 }
