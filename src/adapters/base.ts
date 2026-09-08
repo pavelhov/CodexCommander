@@ -1,3 +1,4 @@
+import type { DispatchHttpContext } from "../usage/dispatch-http";
 import type { AdapterEvent, CodexCommanderParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
@@ -72,6 +73,8 @@ export interface AdapterRequest {
 }
 
 export interface AdapterFetchContext {
+  /** Process-local inference observer; never serialized upstream. */
+  dispatch?: DispatchHttpContext;
   /** Remains attached to the returned response body after the response headers arrive. */
   abortSignal?: AbortSignal;
   /** Deadline for receiving response headers on each attempt, not for consuming the response body. */

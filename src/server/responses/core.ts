@@ -1,3 +1,5 @@
+import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
+import { cleanupResponseDispatch, observeAdapterEvent, observeAdapterStream, observeDispatch, responseDispatch } from "../../usage/dispatch-http";
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
@@ -441,6 +443,7 @@ async function retryCodexPoolOnAlternateAccount(
   recordAdapterReasoning(logCtx, request);
 
   await firstResponse.body?.cancel().catch(() => undefined);
+  cleanupResponseDispatch(firstResponse);
   options.onCodexAuthContextResolved?.(retryAuthCtx);
   route.provider = retryProvider;
   logCtx.provider = formatCodexProviderForLog(
@@ -465,6 +468,7 @@ async function retryCodexPoolOnAlternateAccount(
       // Credential-bearing forward send: never follow a redirect into a
       // dead-host rejection after the credential was seen (#914).
       route.provider.authMode === "forward",
+      requestDispatchContext(logCtx, options.abortSignal ?? req.signal, "fallback"),
     );
     // A real HTTP response proves the host was reached (#914).
     resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
@@ -1032,6 +1036,7 @@ export async function handleComboResponses(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions,
 ): Promise<Response> {
+  initializeRequestDispatch(logCtx, options.inboundWire === "anthropic" ? "messages" : options.inboundWire ?? "responses");
   const requestedModel = typeof (rawBody as { model?: unknown } | null)?.model === "string"
     ? (rawBody as { model: string }).model
     : `combo/${comboId}`;
@@ -1096,6 +1101,8 @@ export async function handleComboResponses(
   while (pick) {
     if (options.abortSignal?.aborted) return clientCancelledResponse();
     const childLog: RequestLogContext = {
+      dispatchRequest: logCtx.dispatchRequest,
+      dispatchSurface: logCtx.dispatchSurface,
       model: pick.target.model,
       provider: pick.target.provider,
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
@@ -1123,6 +1130,7 @@ export async function handleComboResponses(
       pick.target.model,
       config.providers[pick.target.provider]!.adapter,
     );
+    childLog.dispatchAttempt = undefined;
     childLog.activeAttempt = attempt;
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
@@ -1294,6 +1302,7 @@ export async function handleResponses(
   logCtx: RequestLogContext,
   options: HandleResponsesOptions = {},
 ): Promise<Response> {
+  initializeRequestDispatch(logCtx, options.inboundWire === "anthropic" ? "messages" : options.inboundWire ?? "responses");
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
   let ownedBudgetSettled = false;
@@ -1693,6 +1702,7 @@ async function handleResponsesInner(
     parsed.options.promptCacheKey,
     route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
   );
+  requestDispatchContext(logCtx, options.abortSignal ?? req.signal, undefined, config.providers[route.providerName]);
   const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
   logCtx.providerAdapter = adapter.name;
@@ -1888,7 +1898,7 @@ async function handleResponsesInner(
             headers: request.headers,
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
-            route.provider.authMode === "forward")
+            route.provider.authMode === "forward", requestDispatchContext(logCtx, options.abortSignal ?? req.signal, recovery ? "retry" : undefined))
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(res => {
@@ -1949,7 +1959,7 @@ async function handleResponsesInner(
               headers: request.headers,
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
-              route.provider.authMode === "forward")
+              route.provider.authMode === "forward", requestDispatchContext(logCtx, options.abortSignal ?? req.signal, recovery ? "retry" : undefined))
               .then(res => {
                 resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
                 return res;
@@ -2014,6 +2024,7 @@ async function handleResponsesInner(
     }
     // The chatgpt backend may omit Content-Type on SSE responses. Fall back to
     // treating a successful body as SSE when the caller requested streaming.
+    logCtx.dispatchSend = responseDispatch(upstreamResponse);
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
       || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
@@ -2093,10 +2104,12 @@ async function handleResponsesInner(
       recordUpstreamRetryAfter(logCtx, upstreamResponse.headers.get("retry-after"));
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        cleanupResponseDispatch(upstreamResponse);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
       const errorText = await upstreamResponse.text().catch(() => "");
+      cleanupResponseDispatch(upstreamResponse);
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
@@ -2306,7 +2319,7 @@ async function handleResponsesInner(
       const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0
         ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite ?? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)), translatorBudget)
         : nativeBody;
-      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => clientGone.abort(reason));
+      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => { observeDispatch(() => responseDispatch(upstreamResponse)?.cancel("client")); clientGone.abort(reason); });
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,
@@ -2320,6 +2333,7 @@ async function handleResponsesInner(
       // streaming terminal event is unreliable are deliberately answered with bounded JSON.
       // Oversize and stall deadlines both fail closed; a partial body is never parsed.
       const bounded = await readBoundedResponseBody(upstreamResponse, UPSTREAM_JSON_BODY_READ_OPTIONS);
+      cleanupResponseDispatch(upstreamResponse);
       if (bounded.oversized) {
         return formatErrorResponse(502, "upstream_error", "upstream JSON response exceeded the safe body limit");
       }
@@ -2328,6 +2342,8 @@ async function handleResponsesInner(
       }
       const text = bounded.text;
       inspectResponseLogJson(logCtx, text);
+      observeDispatch(() => responseDispatch(upstreamResponse)?.terminal("unknown"));
+      cleanupResponseDispatch(upstreamResponse);
       if (rememberPassthroughResponse) {
         try {
           rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
@@ -2677,6 +2693,7 @@ async function handleResponsesInner(
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
         stream: parsed.stream,
+        dispatch: requestDispatchContext(logCtx, options.abortSignal ?? req.signal),
       });
     } else {
       upstreamResponse = await fetchWithResetRetry(
@@ -2686,7 +2703,7 @@ async function handleResponsesInner(
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
             body: builtInitialRequest.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider), false, requestDispatchContext(logCtx, options.abortSignal ?? req.signal));
         },
         { abortSignal: upstream.signal, label: safeHostLabel(builtInitialRequest.url) },
       );
@@ -2762,10 +2779,10 @@ async function handleResponsesInner(
       try {
         try {
           return activeAdapter.fetchResponse
-            ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
+            ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream, dispatch: requestDispatchContext(logCtx, options.abortSignal ?? req.signal, "recovery") })
             : await fetchWithHeaderTimeout(retryRequest.url, {
               method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-            }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+            }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider), false, requestDispatchContext(logCtx, options.abortSignal ?? req.signal));
         } finally {
           retryRequest.releaseBodyObservation?.();
         }
@@ -2787,6 +2804,7 @@ async function handleResponsesInner(
         && !oauth401ReplayAttempted
       ) {
         oauth401ReplayAttempted = true;
+        cleanupResponseDispatch(upstreamResponse);
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         let refreshed: OAuthAccessSnapshot;
         try {
@@ -2869,6 +2887,7 @@ async function handleResponsesInner(
         if (!rotated) break;
         // Release the failed response's socket before retrying; unread bodies otherwise linger
         // until runtime cleanup (one per rotated key under a rate-limit storm).
+        cleanupResponseDispatch(upstreamResponse);
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         route.provider = rotated;
         invalidateSameTargetRequest();
@@ -2896,6 +2915,7 @@ async function handleResponsesInner(
           anthropicSessionKey,
         );
         if (!nextAccountId) break;
+        cleanupResponseDispatch(upstreamResponse);
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         try {
           const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
@@ -2928,6 +2948,7 @@ async function handleResponsesInner(
         imageRetryAttempted = true;
         imageTierBias = 1;
         invalidateSameTargetRequest();
+        cleanupResponseDispatch(upstreamResponse);
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
         const result = await rebuildAndRefetch("image-413");
         if ("failed" in result) return result.failed;
@@ -2947,6 +2968,7 @@ async function handleResponsesInner(
         return failure.response;
       }
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
+      cleanupResponseDispatch(upstreamResponse);
       cleanupUpstreamAbort();
       if (!isFixedCodexAccount(authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(
@@ -3036,6 +3058,7 @@ async function handleResponsesInner(
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
             stream: nextParsed.stream,
+            dispatch: requestDispatchContext(logCtx, options.abortSignal ?? req.signal, "continuation"),
           });
         }
         return await fetchWithResetRetry(
@@ -3052,6 +3075,8 @@ async function handleResponsesInner(
               connectMs,
               nextParsed.stream,
               providerFetch(route.provider),
+              false,
+              requestDispatchContext(logCtx, options.abortSignal ?? req.signal, "continuation"),
             );
           },
           { abortSignal: upstream.signal, label: safeHostLabel(builtContinuationRequest.url) },
@@ -3129,6 +3154,7 @@ async function handleResponsesInner(
           promptCacheKey: nextParsed.options.promptCacheKey,
         });
         if (rotated) {
+          cleanupResponseDispatch(response);
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           route.provider = rotated;
           invalidateSameTargetRequest();
@@ -3153,6 +3179,7 @@ async function handleResponsesInner(
           anthropicSessionKey,
         );
         if (nextAccountId) {
+          cleanupResponseDispatch(response);
           try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
           try {
             const accessToken = await getAnthropicPoolAccessToken(nextAccountId);
@@ -3182,7 +3209,8 @@ async function handleResponsesInner(
       })) {
         imageTierBias = 1;
         invalidateSameTargetRequest();
-        try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+        cleanupResponseDispatch(response);
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         nextContinuationRecoveryKind = "image-413";
         continue;
       }
@@ -3206,9 +3234,11 @@ async function handleResponsesInner(
       const detachContinuationBodyGuard = cancelBodyOnAbort(response.body, upstream.signal);
       try {
         if (nextParsed.stream) {
-          yield* activeAdapter.parseStream(response, translatorBudget);
+          yield* observeAdapterStream(response, activeAdapter.parseStream(response, translatorBudget));
         } else if (activeAdapter.parseResponse) {
-          yield* await activeAdapter.parseResponse(response, translatorBudget);
+          const events = await activeAdapter.parseResponse(response, translatorBudget);
+          for (const event of events) { observeAdapterEvent(response, event); yield event; }
+          observeDispatch(() => responseDispatch(response)?.terminal("unknown"));
         } else {
           yield { type: "error", message: "Provider continuation does not support response parsing" };
         }
@@ -3225,7 +3255,7 @@ async function handleResponsesInner(
   };
 
   if (parsed.stream) {
-    const initialEventStream = activeAdapter.parseStream(upstreamResponse, translatorBudget);
+    const initialEventStream = observeAdapterStream(upstreamResponse, activeAdapter.parseStream(upstreamResponse, translatorBudget));
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
@@ -3282,6 +3312,8 @@ async function handleResponsesInner(
     let events: AdapterEvent[];
     try {
       const initialEvents = await activeAdapter.parseResponse(upstreamResponse, translatorBudget);
+      for (const event of initialEvents) observeAdapterEvent(upstreamResponse, event);
+      observeDispatch(() => responseDispatch(upstreamResponse)?.terminal("unknown"));
       if (terminalGuardEnabled) {
         events = [];
         for await (const event of guardTerminalEventStream({
@@ -3296,6 +3328,7 @@ async function handleResponsesInner(
       }
     } finally {
       cleanupUpstreamAbort();
+      cleanupResponseDispatch(upstreamResponse);
     }
     const { toolNsMap, freeformToolNames, toolSearchToolNames, toolParameterSchemas } = toolBridgeMaps;
     let providerState: CodexCommanderProviderContinuationState | undefined;

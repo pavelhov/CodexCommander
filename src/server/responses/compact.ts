@@ -1,3 +1,5 @@
+import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
+import { cleanupResponseDispatch, responseDispatch, observeDispatch } from "../../usage/dispatch-http";
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import {
@@ -253,6 +255,7 @@ export async function handleResponsesCompact(
   logCtx: RequestLogContext,
   turnAdmissionLease?: ActiveTurnLease,
 ): Promise<Response> {
+  initializeRequestDispatch(logCtx, "compact");
   let body: unknown;
   try {
     body = await readJsonRequestBody(req);
@@ -414,6 +417,7 @@ export async function handleResponsesCompact(
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).
         sendProvider.authMode === "forward",
+        requestDispatchContext(logCtx, req.signal, upstreamRecovery ? "retry" : "compaction", config.providers[route.providerName]),
       ).then(res => {
         // Every real attempt response — including an intermediate 5xx the retry
         // wrapper replaces — proves the host was reached (#914 review).
@@ -536,6 +540,7 @@ export async function handleResponsesCompact(
     // Record pool health only after the body is fully delivered (or definitively failed).
     // A premature 200 would clear soft-avoid while the client still sees a buffer 502.
     if (buffered.status === 499) {
+      cleanupResponseDispatch(upstream);
       recordCompactPoolOutcome(outcomeCtx, 499);
       return buffered;
     }
@@ -545,7 +550,13 @@ export async function handleResponsesCompact(
     // Lift usage and response metadata from the buffered upstream JSON into the
     // request log; the routed branch gets the same through handleResponses. The
     // synthetic buffer errors are not upstream bodies and stay uninspected.
-    if (buffered.ok) inspectResponseLogJson(logCtx, await buffered.clone().text());
+    if (buffered.ok) {
+      logCtx.dispatchSend = responseDispatch(upstream);
+      const text = await buffered.clone().text();
+      inspectResponseLogJson(logCtx, text);
+    }
+    observeDispatch(() => responseDispatch(upstream)?.terminal("unknown"));
+    cleanupResponseDispatch(upstream);
     return buffered;
   }
 

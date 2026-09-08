@@ -1,3 +1,4 @@
+import { cleanupDispatchBody, cleanupResponseDispatch, dispatchHttpFetch, type DispatchHttpContext } from "../usage/dispatch-http";
 /**
  * Retry guard for upstream fetches that die on stale pooled keep-alive sockets.
  *
@@ -87,6 +88,7 @@ export async function releaseResponseBodyBestEffort(
   timeoutMs = 1_000,
 ): Promise<void> {
   if (!body) return;
+  cleanupDispatchBody(body);
   if (signal?.aborted) {
     void body.cancel().catch(() => {});
     return;
@@ -201,6 +203,7 @@ export function retryBackoffDelayMs(attempt: number, opts: RetryBackoffOptions):
 }
 
 export function cancelResponseBodyBestEffort(res: Response): void {
+  cleanupResponseDispatch(res);
   try {
     const cancellation = res.body?.cancel();
     if (cancellation) void cancellation.catch(() => {});
@@ -215,6 +218,7 @@ export async function fetchWithAttemptDeadline(
   timeoutMs: number,
   abortSignal?: AbortSignal,
   preferIdentityEncoding = false,
+  dispatch?: DispatchHttpContext,
 ): Promise<Response> {
   const attemptTimeout = clearableDeadline(timeoutMs, abortSignal);
   const headers = new Headers(init.headers);
@@ -222,11 +226,11 @@ export async function fetchWithAttemptDeadline(
     headers.set("accept-encoding", "identity");
   }
   try {
-    return await fetch(url, {
+    return await dispatchHttpFetch(fetch, url, {
       ...init,
       headers,
       signal: attemptTimeout.signal,
-    });
+    }, dispatch);
   } finally {
     // Only the header timer is cleared. The composed signal still contains the parent, so a
     // caller abort after headers continue to cancel consumption of the returned response body.

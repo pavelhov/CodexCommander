@@ -75,6 +75,7 @@ export function dispatchAlias(identity: object): DispatchAlias {
   return alias;
 }
 let observerFailures = 0;
+export function recordDispatchObserverFailure(): void { observerFailures++; }
 export function dispatchObserverHealth(): { observerFailures: number } { return { observerFailures }; }
 const enums = {
   transport: ["http", "websocket", "sidecar"],

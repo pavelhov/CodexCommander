@@ -1,3 +1,5 @@
+import { createDispatchRequest, dispatchAlias, type DispatchRequest, type DispatchAttempt, type DispatchMetadata, type DispatchSend } from "../usage/dispatch";
+import { observeDispatchUsage, observeDispatch, type DispatchHttpContext } from "../usage/dispatch-http";
 import { existsSync, readFileSync } from "node:fs";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
@@ -38,6 +40,11 @@ import { matchesLogConversationId } from "./request-log-conversation";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
 export interface RequestLogContext {
+  /** Process-local accounting only: omitted from legacy usage/log serialization. */
+  dispatchRequest?: DispatchRequest;
+  dispatchAttempt?: DispatchAttempt;
+  dispatchSurface?: DispatchMetadata["surface"];
+  dispatchSend?: DispatchSend;
   model: string;
   provider: string;
   /** TTFT: ms from request start to the first non-empty model output delta (WP4, implementation contract). */
@@ -595,7 +602,9 @@ export function usageFromResponsesPayload(usage: unknown): CodexCommanderUsage |
 
 export function inspectResponseLogJson(logCtx: RequestLogContext, text: string): void {
   try {
-    applyResponseLogMetadata(logCtx, JSON.parse(text));
+    const parsed: unknown = JSON.parse(text);
+    applyResponseLogMetadata(logCtx, parsed);
+    inspectDispatchResponse(logCtx.dispatchSend, parsed);
   } catch {
     /* body may not be JSON; request log metadata is best-effort only */
   }
@@ -1080,4 +1089,28 @@ export function clearRequestLogsForTests(): void {
   requestLogBytes = 0;
   requestLogSeq = 0;
   requestLogsHydratedFromDisk = false;
+}
+
+/** Dispatch-only scopes do not initialize legacy attempt aggregation. */
+export function initializeRequestDispatch(logCtx: RequestLogContext, surface: DispatchMetadata["surface"]): void {
+  observeDispatch(() => { logCtx.dispatchRequest ??= createDispatchRequest(); logCtx.dispatchSurface ??= surface; });
+}
+export function requestDispatchContext(logCtx: RequestLogContext, clientSignal?: AbortSignal, reason?: DispatchMetadata["reason"], routeIdentity?: object): DispatchHttpContext {
+  initializeRequestDispatch(logCtx, logCtx.inboundProtocol ?? "responses");
+  observeDispatch(() => { logCtx.dispatchAttempt ??= logCtx.dispatchRequest?.attempt({ surface: logCtx.dispatchSurface, protocol: logCtx.inboundProtocol ?? (logCtx.dispatchSurface === "messages" ? "messages" : logCtx.dispatchSurface === "chat" ? "chat" : "responses"), ...(routeIdentity ? { routeRef: dispatchAlias(routeIdentity) } : {}) }); });
+  return { attempt: logCtx.dispatchAttempt, clientSignal, reason };
+}
+
+/** Only protocol fields already materialized by a consumer are inspected. */
+export function inspectDispatchResponse(send: DispatchSend | undefined, parsed: unknown): void {
+  if (!send || !parsed || typeof parsed !== "object") return;
+  observeDispatch(() => {
+    const event = parsed as { type?: unknown; status?: unknown; response?: unknown; usage?: unknown; error?: unknown; object?: unknown };
+    const response = event.response && typeof event.response === "object" ? event.response as typeof event : event;
+    const usage = usageFromResponsesPayload(response.usage);
+    observeDispatchUsage(send, usage);
+    if (event.type === "response.completed" || response.status === "completed" || response.object === "response.compaction") send.terminal("protocol_success");
+    else if (event.type === "response.failed" || event.type === "response.incomplete" || event.type === "error" || response.status === "failed" || response.status === "incomplete" || response.error) send.terminal("protocol_failure");
+    if (event.type === "response.output_text.delta" || event.type === "response.function_call_arguments.delta") send.output();
+  });
 }
