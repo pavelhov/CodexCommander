@@ -41,8 +41,8 @@ test("ordinary messages and tool results need no ownership; unknown encrypted ar
 
 test("reference, encrypted history and per-turn state have independent origin evidence", () => {
   const owner = nativeOwner("owner-a", 1);
-  rememberNativeArtifacts({ id: "known-response", output: [] }, new Headers({"x-codex-turn-state":"known-turn"}), owner);
-  expect(classifyNativeArtifactProvenance({previous_response_id:"known-response",input:[{encrypted_content:"unobserved-cipher"}]}, new Headers({"x-codex-turn-state":"known-turn"}), owner)).toEqual({reference:"same",encrypted:"unknown",turnState:"same"});
+  rememberNativeArtifacts({ id: "known-response", output: [] }, new Headers({"x-codex-turn-state":"known-turn"}), owner, "origin-turn");
+  expect(classifyNativeArtifactProvenance({previous_response_id:"known-response",input:[{encrypted_content:"unobserved-cipher"}]}, new Headers({"x-codex-turn-state":"known-turn"}), owner, "origin-turn")).toEqual({reference:"same",encrypted:"unknown",turnState:"same"});
   expect(classifyNativeArtifactProvenance({}, new Headers({"x-codex-routing-hint":"model=gpt-5;tier=default"}), undefined)).toEqual({reference:"none",encrypted:"none",turnState:"none"});
 });
 
@@ -50,4 +50,17 @@ test("bounded canonical turn metadata participates in own-task conflict checks",
   expect(resolveCodexTaskIdentity(new Headers({"x-codex-turn-metadata":JSON.stringify({thread_id:"own",parent_thread_id:"parent"}),session_id:"session"})).taskId).toBe("own");
   expect(resolveCodexTaskIdentity(new Headers({"thread-id":"header"}), {thread_id:"body"}).source).toBe("conflict");
   expect(resolveCodexTaskIdentity(new Headers(), {thread_id:null,parent_thread_id:"parent"}).source).toBe("conflict");
+});
+
+test("sticky turn state belongs to its originating turn without constraining encrypted replay", () => {
+  const owner = nativeOwner("turn-owner", "credential");
+  const headers = new Headers({"x-codex-turn-state":"sticky-token"});
+  rememberNativeArtifacts({output:[{encrypted_content:"replayable-cipher"}]}, headers, owner, "turn-a");
+  const body = {input:[{encrypted_content:"replayable-cipher"}]};
+  expect(classifyNativeArtifactProvenance(body, headers, owner, "turn-a")).toEqual({encrypted:"same",reference:"none",turnState:"same"});
+  expect(classifyNativeArtifactProvenance(body, headers, owner, "turn-b")).toEqual({encrypted:"same",reference:"none",turnState:"different-turn"});
+  expect(classifyNativeArtifactProvenance(body, headers, owner).turnState).toBe("unknown");
+  clearNativeOwnershipMemoryForTests();
+  expect(classifyNativeArtifactProvenance(body, headers, owner, "turn-a").turnState).toBe("same");
+  expect(readFileSync(join(home,"native-ownership.json"),"utf8")).not.toContain("turn-a");
 });

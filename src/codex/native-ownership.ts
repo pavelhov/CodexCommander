@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 
 export type NativeOwner = { account: string; generation: string };
-type RecordEntry = { kind: "task" | "artifact"; key: string; account: string; generation: string; at: number };
+type RecordEntry = { kind: "task" | "artifact"; key: string; account: string; generation: string; turn?: string; at: number };
 const MAX_ENTRIES = 4096;
 const TTL = 24 * 60 * 60_000;
 const digestPattern = /^[a-f0-9]{64}$/;
@@ -33,7 +33,7 @@ function load(): string {
     for (const item of data.entries) {
       if (!item || !["task", "artifact"].includes(item.kind) || !digestPattern.test(item.key) || !validOwner(item) || !Number.isFinite(item.at)
         || item.at > Date.now() + 60_000 || Date.now() - item.at > TTL) continue;
-      entries.set(item.key, { kind: item.kind, key: item.key, account: item.account, generation: item.generation, at: item.at });
+      entries.set(item.key, { kind: item.kind, key: item.key, account: item.account, generation: item.generation, at: item.at, ...(typeof item.turn === "string" && digestPattern.test(item.turn) ? { turn: item.turn } : {}) });
     }
   } catch { /* Untrusted or unavailable cache fails closed. */ }
   return path;
@@ -100,30 +100,34 @@ function artifactKeys(body: unknown, headers?: Headers, response = false): Array
   for (const field of ARTIFACT_HEADERS) add(field, headers?.get(field));
   return keys;
 }
-export type NativeArtifactProvenance = "none" | "same" | "different-account" | "different-generation" | "unknown";
+export type NativeArtifactProvenance = "none" | "same" | "different-account" | "different-generation" | "different-turn" | "unknown";
 /** Origin evidence by kind, never a compatibility verdict. Encrypted replay and connection state differ. */
-export function classifyNativeArtifactProvenance(body: unknown, headers: Headers | undefined, owner: NativeOwner | undefined): Record<NativeArtifactKind, NativeArtifactProvenance> {
+export function classifyNativeArtifactProvenance(body: unknown, headers: Headers | undefined, owner: NativeOwner | undefined, turnId?: string): Record<NativeArtifactKind, NativeArtifactProvenance> {
   const result: Record<NativeArtifactKind, NativeArtifactProvenance> = { encrypted: "none", reference: "none", turnState: "none" };
   let keys: ReturnType<typeof artifactKeys>;
   try { keys = artifactKeys(body, headers); } catch { return { encrypted: "unknown", reference: "unknown", turnState: "unknown" }; }
-  const rank: Record<NativeArtifactProvenance, number> = { none: 0, same: 1, unknown: 2, "different-generation": 3, "different-account": 4 };
+  const rank: Record<NativeArtifactProvenance, number> = { none: 0, same: 1, unknown: 2, "different-generation": 3, "different-account": 4, "different-turn": 5 };
   for (const { key, kind } of keys) {
     const entry = readNativeOwnership(key);
     const status: NativeArtifactProvenance = !owner || !entry ? "unknown"
       : entry.account !== owner.account ? "different-account"
-      : entry.generation !== owner.generation ? "different-generation" : "same";
+      : entry.generation !== owner.generation ? "different-generation"
+      : kind === "turnState" && (!turnId || !entry.turn) ? "unknown"
+      : kind === "turnState" && entry.turn !== ownershipFingerprint("turn", turnId!) ? "different-turn"
+      : "same";
     if (rank[status] > rank[result[kind]]) result[kind] = status;
   }
   return result;
 }
 /** Call only with artifacts actually received from upstream (terminal response or output item). */
-export function rememberNativeArtifacts(response: unknown, headers: Headers | undefined, owner: NativeOwner): void {
+export function rememberNativeArtifacts(response: unknown, headers: Headers | undefined, owner: NativeOwner, turnId?: string): void {
   if (!validOwner(owner)) return;
   let keys: ReturnType<typeof artifactKeys>;
   try { keys = artifactKeys(response, headers, true); } catch { return; }
   const path = load();
-  for (const { key } of keys) {
-    entries.delete(key); entries.set(key, { kind: "artifact", key, ...owner, at: Date.now() });
+  for (const { key, kind } of keys) {
+    entries.delete(key); entries.set(key, { kind: "artifact", key, ...owner, at: Date.now(),
+      ...(kind === "turnState" && turnId ? { turn: ownershipFingerprint("turn", turnId) } : {}) });
   }
   while (entries.size > MAX_ENTRIES) entries.delete(entries.keys().next().value!);
   if (keys.length) persist(path);
