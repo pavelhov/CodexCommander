@@ -113,11 +113,12 @@ export function createCursorAdapter(provider: CodexCommanderProviderConfig, deps
         let replayUnsafe = false;
         const lastRawIsToolResult = _parsed.context.messages.at(-1)?.role === "toolResult";
 
-        const runOnce = async (activeRequest: ReturnType<typeof createCursorRequest>) => {
+        const runOnce = async (activeRequest: ReturnType<typeof createCursorRequest>, recovery = false) => {
           await runCursorTurnWithRetry(
             makeTransport,
             {
               provider,
+              dispatch: incoming.dispatch ? { ...incoming.dispatch, ...(recovery ? { reason: "recovery" as const } : {}) } : undefined,
               headers: incoming.headers,
               translatorBudget: incoming.translatorBudget,
               requestDeclaresFullAccess: cursorRequestDeclaresFullAccess(activeRequest),
@@ -175,7 +176,7 @@ export function createCursorAdapter(provider: CodexCommanderProviderConfig, deps
               _parsed._cursorIdentityScope,
             );
           }
-          await runOnce(request);
+          await runOnce(request, true);
         }
       } catch (err) {
         if (isCursorBenignCancelError(err)) return;

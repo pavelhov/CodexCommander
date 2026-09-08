@@ -39,7 +39,7 @@ export async function fetchGoogleWithRetry(label: string, request: AdapterReques
         method: activeRequest.method,
         headers: activeRequest.headers,
         body: activeRequest.body,
-      }, timeoutMs, ctx.abortSignal, ctx.stream);
+      }, timeoutMs, ctx.abortSignal, ctx.stream, ctx.dispatch);
       if (res.status === 400 && !compatibilityReplayUsed) {
         let payloadText = "";
         try {

@@ -1,4 +1,6 @@
 import http2 from "node:http2";
+import type { DispatchSend } from "../../usage/dispatch";
+import { observeDispatch } from "../../usage/dispatch-http";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { namespacedToolName, type CodexCommanderProviderConfig, type CodexCommanderUsage } from "../../types";
 import { CONNECT_FLAG_END_STREAM, ConnectFrameError, consumeConnectFrames, encodeConnectFrame } from "./framing";
@@ -410,6 +412,8 @@ class LiveCursorTransport implements CursorTransport {
   private heartbeat?: ReturnType<typeof setInterval>;
   private firstFrameTimer?: ReturnType<typeof setTimeout>;
   private committed = false;
+  private dispatchSend?: DispatchSend;
+  private removeDispatchAbort?: () => void;
   private expectedClose = false;
   private pendingFinalize?: ReturnType<typeof setTimeout>;
   private readonly clientToolFinalizeGraceMs: number;
@@ -530,6 +534,10 @@ class LiveCursorTransport implements CursorTransport {
     };
 
     const push = (message: CursorServerMessage) => {
+      observeDispatch(() => {
+        if (message.type === "text" || message.type === "thinking" || message.type === "tool_call_start" || message.type === "tool_call_delta") this.dispatchSend?.output();
+        if (message.type === "done" || message.type === "error") this.observeUsage(state);
+      });
       const bytes = new TextEncoder().encode(JSON.stringify(message)).byteLength;
       this.reserveTransportBytes(bytes);
       queue.push({ message, bytes });
@@ -593,6 +601,7 @@ class LiveCursorTransport implements CursorTransport {
       }, runBearer);
     } catch (error) {
       this.releaseBlobRequestScope();
+      observeDispatch(() => this.dispatchSend?.terminal(signal?.aborted ? "upstream_abort" : "transport_failure"));
       throw error;
     }
 
@@ -668,6 +677,9 @@ class LiveCursorTransport implements CursorTransport {
   }
 
   async close(): Promise<void> {
+    observeDispatch(() => this.dispatchSend?.terminal("unknown"));
+    observeDispatch(() => this.removeDispatchAbort?.());
+    this.removeDispatchAbort = undefined;
     if (this.heartbeat) clearInterval(this.heartbeat);
     this.clearPendingFinalize();
     this.clearFirstFrameTimer();
@@ -681,6 +693,7 @@ class LiveCursorTransport implements CursorTransport {
   }
 
   private cancelCursorRun(): void {
+    observeDispatch(() => { this.dispatchSend?.cancel("upstream"); this.dispatchSend?.terminal("unknown"); });
     this.expectedClose = true;
     this.clearPendingFinalize();
     if (this.heartbeat) clearInterval(this.heartbeat);
@@ -788,8 +801,16 @@ class LiveCursorTransport implements CursorTransport {
     // error, trailers, end, abort, and the first-frame timeout all race into it, and only the
     // first wins. The first-frame timer is cleared by any settlement so it can never leak.
     const settler = createTerminalSettler({
-      fail,
-      finish,
+      fail: error => {
+        this.observeUsage(state);
+        observeDispatch(() => this.dispatchSend?.terminal(signal?.aborted ? "upstream_abort" : "transport_failure"));
+        fail(error);
+      },
+      finish: () => {
+        this.observeUsage(state);
+        observeDispatch(() => this.dispatchSend?.terminal("unknown"));
+        finish();
+      },
       clearTimer: () => this.clearFirstFrameTimer(),
     });
     const failAndClear = (error: Error) => {
@@ -886,6 +907,8 @@ class LiveCursorTransport implements CursorTransport {
           framesReceived: this.framesReceived,
           elapsedMs: Date.now() - this.turnStartedAt,
         } : { framesReceived: this.framesReceived, elapsedMs: Date.now() - this.turnStartedAt });
+        // A clean Connect envelope is transport closure, not semantic turn completion.
+        if (endError) observeDispatch(() => this.dispatchSend?.terminal("protocol_failure"));
         if (endError) failAndClear(endError);
         return;
       }
@@ -917,7 +940,10 @@ class LiveCursorTransport implements CursorTransport {
         this.updateTransportFlowControl();
         frameWork = frameWork
           .then(() => handleFrame(frame))
-          .catch(err => failAndClear(err instanceof Error ? err : new Error(String(err))))
+          .catch(err => {
+            observeDispatch(() => this.dispatchSend?.terminal("protocol_failure"));
+            failAndClear(err instanceof Error ? err : new Error(String(err)));
+          })
           .finally(() => {
             this.releaseTransportBytes(frame.payload.byteLength);
             this.pendingTransportFrames = Math.max(0, this.pendingTransportFrames - 1);
@@ -959,6 +985,7 @@ class LiveCursorTransport implements CursorTransport {
     this.stream.on("trailers", trailers => {
       const status = trailers["grpc-status"];
       if (status !== undefined) debugProviderDiagnostic("cursor", "trailers", { grpcStatus: String(status) });
+      if (status && status !== "0") observeDispatch(() => this.dispatchSend?.terminal("protocol_failure"));
       if (status && status !== "0") failAndClear(new Error(`Cursor gRPC error ${status}`));
     });
     this.stream.on("error", err => {
@@ -1004,6 +1031,7 @@ class LiveCursorTransport implements CursorTransport {
         const leftover = backlogEnd - backlogStart;
         if (leftover > 0 && !this.expectedClose) {
           releaseBacklogLease();
+          observeDispatch(() => this.dispatchSend?.terminal("protocol_failure"));
           settler.settleFail(new ConnectFrameError(
             "frame_incomplete",
             `Cursor Connect stream ended with ${leftover} unconsumed bytes (incomplete frame)`,
@@ -1022,17 +1050,52 @@ class LiveCursorTransport implements CursorTransport {
       });
     });
 
+    this.stream.on("response", headers => {
+      const status = Number(headers[":status"]);
+      observeDispatch(() => this.dispatchSend?.headers(status));
+      if (status >= 400) observeDispatch(() => this.dispatchSend?.terminal("protocol_failure"));
+    });
+
     signal?.addEventListener("abort", () => {
+      observeDispatch(() => { this.dispatchSend?.cancel("upstream"); this.dispatchSend?.terminal("upstream_abort"); });
       this.close();
       failAndClear(new Error("Cursor request was aborted"));
     }, { once: true });
 
-    this.stream.write(encodeConnectFrame(encodedRequest));
+    const initialFrame = encodeConnectFrame(encodedRequest);
+    observeDispatch(() => {
+      this.dispatchSend = this.input.dispatch?.attempt?.start({ transport: "http", protocol: "provider", reason: this.input.dispatch.reason ?? "initial", sessionPresent: true });
+    });
+    const clientSignal = this.input.dispatch?.clientSignal;
+    if (clientSignal) {
+      const cancelled = () => observeDispatch(() => this.dispatchSend?.cancel("client"));
+      observeDispatch(() => {
+        if (clientSignal.aborted) cancelled();
+        else clientSignal.addEventListener("abort", cancelled, { once: true });
+      });
+      this.removeDispatchAbort = () => clientSignal.removeEventListener("abort", cancelled);
+    }
+    this.stream.write(initialFrame);
     this.heartbeat = setInterval(() => {
       this.stream?.write(encodeClientMessage({
         message: { case: "clientHeartbeat", value: create(ClientHeartbeatSchema, {}) },
       }));
     }, HEARTBEAT_MS);
+  }
+
+  private observeUsage(state: ReturnType<typeof createCursorProtobufEventState>): void {
+    observeDispatch(() => {
+      // Cursor checkpoints describe absolute conversation context, not per-send input spend.
+      if (state.contextTokens !== undefined) this.dispatchSend?.usage({
+        provenance: "cumulative", completeness: "partial", contextTotalTokens: state.contextTokens,
+      });
+      else {
+        // Carry-forward belongs to another send; never project it as this send's input.
+        if (state.estimatedInputTokens !== undefined || state.usage.outputTokens > 0) this.dispatchSend?.usage({
+          provenance: "estimated", completeness: "partial", inputTokens: state.estimatedInputTokens, outputTokens: state.usage.outputTokens,
+        });
+      }
+    });
   }
 
   private async handleServerMessage(
@@ -1082,6 +1145,10 @@ class LiveCursorTransport implements CursorTransport {
       return;
     }
     const mapped = mapCursorProtobufServerMessage(message, state);
+    // Only provider turnEnded proves completion. Local tool-suspend done does not.
+    if (message.message.case === "interactionUpdate" && message.message.value.message.case === "turnEnded") {
+      observeDispatch(() => this.dispatchSend?.terminal(mapped.some(event => event.type === "error") ? "protocol_failure" : "protocol_success"));
+    }
     if (mapped.length > 0) {
       // A client tool call announced/committed via interactionUpdate (toolCallStarted/partialToolCall/
       // toolCallCompleted) changes the call set, so revoke any finalize armed by an earlier drain.

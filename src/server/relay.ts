@@ -1,3 +1,5 @@
+import { cleanupDispatchSend, observeDispatch } from "../usage/dispatch-http";
+import { inspectDispatchResponse } from "./request-log";
 import type { ResponsesTerminalStatus } from "../bridge";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { isUsageDebugEnabled } from "../usage/debug";
@@ -671,6 +673,7 @@ function joinedBytes(slices: readonly Uint8Array[], byteLength: number): Uint8Ar
  *   the caller owns `cancelled` state and reads `reported()` to decide.
  */
 export function createSseInspector(handlers: SseInspectorHandlers): SseInspector {
+  const dispatchSend = handlers.logCtx?.dispatchSend;
   let decoder: TextDecoder | null = new TextDecoder();
   let reported = false;
   let sawTerminal = false;
@@ -703,6 +706,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   const dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    observeDispatch(() => dispatchSend?.terminal("unknown"));
+    cleanupDispatchSend(dispatchSend);
     decoder = null;
     clearFrameState();
     clearCompletedItems();
@@ -778,6 +783,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     if (!reported && handlers.logCtx) {
       inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed);
     }
+    inspectDispatchResponse(dispatchSend, parsed);
     reportFirstOutput.parsed(parsed);
     const status = terminalStatusFromParsed(parsed);
     if (status) sawTerminal = true;
@@ -1100,6 +1106,7 @@ export function consumeForInspection(
       }
     },
     onReadError: () => {
+      observeDispatch(() => logCtx?.dispatchSend?.terminal("transport_failure"));
       // Upstream read failure after HTTP 200 (mid-stream socket reset) is not a
       // protocol `response.incomplete` terminal. Report a synthetic 502 so account
       // health treats it as transient; abort-driven client cancellation still wins.
@@ -1131,7 +1138,8 @@ export function consumeForResponseLogMetadata(
     onCompletedResponse,
     onFirstOutput,
   });
-  startBoundedInspectionPump({ ...options, reader, inspector, signal, onDone });
+  const dispatchSend = logCtx.dispatchSend;
+  startBoundedInspectionPump({ ...options, reader, inspector, signal, onDone, onReadError: () => observeDispatch(() => dispatchSend?.terminal("transport_failure")) });
 }
 
 /**

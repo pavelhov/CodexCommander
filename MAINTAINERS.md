@@ -14,8 +14,10 @@ remain controlled through GitHub repository settings.
 
 ## Branch and merge policy
 
-- `main` is the sole integration branch, the default branch, and the target
-  of every pull request. There are no `dev`/`development`/`preview` lines.
+- `development` is the latest integration branch and the target for feature and
+  fix pull requests. Start new work from its current tip.
+- `main` remains the stable default branch. Promote `development` through a
+  separate pull request after the combined fixes and qualification checks pass.
 - The owner may push to `main` directly for maintainer-owned integration
   work, urgent repairs, or incident recovery. The same CI and documentation
   expectations still apply.

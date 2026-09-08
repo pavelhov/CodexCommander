@@ -1,3 +1,5 @@
+import { createDispatchRequest, foldDispatchEvents, type DispatchEvent } from "../src/usage/dispatch";
+import { cleanupResponseDispatch } from "../src/usage/dispatch-http";
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../src/providers/derive";
@@ -259,6 +261,8 @@ describe("mimo-free auth retry predicate", () => {
   }
 
   test("401 retries exactly once with a fresh JWT after draining the first body", async () => {
+    const dispatchEvents: DispatchEvent[] = [];
+    const attempt = createDispatchRequest(event => dispatchEvents.push(event)).attempt();
     const fakeJwt = "h." + Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64") + ".s";
     const calls: string[] = [];
     const originalFetch = globalThis.fetch;
@@ -278,7 +282,7 @@ describe("mimo-free auth retry predicate", () => {
       const adapter = adapterForRetry();
       const res = await adapter.fetchResponse!(
         { url: MIMO_CHAT_URL, method: "POST", headers: { "Authorization": "Bearer stale" }, body: "{}" },
-        {} as never,
+        { dispatch: { attempt } },
       );
       expect(res.status).toBe(200);
       // Sequence: first chat with stale token -> 401 -> bootstrap -> retry with fresh JWT.
@@ -286,6 +290,9 @@ describe("mimo-free auth retry predicate", () => {
       expect(calls[1]).toBe("bootstrap");
       expect(calls[2]).toBe(`chat:Bearer ${fakeJwt}`);
       expect(calls.length).toBe(3);
+      expect(foldDispatchEvents(dispatchEvents).sends.map(send => send.outcome)).toEqual(["protocol_failure", "unknown"]);
+      expect(dispatchEvents.filter(event => event.kind === "start").map(event => event.metadata?.reason)).toEqual(["initial", "retry"]);
+      cleanupResponseDispatch(res);
     } finally {
       globalThis.fetch = originalFetch;
       resetMimoJwtCache();

@@ -67,3 +67,12 @@ test("successful entry keeps the existing persisted shape (no diagnostic fields)
   expect(row.closeReason).toBeUndefined();
   expect(row.upstreamError).toBeUndefined();
 });
+
+test("runtime persistence marks logical versus combo-attempt authority without creating telemetry attempts", () => {
+  const base = { requestId: "authority-runtime", timestamp: Date.now(), model: "gpt-test", provider: "openai", status: 200, durationMs: 1, usageStatus: "reported" as const, usage: { inputTokens: 4, outputTokens: 2 } };
+  addRequestLog(base);
+  expect(lastPersistedLine().accounting).toEqual({ version: 1, authority: "logical" });
+  expect(lastPersistedLine().attempts).toBeUndefined();
+  addRequestLog({ ...base, attempts: [{ ordinal: 1, provider: "openai", model: "gpt-test", adapter: "openai", status: 200, durationMs: 1, sendCount: 9, recoveryKinds: [], usageStatus: "reported", usage: base.usage }] });
+  expect(lastPersistedLine().accounting).toEqual({ version: 1, authority: "attempts" });
+});

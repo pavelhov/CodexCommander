@@ -1,8 +1,11 @@
+import type { DispatchHttpContext } from "../usage/dispatch-http";
 import type { AdapterEvent, CodexCommanderParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
+  /** Process-local observation, never a wire field. */
+  dispatch?: DispatchHttpContext;
   headers: Headers;
   translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;
@@ -72,6 +75,8 @@ export interface AdapterRequest {
 }
 
 export interface AdapterFetchContext {
+  /** Process-local inference observer; never serialized upstream. */
+  dispatch?: DispatchHttpContext;
   /** Remains attached to the returned response body after the response headers arrive. */
   abortSignal?: AbortSignal;
   /** Deadline for receiving response headers on each attempt, not for consuming the response body. */

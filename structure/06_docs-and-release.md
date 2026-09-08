@@ -52,11 +52,11 @@ implementation notes. Cross-system invariants belong in `structure/`; public wor
 
 ## Branch policy
 
-- **`main` is the sole default, integration, and pull-request target.** Open ordinary feature and
-  fix pull requests against `main`. There are no `dev`, `development`, or `preview` branches.
-- Bun-native TypeScript on `main` is the only runtime line; no `go/` tree is tracked here. If native
-  code returns, the expectation is an incremental module landing on `main`, not a second full-runtime
-  branch.
+- **`development` is the latest integration branch.** Branch ordinary feature/fix work from it
+  and target those pull requests to it. **`main` remains the stable default branch.** Promote
+  `development` through a separate PR after the combined fixes and qualification checks pass.
+- Both branches share the Bun-native TypeScript runtime; no `go/` tree is tracked here.
+  `development` stages changes rather than maintaining a separate runtime port.
 - Security work in progress does not go in any tracked directory. Scratch space only; only the
   published outcome — the fix, its regression test, the release note, the advisory once public —
   reaches the repository.

@@ -1,3 +1,7 @@
+import { createDispatchRequest, type DispatchRequest, type DispatchAttempt } from "../usage/dispatch";
+import { dispatchHttpFetch, observeDispatch, responseDispatch, cleanupResponseDispatch } from "../usage/dispatch-http";
+import { observeSidecarFrame } from "../usage/dispatch-sidecar";
+
 export class CodexWarmupError extends Error {
   code: "http_status" | "missing_body" | "stream_failed" | "stream_incomplete" | "stream_error" | "invalid_sse" | "no_terminal" | "transport";
   status?: number;
@@ -89,7 +93,7 @@ function parseSseFrame(frame: string): unknown | null {
   }
 }
 
-async function drainWarmupSse(body: ReadableStream<Uint8Array>): Promise<void> {
+async function drainWarmupSse(body: ReadableStream<Uint8Array>, response: Response): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -107,6 +111,7 @@ async function drainWarmupSse(body: ReadableStream<Uint8Array>): Promise<void> {
         const delimiterLength = buffer[frameEnd] === "\r" ? 4 : 2;
         buffer = buffer.slice(frameEnd + delimiterLength);
         const parsed = parseSseFrame(frame);
+        if (parsed && typeof parsed === "object") observeSidecarFrame(response, parsed as Record<string, unknown>);
         const type = eventTypeFromData(parsed);
         if (type === "response.completed") return;
         if (type === "response.failed") throw new CodexWarmupError("stream_failed");
@@ -117,6 +122,7 @@ async function drainWarmupSse(body: ReadableStream<Uint8Array>): Promise<void> {
 
     if (buffer.trim()) {
       const parsed = parseSseFrame(buffer);
+      if (parsed && typeof parsed === "object") observeSidecarFrame(response, parsed as Record<string, unknown>);
       const type = eventTypeFromData(parsed);
       if (type === "response.completed") return;
       if (type === "response.failed") throw new CodexWarmupError("stream_failed");
@@ -130,10 +136,12 @@ async function drainWarmupSse(body: ReadableStream<Uint8Array>): Promise<void> {
   }
 }
 
-async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<void> {
+async function tryWarmup(options: CodexWarmupOptions, model: string, dispatchRequest?: DispatchRequest): Promise<void> {
+  let attempt: DispatchAttempt | undefined;
+  observeDispatch(() => { attempt = dispatchRequest?.attempt({ surface: "validation", reason: "warmup", protocol: "responses" }); });
   let res: Response;
   try {
-    res = await fetch(CODEX_RESPONSES_URL, {
+    res = await dispatchHttpFetch(fetch, CODEX_RESPONSES_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${options.accessToken}`,
@@ -148,31 +156,45 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
         store: false,
       }),
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-    });
+    }, { attempt, reason: "warmup" });
   } catch (err) {
     throw new CodexWarmupError("transport", "Codex warmup request failed", { cause: err });
   }
 
-  if (!res.ok) {
-    const upstreamDetail = await readErrorDetail(res);
-    throw new CodexWarmupError("http_status", "Codex warmup was rejected", {
-      status: res.status,
-      upstreamDetail,
-    });
-  }
-  if (!res.body) throw new CodexWarmupError("missing_body");
-
   try {
-    await drainWarmupSse(res.body);
+    if (!res.ok) {
+      const upstreamDetail = await readErrorDetail(res);
+      throw new CodexWarmupError("http_status", "Codex warmup was rejected", {
+        status: res.status,
+        upstreamDetail,
+      });
+    }
+    if (!res.body) throw new CodexWarmupError("missing_body");
+
+    try {
+      await drainWarmupSse(res.body, res);
+    } finally {
+      await res.body?.cancel().catch(() => {});
+    }
+  } catch (error) {
+    observeDispatch(() => responseDispatch(res)?.terminal(
+      error instanceof CodexWarmupError
+        ? error.code === "no_terminal" || error.code === "missing_body" ? "unknown" : "protocol_failure"
+        : "transport_failure",
+    ));
+    throw error;
   } finally {
-    await res.body?.cancel().catch(() => {});
+    observeDispatch(() => responseDispatch(res)?.terminal("unknown"));
+    cleanupResponseDispatch(res);
   }
 }
 
 export async function warmCodexAccount(options: CodexWarmupOptions): Promise<void> {
+  let dispatchRequest: DispatchRequest | undefined;
+  observeDispatch(() => { dispatchRequest = createDispatchRequest(); });
   const primaryModel = options.model?.trim() || DEFAULT_MODEL;
   try {
-    await tryWarmup(options, primaryModel);
+    await tryWarmup(options, primaryModel, dispatchRequest);
     return;
   } catch (err) {
     // Retry with fallback models on 400 (model may not be available for this account).
@@ -181,7 +203,7 @@ export async function warmCodexAccount(options: CodexWarmupOptions): Promise<voi
     for (const fallback of FALLBACK_MODELS) {
       if (fallback === primaryModel) continue;
       try {
-        await tryWarmup(options, fallback);
+        await tryWarmup(options, fallback, dispatchRequest);
         return;
       } catch (retryErr) {
         if (retryErr instanceof CodexWarmupError) lastErr = retryErr;

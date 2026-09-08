@@ -128,6 +128,7 @@ const INITIAL_OWNED_PATHS = [
   "tray-state.json",
   "usage-debug.jsonl",
   "usage.jsonl",
+  "dispatch.jsonl",
   "version.json",
   "winsw",
 ] as const;

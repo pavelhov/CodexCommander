@@ -670,3 +670,42 @@ describe("summarizeUsage", () => {
   });
 
 });
+
+test("explicit logical authority ignores observational attempts in tokens and all cost surfaces", () => {
+  const logical: PersistedUsageEntry = {
+    requestId: "explicit-logical", timestamp: FIXED_NOW, provider: "openai", model: "gpt-5.5", status: 200, durationMs: 1,
+    usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 20 },
+    accounting: { version: 1, authority: "logical" },
+    attempts: [{ ordinal: 1, provider: "anthropic", model: "claude-fable-5", adapter: "anthropic", status: 200, durationMs: 1, sendCount: 1, recoveryKinds: [], usageStatus: "reported", usage: { inputTokens: 900, outputTokens: 90 } }],
+  };
+  const result = summarizeUsage([logical], "all", FIXED_NOW);
+  expect(result.summary.totalTokens).toBe(120);
+  expect(result.models).toHaveLength(1);
+  expect(result.models[0]?.provider).toBe("openai");
+  expect(result.summary.estimatedCostUsd).toBeCloseTo(0.0011, 9);
+  expect(result.models[0]?.estimatedCostUsd).toBeCloseTo(0.0011, 9);
+  expect(result.providers[0]?.estimatedCostUsd).toBeCloseTo(0.0011, 9);
+  expect(result.days.flatMap(day => day.models).reduce((n, model) => n + model.totalTokens, 0)).toBe(120);
+});
+
+test("explicit attempt authority reconciles one contribution per attempt with legacy combos", () => {
+  const base: PersistedUsageEntry = {
+    requestId: "attempt-authority", timestamp: FIXED_NOW, provider: "combo", model: "combo", status: 200, durationMs: 1,
+    usageStatus: "reported", usage: { inputTokens: 999, outputTokens: 999 },
+    accounting: { version: 1, authority: "attempts" },
+    attempts: [{ ordinal: 1, provider: "openai", model: "gpt-5.5", adapter: "openai", status: 200, durationMs: 1, sendCount: 9, recoveryKinds: [], usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 40, reasoningOutputTokens: 5 } }],
+  };
+  const legacy = { ...base, requestId: "legacy", accounting: undefined, usage: { inputTokens: 100, outputTokens: 20 } };
+  const result = summarizeUsage([base, legacy], "all", FIXED_NOW);
+  expect(result.summary.totalTokens).toBe(240);
+  expect(result.models[0]?.totalTokens).toBe(240);
+  expect(result.providers[0]?.totalTokens).toBe(240);
+  expect(result.days.reduce((n, day) => n + day.totalTokens, 0)).toBe(240);
+});
+
+test("explicit attempt authority never repeats an ordinal or spends a context checkpoint", () => {
+  const attempt = { ordinal: 1, provider: "openai", model: "gpt-5.5", adapter: "openai", status: 200, durationMs: 1, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 2, contextTotalTokens: 5000 } };
+  const result = summarizeUsage([{ requestId: "repeated-attempt", timestamp: FIXED_NOW, provider: "combo", model: "combo", status: 200, durationMs: 1, usageStatus: "reported", accounting: { version: 1, authority: "attempts" }, attempts: [attempt, attempt] }], "all", FIXED_NOW);
+  expect(result.summary).toMatchObject({ totalTokens: 12, attemptCount: 1 });
+  expect(result.models[0]?.totalTokens).toBe(12);
+});

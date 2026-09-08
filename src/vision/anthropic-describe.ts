@@ -1,3 +1,6 @@
+import type { DispatchAttempt } from "../usage/dispatch";
+import { dispatchHttpFetch, cleanupResponseDispatch, observeDispatch, responseDispatch } from "../usage/dispatch-http";
+import { sidecarDispatch, observeSidecarFrame } from "../usage/dispatch-sidecar";
 import type { CodexCommanderProviderConfig } from "../types";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "../adapters/client-fingerprint";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
@@ -62,6 +65,7 @@ export async function parseAnthropicVisionSSE(res: Response): Promise<DescribeOu
     let data: unknown;
     try { data = JSON.parse(dataLine); } catch { return; }
     if (!isRecord(data)) return;
+    observeSidecarFrame(res, data);
 
     if (data.type === "content_block_delta") {
       const delta = isRecord(data.delta) ? data.delta : {};
@@ -86,6 +90,7 @@ export async function parseAnthropicVisionSSE(res: Response): Promise<DescribeOu
     buffer = (buffer + decoder.decode()).replace(/\r\n/g, "\n");
     if (buffer.trim()) processFrame(buffer);
   } catch {
+    observeDispatch(() => responseDispatch(res)?.terminal("protocol_failure"));
     // A mid-stream read/decode failure after partial text is NOT a usable description. Mark it
     // terminal so the caller returns an error and never caches an incomplete result (review F1).
     if (!terminalError) terminalError = "anthropic vision sidecar stream ended abnormally";
@@ -108,6 +113,7 @@ export async function describeImageAnthropic(
   provider: CodexCommanderProviderConfig,
   settings: VisionSettings,
   abortSignal?: AbortSignal,
+  dispatchParent?: DispatchAttempt,
 ): Promise<DescribeOutcome> {
   const image = buildImageBlock(imageUrl);
   if (!image.block) return { text: "", error: image.error ?? "invalid image" };
@@ -153,16 +159,19 @@ export async function describeImageAnthropic(
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("vision");
   const startedAt = Date.now();
+  const dispatch = sidecarDispatch(dispatchParent, "messages", abortSignal, "vision");
+  let observedResponse: Response | undefined;
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(`${base}/v1/messages`, {
+      () => dispatchHttpFetch(fetch, `${base}/v1/messages`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
-      }),
+      }, dispatch),
       { abortSignal: linkedSignal.signal, label: "vision-sidecar-anthropic" },
     );
+    observedResponse = res;
     if (!res.ok) {
       const responseText = await res.text().catch(() => "");
       console.warn(`[vision] anthropic sidecar HTTP ${res.status} (${Date.now() - startedAt}ms)`);
@@ -179,6 +188,10 @@ export async function describeImageAnthropic(
     console.warn(`[vision] anthropic sidecar ${kind} (${Date.now() - startedAt}ms)`);
     return { text: "", error: error instanceof Error ? error.message : String(error) };
   } finally {
+    if (observedResponse) {
+      observeDispatch(() => responseDispatch(observedResponse!)?.terminal("unknown"));
+      cleanupResponseDispatch(observedResponse);
+    }
     sidecarExit();
     linkedSignal.cleanup();
   }
