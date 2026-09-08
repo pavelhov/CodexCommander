@@ -762,12 +762,12 @@ describe("ultra reasoning effort (upstream codex-rs parity)", () => {
     expect((dflt?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 
-  test("no-template native GPT-5.6 fallback entries also advertise max and ultra", () => {
+  test("no-template native entries preserve each pinned fallback ladder", () => {
     const entries = buildCatalogEntries(null, ["gpt-5.6-sol", "gpt-5.5"], []);
     const gpt56 = entries.find(e => e.slug === "gpt-5.6-sol");
     const gpt55 = entries.find(e => e.slug === "gpt-5.5");
     expect((gpt56?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
-    expect((gpt55?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect((gpt55?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual(["low", "medium", "high", "xhigh"]);
   });
 });
 

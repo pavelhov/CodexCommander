@@ -1,3 +1,4 @@
+import nativeCatalogSource from "./fixtures/catalog/native-codex-2026-09-08.json";
 /**
  * v2 / ultra catalog tests: ultra is always advertised regardless of v2 toggle.
  * The v2 toggle controls the multi-agent surface only, not ultra visibility.
@@ -67,12 +68,11 @@ function fixtureConfig(content: string): string {
 describe("catalog ultra (always-on)", () => {
   const routed = [{ id: "glm-5.2", provider: "opencode-go", reasoningEfforts: ["low", "medium", "high", "xhigh"] }];
 
-  test("routed + old natives always advertise mock max AND ultra", () => {
+  test("routed entries retain mock max and ultra while natives preserve their source ladder", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.5"], routed as never, [], false);
     const native = entries.find(e => e.slug === "gpt-5.5")!;
     const glm = entries.find(e => e.slug === "opencode-go/glm-5.2")!;
-    expect(efforts(native)).toContain("ultra");
-    expect(efforts(native)).toContain("max");
+    expect(efforts(native)).toEqual(efforts(template()));
     expect(efforts(glm)).toContain("ultra");
     expect(efforts(glm)).toContain("max"); // mock max: adapters/wire clamp keep it honest
   });
@@ -1558,7 +1558,7 @@ describe("3-state multi-agent mode", () => {
    * Both callers of applyMultiAgentMode are covered, because a feature flag threaded
    * through only one of them is the failure this contract exists to catch.
    */
-  test("default mode + v2 feature ON stamps unpinned entries via BOTH catalog paths", () => {
+  test("default mode + v2 feature ON stamps external entries while preserving native source absence", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
     const oldCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = dirname(path);
@@ -1567,8 +1567,8 @@ describe("3-state multi-agent mode", () => {
 
       // Path 1: buildCatalogEntries (fresh catalog).
       const built = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "default");
-      // Unpinned native gains the stamp so the binary will accept it as a subagent.
-      expect(built.find(e => e.slug === "gpt-5.5")!.multi_agent_version).toBe("v2");
+      // Native source absence remains authoritative even while the external bridge is enabled.
+      expect(built.find(e => e.slug === "gpt-5.5")!.multi_agent_version).toBeUndefined();
       // Genuine upstream pins are never rewritten: "v1" stays excluded, "v2" stays "v2".
       expect(built.find(e => e.slug === "gpt-5.6-luna")!.multi_agent_version).toBe("v1");
       expect(built.find(e => e.slug === "gpt-5.6-sol")!.multi_agent_version).toBe("v2");
@@ -1626,13 +1626,15 @@ describe("3-state multi-agent mode", () => {
   test("mode default restores upstream pins after a prior forced v2 (stale-clear regression)", () => {
     // Simulate: disk entries were synced while mode=v2 (all entries stamped v2),
     // then mode switched to default. mergeCatalogEntriesForSync must clear the
-    // stale forced value and restore upstream pins.
+    // stale forced value and restore the separately supplied source pins.
     const diskSol = { ...template(), slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", multi_agent_version: "v2" };
     const diskLuna = { ...template(), slug: "gpt-5.6-luna", display_name: "GPT-5.6 Luna", multi_agent_version: "v2" }; // was forced
     const diskNative = { ...template(), slug: "gpt-5.5", display_name: "gpt-5.5", multi_agent_version: "v2" }; // was forced
     const merged = mergeCatalogEntriesForSync(
       [diskSol as never, diskLuna as never, diskNative as never],
       [], new Map(), [], false, new Set(), null, new Set(), new Set(), "default",
+      new Set(), false, true, [], nativeCatalogSource.models.map(row => row.slug),
+      new Set(), nativeCatalogSource.models,
     );
     const sol = merged.find(e => e.slug === "gpt-5.6-sol")!;
     const luna = merged.find(e => e.slug === "gpt-5.6-luna")!;
