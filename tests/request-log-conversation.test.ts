@@ -157,3 +157,7 @@ describe("request log conversation persistence / filter", () => {
     expect(requestLogEntryFromPersistedUsage(persisted).conversationId).toBe(digest32("thread-xyz"));
   });
 });
+
+test("Responses log identity uses structured own task metadata", () => {
+  expect(conversationIdFromResponsesRequest({headers:new Headers(),clientMetadata:{thread_id:"own-metadata",parent_thread_id:"parent"}})).toBe(digest32("own-metadata"));
+});

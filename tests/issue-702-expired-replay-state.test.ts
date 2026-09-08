@@ -244,7 +244,7 @@ afterEach(() => {
 });
 
 describe("Issue #702 expired forward replay state", () => {
-  test("known continuation spill failure returns terminal structured previous_response_not_found before upstream I/O", async () => {
+  test("missing spill or provenance returns a structured continuation error before upstream I/O", async () => {
     const responseId = "resp_issue_702_missing_spill";
     setResponseStateByteCapForTests(1_024);
     rememberResponseState(
@@ -310,7 +310,11 @@ describe("Issue #702 expired forward replay state", () => {
         try {
           const response = await originalFetch(new URL("/v1/responses", server.url), {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "acct-issue-702" })}`,
+              "chatgpt-account-id": "acct-issue-702",
+            },
             body: JSON.stringify({
               model: routeClass.model,
               previous_response_id: responseId,
@@ -318,12 +322,15 @@ describe("Issue #702 expired forward replay state", () => {
               stream: true,
             }),
           });
-          expect(response.status).toBe(400);
+          const native = routeClass.model !== "kiro-test/gpt-5.6-sol";
+          expect(response.status).toBe(native ? 409 : 400);
           expect(await response.json()).toEqual({
             error: {
-              message: "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
-              type: "invalid_request_error",
-              code: "previous_response_not_found",
+              message: native
+                ? "Native continuation history is unavailable; resend the complete conversation without previous_response_id."
+                : "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+              type: native ? "native_continuation_unavailable" : "invalid_request_error",
+              code: native ? "native_continuation_unavailable" : "previous_response_not_found",
             },
           });
         } finally {
@@ -350,12 +357,12 @@ describe("Issue #702 expired forward replay state", () => {
     expect(scenario.stateBeforeResume.oldestAgeMs).toBeGreaterThan(REPLAY_TTL_MS);
     expect(quotaPrimeCalls).toBe(0);
     expect(scenario.upstreamRequests).toHaveLength(1);
-    expect(scenario.secondStatus).toBe(400);
+    expect(scenario.secondStatus).toBe(409);
     expect(JSON.parse(scenario.secondResponseText)).toMatchObject({
       error: {
-        message: expect.stringMatching(/continuation state.*expired/i),
-        type: "invalid_request_error",
-        code: "invalid_request_error",
+        message: expect.stringMatching(/continuation history.*unavailable/i),
+        type: "native_continuation_unavailable",
+        code: "native_continuation_unavailable",
       },
     });
   });

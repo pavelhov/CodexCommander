@@ -64,6 +64,7 @@ export function sessionIdHeaderFromRequest(headers: Headers): string | null {
 
 export function conversationIdFromResponsesRequest(input: {
   headers?: Headers;
+  clientMetadata?: unknown;
   clientThreadId?: string;
   sessionIdHeader?: string | null;
   threadIdHeader?: string | null;
@@ -73,7 +74,7 @@ export function conversationIdFromResponsesRequest(input: {
   if (input.threadIdHeader != null) headers.set("thread-id", input.threadIdHeader);
   if (input.sessionIdHeader != null) headers.set("session_id", input.sessionIdHeader);
   if (input.clientThreadId) headers.set("x-codex-parent-thread-id", input.clientThreadId);
-  const identity = resolveCodexTaskIdentity(input.headers ?? headers);
+  const identity = resolveCodexTaskIdentity(input.headers ?? headers, input.clientMetadata);
   return normalizeLogConversationId(identity.taskId ?? (identity.source === "none" ? input.cursorConversationId : undefined));
 }
 

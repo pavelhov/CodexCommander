@@ -1,3 +1,4 @@
+import { NATIVE_RESPONSES_HEADERS } from "../responses/native-policy";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
@@ -74,7 +75,7 @@ export function selectForwardHeaders(
   codexOverride?: { accessToken: string; chatgptAccountId: string },
 ): Headers {
   const selected = new Headers();
-  for (const name of FORWARD_HEADERS) {
+  for (const name of [...FORWARD_HEADERS, ...NATIVE_RESPONSES_HEADERS]) {
     const value = headers.get(name);
     if (value) selected.set(name, value);
   }
