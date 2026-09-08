@@ -235,7 +235,7 @@ describe("Codex auth context", () => {
     const cfg = config();
     cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
     const affinityHeaders = ["round-robin", "fill-first"].map(strategy => new Headers({
-      "x-codex-parent-thread-id": `main-affinity-${strategy}`,
+      "thread-id": `main-affinity-${strategy}`,
     }));
     for (const headers of affinityHeaders) {
       await expect(resolveCodexAuthContext(headers, cfg, "pool", {
@@ -267,7 +267,7 @@ describe("Codex auth context", () => {
           .resolves.toMatchObject({ kind: "pool", accountId: "pool-a" });
         cfg.activeCodexAccountId = "pool-a";
         await expect(resolveCodexAuthContext(
-          new Headers({ "x-codex-parent-thread-id": `new-${strategy}` }),
+          new Headers({ "thread-id": `new-${strategy}` }),
           cfg,
           "pool",
           readOptions,
@@ -352,7 +352,7 @@ describe("Codex auth context", () => {
       expiresAt: Date.now() + 5 * 60_000,
       chatgptAccountId: "active_pool_acc",
     });
-    const headers = new Headers({ "x-codex-parent-thread-id": "exact-thread" });
+    const headers = new Headers({ "thread-id": "exact-thread" });
 
     const exactContext = await resolveCodexAuthContext(headers, cfg, "direct", {
       accountId: "pool-a",
@@ -779,7 +779,7 @@ describe("Codex auth context", () => {
     });
     const headers = new Headers({
       authorization: "Bearer main_token",
-      "x-codex-parent-thread-id": "independent-scope-thread",
+      "thread-id": "independent-scope-thread",
     });
     for (const accountId of ["pool-a", "pool-b"]) {
       saveCodexAccountCredential(accountId, {
@@ -879,7 +879,7 @@ describe("Codex auth context", () => {
     const originalNow = Date.now;
     const headers = new Headers({
       authorization: "Bearer main_token",
-      "x-codex-parent-thread-id": "expired-auth-context",
+      "thread-id": "expired-auth-context",
     });
     try {
       Date.now = () => now;

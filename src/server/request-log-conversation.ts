@@ -1,3 +1,4 @@
+import { resolveCodexTaskIdentity } from "../codex/task-identity";
 /**
  * Best-effort chat/session correlation for Logs / usage.jsonl (#330).
  * Opaque ids only — never persist raw emails or Claude Desktop system-hash fallbacks.
@@ -55,24 +56,25 @@ export function matchesLogConversationId(
 
 /**
  * Codex/Claude/Cursor priority for Responses-shaped requests:
- * parent thread header > session_id / session-id > thread-id > cursor conversation id.
+ * own task header > session_id / session-id > cursor conversation id; parent is ancestry only.
  */
 export function sessionIdHeaderFromRequest(headers: Headers): string | null {
   return headers.get("session_id") ?? headers.get("session-id");
 }
 
 export function conversationIdFromResponsesRequest(input: {
+  headers?: Headers;
   clientThreadId?: string;
   sessionIdHeader?: string | null;
   threadIdHeader?: string | null;
   cursorConversationId?: string;
 }): string | undefined {
-  return normalizeLogConversationId(
-    input.clientThreadId
-      ?? input.sessionIdHeader
-      ?? input.threadIdHeader
-      ?? input.cursorConversationId,
-  );
+  const headers = new Headers();
+  if (input.threadIdHeader != null) headers.set("thread-id", input.threadIdHeader);
+  if (input.sessionIdHeader != null) headers.set("session_id", input.sessionIdHeader);
+  if (input.clientThreadId) headers.set("x-codex-parent-thread-id", input.clientThreadId);
+  const identity = resolveCodexTaskIdentity(input.headers ?? headers);
+  return normalizeLogConversationId(identity.taskId ?? (identity.source === "none" ? input.cursorConversationId : undefined));
 }
 
 /**

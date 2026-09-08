@@ -1,3 +1,4 @@
+import { ownershipFingerprint, nativeOwner, readNativeOwnership, writeNativeOwnership, deleteNativeOwnership, clearNativeTaskOwnership } from "./native-ownership";
 import { randomUUID } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
@@ -18,7 +19,7 @@ import {
   selectPriorityTier,
 } from "./pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
-import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
+import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan, getMainAccountToken } from "./main-account";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import type { CodexCommanderConfig } from "../types";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
@@ -28,11 +29,10 @@ import { recordUpstreamHostFailure } from "./upstream-host-health";
 
 type ThreadAffinityEntry = {
   accountId: string;
-  generation: number;
+  credentialIdentity: string;
   createdAt: number;
   lastUsedAt: number;
-  // Last time the bound account's quota threshold was re-evaluated for this
-  // thread (interval-gated to avoid per-request flapping). See REEVAL_INTERVAL_MS.
+  // Last persisted touch; throttle writes while keeping restart affinity current.
   lastReevalAt: number;
 };
 
@@ -111,8 +111,7 @@ const CODEX_TRANSIENT_SOFT_AVOID_ESCALATION_MS = [
 export const CODEX_THREAD_AFFINITY_IDLE_TTL_MS = 24 * 60 * 60_000;
 export const CODEX_THREAD_AFFINITY_MAX_ENTRIES = 2048;
 const MAX_AFFINITY_COMPONENT_BYTES = 512;
-// Min interval between quota threshold re-evaluations for a single bound thread.
-// Well under the 5h/weekly quota windows, but enough to stop per-request flapping.
+// Retained public constant now bounds durable affinity touch frequency.
 export const CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS = 60_000;
 
 const upstreamHealth = new Map<string, CodexUpstreamHealth>();
@@ -243,14 +242,21 @@ export function listLiveCodexAccountIds(config: CodexCommanderConfig): ReadonlyS
   return ids;
 }
 
+export function clearThreadAccountMapMemoryForTests(): void { threadAccountMap.clear(); }
+
 export function clearThreadAccountMap(): void {
+  clearNativeTaskOwnership();
   threadAccountMap.clear();
 }
 
 export function clearThreadAccountMapForAccount(accountId: string): void {
+  clearNativeTaskOwnership(nativeOwner(accountId, 0).account);
   for (const [threadId, affinities] of threadAccountMap) {
     for (const [scope, entry] of affinities) {
-      if (entry.accountId === accountId) affinities.delete(scope);
+      if (entry.accountId === accountId) {
+        deleteNativeOwnership(affinityKey(threadId, scope === "unscoped" ? undefined : scope));
+        affinities.delete(scope);
+      }
     }
     if (affinities.size === 0) threadAccountMap.delete(threadId);
   }
@@ -808,6 +814,26 @@ function admissibleAffinityComponent(value: string): boolean {
   return retainedUtf8Bytes(value) <= MAX_AFFINITY_COMPONENT_BYTES;
 }
 
+function affinityKey(threadId: string, quotaScope?: CodexQuotaScope): string {
+  return ownershipFingerprint("task-affinity", JSON.stringify([threadId, threadAffinityScope(quotaScope)]));
+}
+
+function restoreThreadAffinity(threadId: string, config: CodexCommanderConfig, now: number, quotaScope?: CodexQuotaScope): void {
+  if (!admissibleAffinityComponent(threadId) || getThreadAffinity(threadId, quotaScope)) return;
+  const saved = readNativeOwnership(affinityKey(threadId, quotaScope));
+  if (!saved) return;
+  for (const accountId of listLiveCodexAccountIds(config)) {
+    const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
+    if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) continue;
+    const identity = accountId === MAIN_CODEX_ACCOUNT_ID ? getMainAccountToken()?.chatgptAccountId : String(record?.replacedAt ?? 0);
+    if (!identity) continue;
+    const owner = nativeOwner(accountId, identity);
+    if (owner.account !== saved.account || owner.generation !== saved.generation) continue;
+    bindThreadAffinity(threadId, accountId, now, quotaScope);
+    break;
+  }
+}
+
 function getThreadAffinity(threadId: string, quotaScope?: CodexQuotaScope): ThreadAffinityEntry | undefined {
   if (!admissibleAffinityComponent(threadId)) return undefined;
   return threadAccountMap.get(threadId)?.get(threadAffinityScope(quotaScope));
@@ -815,6 +841,7 @@ function getThreadAffinity(threadId: string, quotaScope?: CodexQuotaScope): Thre
 
 function deleteThreadAffinity(threadId: string, quotaScope?: CodexQuotaScope): void {
   if (!admissibleAffinityComponent(threadId)) return;
+  deleteNativeOwnership(affinityKey(threadId, quotaScope));
   const affinities = threadAccountMap.get(threadId);
   if (!affinities) return;
   affinities.delete(threadAffinityScope(quotaScope));
@@ -827,7 +854,10 @@ function deleteThreadAffinitiesForAccount(threadId: string, accountId: string): 
   const affinities = threadAccountMap.get(threadId);
   if (!affinities) return;
   for (const [scope, entry] of affinities) {
-    if (entry.accountId === accountId) affinities.delete(scope);
+    if (entry.accountId === accountId) {
+        deleteNativeOwnership(affinityKey(threadId, scope === "unscoped" ? undefined : scope));
+        affinities.delete(scope);
+      }
   }
   if (affinities.size === 0) threadAccountMap.delete(threadId);
 }
@@ -843,8 +873,12 @@ function isThreadAffinityExpired(entry: ThreadAffinityEntry, now: number): boole
 }
 
 function isThreadAffinityGenerationLive(entry: ThreadAffinityEntry): boolean {
-  if (entry.accountId === MAIN_CODEX_ACCOUNT_ID) return entry.generation === 0;
-  return isCodexAccountGenerationLive(entry.accountId, entry.generation);
+  if (entry.accountId === MAIN_CODEX_ACCOUNT_ID) {
+    const identity = getMainAccountToken()?.chatgptAccountId;
+    return !!identity && ownershipFingerprint("affinity-credential", identity) === entry.credentialIdentity;
+  }
+  const record = readCodexAccountRecord(entry.accountId);
+  return !!record?.credential && record.deletedAt == null && ownershipFingerprint("affinity-credential", String(record.replacedAt ?? 0)) === entry.credentialIdentity;
 }
 
 function pruneExpiredThreadAffinities(now: number): void {
@@ -885,18 +919,21 @@ function bindThreadAffinity(
   if (!admissibleAffinityComponent(threadId) || !admissibleAffinityComponent(accountId)) return;
   const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
   if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) return;
+  const identity = accountId === MAIN_CODEX_ACCOUNT_ID ? getMainAccountToken()?.chatgptAccountId : String(record?.replacedAt ?? 0);
+  if (!identity) return;
   pruneExpiredThreadAffinities(now);
   const scope = threadAffinityScope(quotaScope);
   const affinities = threadAccountMap.get(threadId) ?? new Map<ThreadAffinityScope, ThreadAffinityEntry>();
   const previous = affinities.get(scope);
   affinities.set(scope, {
     accountId,
-    generation: accountId === MAIN_CODEX_ACCOUNT_ID ? 0 : record!.generation,
+    credentialIdentity: ownershipFingerprint("affinity-credential", identity),
     createdAt: previous?.createdAt ?? now,
     lastUsedAt: now,
     lastReevalAt: now,
   });
   threadAccountMap.set(threadId, affinities);
+  writeNativeOwnership(affinityKey(threadId, quotaScope), nativeOwner(accountId, identity), "task");
   pruneLruThreadAffinities();
 }
 
@@ -1391,29 +1428,6 @@ export function previewCodexAccountForRequest(
       && isCodexAccountSelectable(config, entry.accountId, now, quotaScope, selectionOptions)
       && !shouldFailover(config, entry.accountId, now)
     ) {
-      // Quota strategy only: non-quota strategies keep affinity for ongoing threads
-      // (new-session-only rotation — docs / affinity policy A).
-      const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
-      if (strategy === "quota") {
-        const threshold = config.autoSwitchThreshold ?? 80;
-        if (threshold > 0) {
-          const usage = computeCodexUsageScore(
-            getAccountQuota(entry.accountId),
-            getPoolAccountPlan(config, entry.accountId),
-          );
-          if (!isUnknownUsage(usage) && usage >= threshold) {
-            const best = pickLowerUsageAccount(
-              config,
-              entry.accountId,
-              usage,
-              now,
-              quotaScope,
-              selectionOptions,
-            );
-            if (best !== entry.accountId) return best;
-          }
-        }
-      }
       return entry.accountId;
     }
     // Stale/unusable affinity is ignored for preview (no map mutation).
@@ -1478,6 +1492,7 @@ export function resolveCodexAccountForThreadDetailed(
   // change to shared routing state.
   if (!isIndependentCodexQuotaScope(quotaScope)) releaseDrainedCodexAccountPin(config);
 
+  if (threadId) restoreThreadAffinity(threadId, config, now, quotaScope);
   const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
   if (threadId && entry) {
     if (isThreadAffinityExpired(entry, now)) {
@@ -1492,35 +1507,11 @@ export function resolveCodexAccountForThreadDetailed(
       && !shouldFailover(config, entry.accountId, now)
     ) {
       entry.lastUsedAt = now;
-      // Periodic quota re-eval: a long-lived bound thread must still switch when
-      // it crosses autoSwitchThreshold and a strictly-cooler account exists.
-      // Without this the reuse branch returns before applyQuotaAutoSwitch and the
-      // thread stays pinned for the full idle TTL (the WSL "never switches" report).
-      // Over-threshold pins re-eval immediately so a depleted primary does not keep
-      // serving for up to 60s after a secondary with quota is available (#584).
-      // Non-quota strategies (RR / fill-first) keep affinity for ongoing threads —
-      // rotation is new-session-only (affinity policy A).
-      const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
-      if (strategy === "quota") {
-        const threshold = config.autoSwitchThreshold ?? 80;
-        const usage = threshold > 0
-          ? computeCodexUsageScore(
-            getAccountQuota(entry.accountId),
-            getPoolAccountPlan(config, entry.accountId),
-          )
-          : 0;
-        const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
-        if (overThreshold || now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
-          entry.lastReevalAt = now;
-          if (overThreshold) {
-            const best = pickLowerUsageAccount(config, entry.accountId, usage, now, quotaScope, selectionOptions);
-            if (best !== entry.accountId) {
-              if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, best);
-              bindThreadAffinity(threadId, best, now, quotaScope); // rebinds + resets clocks
-              return { status: "selected", accountId: best };
-            }
-          }
-        }
+      // Quota ranking affects new work only; healthy owners remain stable.
+      if (now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
+        const identity = entry.accountId === MAIN_CODEX_ACCOUNT_ID ? getMainAccountToken()?.chatgptAccountId : String(readCodexAccountRecord(entry.accountId)?.replacedAt ?? 0);
+        if (identity) writeNativeOwnership(affinityKey(threadId, quotaScope), nativeOwner(entry.accountId, identity), "task");
+        entry.lastReevalAt = now;
       }
       return { status: "selected", accountId: entry.accountId };
     }
