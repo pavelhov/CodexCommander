@@ -131,7 +131,7 @@ describe("issue #914 — pre-connection failures never touch account health", ()
         calls++;
         if (calls === 1) return new Response("gw", { status: 503 });
         throw rejection;
-      }, { slowAttemptMs: 60_000 }).catch(err => err));
+      }, { attempts: 3, slowAttemptMs: 60_000 }).catch(err => err));
       expect(calls).toBe(2);
       expect(outcome).toBe("connect_error");
       recordCodexUpstreamOutcome(config, "a", outcome, { threadId: "t-mixed" });
@@ -146,7 +146,7 @@ describe("issue #914 — pre-connection failures never touch account health", ()
     const err = await fetchWithResetRetry(async recovery => {
       if (!recovery) throw coded("reset", "ECONNRESET");
       throw rejection;
-    }).catch((e: unknown) => e);
+    }, { attempts: 2 }).catch((e: unknown) => e);
     expect(classifyTransportFailureKind(err)).toBe("connect_error");
   });
 

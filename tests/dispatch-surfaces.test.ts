@@ -39,7 +39,7 @@ test("vision cache hit performs no inference and no extra child scope", async ()
   expect(result.outcomes).toEqual(["protocol_success", "protocol_success"]);
 });
 
-test("search reset retries observe final sends and preserve partial EOF as unknown", async () => {
+test("search reset is surfaced without a second inference send", async () => {
   const { events, request } = accounting();
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -48,9 +48,17 @@ test("search reset retries observe final sends and preserve partial EOF as unkno
     return new Response('data: {"type":"response.output_text.delta","delta":"synthetic answer"}\n\n');
   }) as typeof fetch;
   const result = await runWebSearch("synthetic", { type: "web_search" }, { adapter: "openai-responses", baseUrl: "http://127.0.0.1:1" }, new Headers(), { model: "synthetic", reasoning: "low", timeoutMs: 1000 }, undefined, undefined, request.attempt());
+  expect(result.text).toBe("");
+  expect(calls).toBe(1);
+  expect(foldDispatchEvents(events).sends.map(send => send.outcome)).toEqual(["transport_failure"]);
+});
+
+test("search partial EOF remains unknown without inventing usage", async () => {
+  const { events, request } = accounting();
+  globalThis.fetch = (async () => new Response('data: {"type":"response.output_text.delta","delta":"synthetic answer"}\n\n')) as typeof fetch;
+  const result = await runWebSearch("synthetic", { type: "web_search" }, { adapter: "openai-responses", baseUrl: "http://127.0.0.1:1" }, new Headers(), { model: "synthetic", reasoning: "low", timeoutMs: 1000 }, undefined, undefined, request.attempt());
   expect(result.text).toBe("synthetic answer");
-  expect(calls).toBe(2);
-  expect(foldDispatchEvents(events).sends.map(send => send.outcome)).toEqual(["transport_failure", "unknown"]);
+  expect(foldDispatchEvents(events).sends.map(send => send.outcome)).toEqual(["unknown"]);
 });
 
 test("Command Code synthetic EOF done does not assert upstream completion", async () => {

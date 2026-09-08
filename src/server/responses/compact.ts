@@ -1,3 +1,4 @@
+import { UpstreamSendBudget } from "../../lib/upstream-send-budget";
 import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
 import { cleanupResponseDispatch, responseDispatch, observeDispatch } from "../../usage/dispatch-http";
 import type { Server } from "bun";
@@ -368,6 +369,7 @@ export async function handleResponsesCompact(
     const compactUrl = `${base}/responses/compact`;
     const compactThreadId = req.headers.get("x-codex-parent-thread-id");
     const connectMs = config.connectTimeoutMs ?? 200_000;
+    const sendBudget = new UpstreamSendBudget(connectMs);
     // Takes its context explicitly: the alternate-account flow below records a rejection
     // against A while promoting B, then records B's own outcome. A closure over a single
     // `authCtx` cannot express either.
@@ -393,11 +395,7 @@ export async function handleResponsesCompact(
           : undefined,
       });
     };
-    // Two recovery modes, mirroring retryCodexPoolOnAlternateAccount() on the regular
-    // path (core.ts:396). The first account keeps the full ladder — transient-5xx retry
-    // wrapping reset retry — because those retries happen before any alternate is even
-    // considered. The alternate is one bounded send: a second ladder would multiply the
-    // work an already-rejecting pool is doing.
+    // Initial and permitted quota recovery share two sends and one header deadline.
     const sendCompactAttempt = (
       sendProvider: CodexCommanderProviderConfig,
       sendHeaders: Headers,
@@ -418,6 +416,7 @@ export async function handleResponsesCompact(
         // pool sends: direct mode carries the caller's credential too (#914).
         sendProvider.authMode === "forward",
         requestDispatchContext(logCtx, req.signal, upstreamRecovery ? "retry" : "compaction", config.providers[route.providerName]),
+        sendBudget,
       ).then(res => {
         // Every real attempt response — including an intermediate 5xx the retry
         // wrapper replaces — proves the host was reached (#914 review).

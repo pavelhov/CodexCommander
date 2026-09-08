@@ -14,7 +14,7 @@ runs helper features around provider requests.
 | `hostname?` | `string` | `"127.0.0.1"` | Bind address. Non-loopback binds require `CODEXCOMMANDER_API_AUTH_TOKEN`. |
 | `proxy?` | `string` | — | Outbound HTTP(S) proxy URL or `${ENV_VAR}`. Applied to `HTTP_PROXY` / `HTTPS_PROXY` only when those variables are unset; loopback remains in `NO_PROXY`. |
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before `response.incomplete`. Minimum 1. |
-| `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
+| `connectTimeoutMs?` | `number` | `200000` | DNS/TCP/TLS/final-header deadline; native forward Responses and compaction share it across initial send and account recovery. It ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
 | `websockets?` | `boolean` | `false` | Advertise `supports_websockets` for the Responses WebSocket path. False keeps HTTP/SSE. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
@@ -27,6 +27,24 @@ runs helper features around provider requests.
 | `webSearchSidecar?` | `CodexCommanderWebSearchSidecarConfig` | on when usable | Web-search sidecar options. |
 | `visionSidecar?` | `CodexCommanderVisionSidecarConfig` | on when usable | Image-description sidecar options. |
 | `images?` | `CodexCommanderImagesConfig` | automatic OpenAI selection | Standalone Images relay options for Codex `image_gen`. |
+
+## Request recovery and cancellation
+
+The shared upstream transport sends once by default. Connection resets and generic server errors
+are returned to the client instead of automatically repeating potentially processed inference.
+Native forward Responses and compaction permit at most one additional send for an existing
+allowlisted account rejection, such as a quota rejection when account fallback is allowed. Both
+sends share `connectTimeoutMs`; selecting a second account does not restart the deadline. Exact
+account selectors remain exact.
+
+Cancelling a passthrough response immediately signals upstream cancellation and releases its reader.
+The proxy no longer waits up to 15 seconds for additional usage data. Completion evidence already
+received is retained; otherwise usage can remain partial or unknown. The provider controls when
+remote generation actually stops after receiving cancellation.
+
+Explicit combo fallback, API-key `retryOn429`, and adapters with their own recovery policies are
+separate. Native clients can also retry errors themselves. These safeguards reduce proxy-generated
+work; they do not establish subscription-credit parity with native Codex.
 
 ## Remote access
 

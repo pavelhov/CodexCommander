@@ -556,16 +556,19 @@ describe("native V2 plaintext collaboration handleResponses integration", () => 
   );
 
   test.skipIf(process.platform !== "darwin")(
-    "settles an owned budget after client cancel and a late upstream terminal",
+    "settles an owned budget on immediate client cancellation without a late terminal",
     async () => {
       const liveBudgetsBefore = translatorLiveBudgetCountForTests();
       let upstreamController!: ReadableStreamDefaultController<Uint8Array>;
-      globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
-        start(controller) { upstreamController = controller; },
-      }), {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      })) as typeof fetch;
+      let wireSignal: AbortSignal | null | undefined;
+      const cancellations: unknown[] = [];
+      globalThis.fetch = (async (_input, init) => {
+        wireSignal = init?.signal;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { upstreamController = controller; },
+          cancel(reason) { cancellations.push(reason); },
+        }), { status: 200, headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
 
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -579,9 +582,8 @@ describe("native V2 plaintext collaboration handleResponses integration", () => 
       ));
       expect((await reader.read()).done).toBe(false);
       await reader.cancel("client closed");
-      upstreamController.enqueue(new TextEncoder().encode(
-        completedSse(V2_PLAINTEXT_COLLABORATION_NAMESPACE),
-      ));
+      expect(wireSignal?.aborted).toBe(true);
+      expect(cancellations).toEqual(["client closed"]);
 
       const deadline = Date.now() + 2_000;
       while (translatorLiveBudgetCountForTests() !== liveBudgetsBefore && Date.now() < deadline) {

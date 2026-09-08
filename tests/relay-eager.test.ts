@@ -528,119 +528,42 @@ describe("relaySseEagerBounded — bounded queue", () => {
   });
 });
 
-describe("relaySseEagerBounded — #44 cancel semantics", () => {
-  test("counts a client cancel and its bounded upstream abort without retaining queue bytes", async () => {
+describe("relaySseEagerBounded — immediate cancellation", () => {
+  test("aborts synchronously, releases the reader and queue, and finalizes once", async () => {
     resetEagerRelayCountersForTest();
-    const { hooks } = makeHooks();
-    const up = controlledUpstream();
-    const upstreamAc = new AbortController();
-    const reader = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
-      postCancelDrainMs: 10,
-    }).getReader();
-    up.push(sse(DELTA));
-    await reader.read();
-    await reader.cancel();
-    await settle(40);
-
-    expect(getEagerRelayCounters()).toMatchObject({
-      starts: 1,
-      inFlight: 0,
-      clientCancels: 1,
-      upstreamAborts: 1,
-      currentQueuedBytes: 0,
-    });
+    const { hooks, rec } = makeHooks();
+    const upstream = new AbortController();
+    const reasons: unknown[] = [];
+    const body = new ReadableStream<Uint8Array>({ cancel(reason) { reasons.push(reason); } });
+    const reader = relaySseEagerBounded(body, upstream, hooks,
+      { postCancelDrainMs: 60_000, postCancelDrainBytes: 32 * 1024 * 1024 }).getReader();
+    const reason = new DOMException("client left", "AbortError");
+    const cancelled = reader.cancel(reason);
+    expect(upstream.signal.aborted).toBe(true);
+    expect(upstream.signal.reason).toBe(reason);
+    expect(reasons).toEqual([reason]);
+    await cancelled;
+    await settle(5);
+    expect(rec.cancels).toBe(1);
+    expect(rec.dones).toBe(1);
+    expect(rec.disposes).toBe(1);
+    expect(rec.terminals).toEqual([]);
+    expect(rec.synthetics).toEqual([]);
+    expect(getEagerRelayCounters()).toMatchObject({ inFlight: 0, clientCancels: 1,
+      upstreamAborts: 1, currentQueuedBytes: 0 });
   });
 
-  test("(c) post-cancel late terminal → recorded as completed, onClientCancel NOT fired", async () => {
+  test("preserves a terminal already settled when the client cancels", async () => {
     const { hooks, rec } = makeHooks();
     const up = controlledUpstream();
-    const relayed = relaySseEagerBounded(up.stream, new AbortController(), hooks, {
-      postCancelDrainMs: 5_000,
-    });
-    const reader = relayed.getReader();
-    up.push(sse(DELTA));
+    const upstream = new AbortController();
+    const reader = relaySseEagerBounded(up.stream, upstream, hooks).getReader();
+    up.push(sse(COMPLETED));
+    await reader.cancel();
+    expect(upstream.signal.aborted).toBe(true);
     await settle(5);
-    await reader.cancel(); // client walks away mid-stream
-    up.push(sse(COMPLETED)); // terminal arrives during discard-drain
-    await settle(20);
     expect(rec.terminals).toEqual([{ status: "completed", httpStatus: undefined }]);
     expect(rec.cancels).toBe(0);
-    expect(rec.dones).toBe(1);
-  });
-
-  test("post-cancel terminal ends metadata-only drain without waiting for timeout", async () => {
-    const inspector = createSseInspector({});
-    const up = controlledUpstream();
-    const rec = { cancels: 0, dones: 0, synthetics: [] as string[] };
-    let resolveDone!: () => void;
-    const relayDone = new Promise<void>(resolve => { resolveDone = resolve; });
-    const relayed = relaySseEagerBounded(up.stream, new AbortController(), {
-      inspectChunk: chunk => inspector.feed(chunk),
-      finishInspection: () => inspector.finish(),
-      disposeInspection: () => inspector.dispose(),
-      // Mirrors the no-onTerminal wiring in responses/core.ts.
-      sawTerminal: () => inspector.terminalSeen(),
-      onSynthetic: kind => { rec.synthetics.push(kind); },
-      onClientCancel: () => { rec.cancels += 1; },
-      onDone: () => { rec.dones += 1; resolveDone(); },
-    }, { postCancelDrainMs: 5_000 });
-    const reader = relayed.getReader();
-    up.push(sse(DELTA));
-    await settle(5);
-    await reader.cancel();
-
-    // Keep upstream open after delivering the terminal. The protocol terminal,
-    // not EOF or the five-second drain timer, must finish the relay lifecycle.
-    up.push(sse(COMPLETED));
-    await Promise.race([
-      relayDone,
-      new Promise<never>((_, reject) => setTimeout(
-        () => reject(new Error("metadata-only terminal drain waited for timeout")),
-        200,
-      )),
-    ]);
-
-    expect(inspector.reported()).toBe(false);
-    expect(inspector.terminalSeen()).toBe(true);
-    expect(rec.cancels).toBe(0);
-    expect(rec.synthetics).toEqual([]);
-    expect(rec.dones).toBe(1);
-  });
-
-  test("(d) post-cancel drain timeout → onClientCancel fired, upstream aborted", async () => {
-    const { hooks, rec } = makeHooks();
-    const up = controlledUpstream();
-    const upstreamAc = new AbortController();
-    const relayed = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
-      postCancelDrainMs: 30,
-    });
-    const reader = relayed.getReader();
-    up.push(sse(DELTA));
-    await settle(5);
-    await reader.cancel();
-    await settle(100); // silent upstream; wall-clock drain bound must fire
-    expect(rec.cancels).toBe(1);
-    expect(rec.terminals).toEqual([]);
-    expect(upstreamAc.signal.aborted).toBe(true);
-    expect(rec.dones).toBe(1);
-  });
-
-  test("(d2) post-cancel drainBytes cap → onClientCancel fired without waiting for the clock", async () => {
-    const { hooks, rec } = makeHooks();
-    const up = controlledUpstream();
-    const upstreamAc = new AbortController();
-    const relayed = relaySseEagerBounded(up.stream, upstreamAc, hooks, {
-      postCancelDrainMs: 60_000,
-      postCancelDrainBytes: 24,
-    });
-    const reader = relayed.getReader();
-    up.push(sse(DELTA));
-    await settle(5);
-    await reader.cancel();
-    up.push(enc.encode("x".repeat(32))); // exceeds the 24-byte drain cap, no terminal
-    await settle(20);
-    expect(rec.cancels).toBe(1);
-    expect(upstreamAc.signal.aborted).toBe(true);
     expect(rec.dones).toBe(1);
   });
 });

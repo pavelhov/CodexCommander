@@ -69,14 +69,13 @@ Native passthrough SSE has TWO shapes, selected per request in
   specifically validated bundled Bun; an unvalidated Bun fails closed to tee
   with a startup warning. Explicit `eager-relay` remains available for other
   eligible Darwin SSE turns, and `safe-tee` always disables this auto path.
-  One eager reader + byte-bounded client queue + post-cancel bounded
-  discard-drain replaces the tee. Its synchronous `pull()` body goes directly
+  One eager reader + byte-bounded client queue replaces the tee. Cancellation
+  aborts upstream immediately and cancels the owned reader. Its synchronous `pull()` body goes directly
   to the response: owned translator-budget cleanup transfers to the producer's
   exactly-once teardown, and a body marker survives header-only Response
   reconstruction so no later async-pull wrapper can reintroduce Bun #32111.
   Caller-owned budgets are never transferred. Inspection still uses the shared
-  `createSseInspector` factory in `relay.ts`, including #44 late-terminal
-  semantics. `/api/system/memory` exposes only scalar eager-relay lifecycle and
+  `createSseInspector` factory in `relay.ts`, preserving terminal evidence already received before cancellation. `/api/system/memory` exposes only scalar eager-relay lifecycle and
   queue counters; no payload or request identity is retained.
 
 The two-shape contract is mirror-commented in `src/server/index.ts`; the real
@@ -548,17 +547,23 @@ with the same item id. The batch/non-streaming bridge follows the same rule.
 - 장점, 단점 및 영향: Codex App receives a definitive phase for persisted bridged messages and avoids the duplicate-final rendering path; the provisional output_item.added event intentionally has no phase because its classification is not yet knowable.
 ```
 
-## Upstream reset retry
+## Upstream send and cancellation policy
 
-`src/lib/upstream-retry.ts` guards upstream fetches against stale pooled keep-alive sockets
-(Cloudflare closes idle connections; Bun's fetch reuses the dead socket and rejects with
-`ECONNRESET` before any response bytes). `fetchWithResetRetry` retries only
-connection-reset-shaped rejections (up to 3 total attempts, jittered backoff, warn-logged);
-timeouts, aborts, `ECONNREFUSED`, HTTP error statuses, and mid-stream SSE failures are never
-retried. Guarded paths: the ChatGPT passthrough and generic adapter fetch in
-`src/server/responses.ts`, the vision/web-search sidecars, and the web-search loop's direct-fetch
-fallback. Adapters with their own `fetchResponse` (kiro, cursor, google) keep their own retry
-policies; kiro imports the shared abort/sleep helpers from this module.
+`src/lib/upstream-retry.ts` defaults to one send. A connection reset before headers or a generic
+5xx response does not prove generation never started, so neither causes automatic replay.
+Internal callers explicitly opting into multiple attempts share a single total counter across
+reset and status recovery. The default applies to generic adapter fetches, vision/search sidecars,
+and the search loop fallback. Adapters owning `fetchResponse` retain their provider-specific policies.
+
+Native forward Responses and compaction share a two-send budget and one cumulative header deadline
+between their initial request and the existing allowlisted pre-generation account rejection recovery.
+The recovery classifiers and exact-account rules remain authoritative; the budget does not permit
+new fallback cases. Explicit combo orchestration and API-key `retryOn429` remain separate policies.
+
+Both passthrough relay shapes abort upstream synchronously when the client cancels. They cancel the
+owned reader and preserve terminal evidence from a read already settled locally, without continuing
+generation to collect usage. Cancellation without a terminal remains a cancellation, not an account
+health failure. Legacy internal drain options are accepted but ignored.
 
 ## Same-provider combo quota fallback
 

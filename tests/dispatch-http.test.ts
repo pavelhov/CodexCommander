@@ -3,7 +3,7 @@ import { fetchWithTransientRetry } from "../src/lib/upstream-retry";
 import { fetchWithHeaderTimeout } from "../src/server/responses/fetch-helpers";
 
 describe("HTTP dispatch characterization", () => {
-  test("nested reset and status retries retain nine final executor calls", async () => {
+  test("reset and status recovery share three total executor calls", async () => {
     let sends = 0;
     const executor = (async () => {
       sends++;
@@ -12,18 +12,18 @@ describe("HTTP dispatch characterization", () => {
     }) as typeof fetch;
     const controller = new AbortController();
     const result = await fetchWithTransientRetry(() => fetchWithHeaderTimeout("http://localhost.invalid", {}, controller.signal, 1000, false, executor), { attempts: 3, slowAttemptMs: 10000 });
-    expect(sends).toBe(9);
+    expect(sends).toBe(3);
     expect(await result.text()).toBe("synthetic");
   });
 
-  test("pre-aborted final helper still invokes executor, retry wrapper does not", async () => {
+  test("pre-aborted final helper and retry wrapper never invoke executor", async () => {
     let sends = 0;
     const controller = new AbortController(); controller.abort();
     const executor = (async (_url: unknown, init: RequestInit) => { sends++; expect(init.signal?.aborted).toBe(true); throw controller.signal.reason; }) as typeof fetch;
     await expect(fetchWithHeaderTimeout("http://localhost.invalid", {}, controller.signal, 1000, false, executor)).rejects.toThrow();
-    expect(sends).toBe(1);
+    expect(sends).toBe(0);
     await expect(fetchWithTransientRetry(() => fetchWithHeaderTimeout("http://localhost.invalid", {}, controller.signal, 1000, false, executor), { abortSignal: controller.signal })).rejects.toThrow();
-    expect(sends).toBe(1);
+    expect(sends).toBe(0);
   });
 
   test("header completion retains parent abort linkage and does not consume body", async () => {
@@ -55,15 +55,15 @@ function accounting() {
 const syntheticUrl = "http://127.0.0.1:1/v1/responses";
 
 describe("passive final HTTP accounting", () => {
-  test("nine sends are recorded beneath nested retries without changing result", async () => {
+  test("only three sends are recorded under a shared retry limit", async () => {
     const { events, attempt } = accounting(); let calls = 0;
     const controller = new AbortController();
     const executor = (async () => { calls++; if (calls % 3) throw Object.assign(new Error("reset"), { code: "ECONNRESET" }); return new Response("synthetic", { status: calls === 9 ? 200 : 503, headers: { "retry-after": "0" } }); }) as typeof fetch;
     const result = await fetchWithTransientRetry(() => fetchWithHeaderTimeout(syntheticUrl, {}, controller.signal, 1000, false, executor, false, { attempt, clientSignal: controller.signal }), { attempts: 3, slowAttemptMs: 10000 });
-    expect(calls).toBe(9); expect(await result.text()).toBe("synthetic");
-    expect(foldDispatchEvents(events).sends).toHaveLength(9);
-    expect(foldDispatchEvents(events).sends.at(-1)?.outcome).toBe("unknown");
-    expect(events.filter(e => e.kind === "start").map(e => e.metadata?.reason)).toEqual(["initial", ...Array(8).fill("retry")]);
+    expect(calls).toBe(3); expect(await result.text()).toBe("synthetic");
+    expect(foldDispatchEvents(events).sends).toHaveLength(3);
+    expect(foldDispatchEvents(events).sends.at(-1)?.outcome).toBe("protocol_failure");
+    expect(events.filter(e => e.kind === "start").map(e => e.metadata?.reason)).toEqual(["initial", ...Array(2).fill("retry")]);
     cleanupResponseDispatch(result);
   });
 

@@ -864,10 +864,8 @@ describe("compact alternate-account attempt (#913)", () => {
   });
 
   test("the alternate sends once even against a transient 5xx", async () => {
-    // The two-mode crux. Compact's normal send wraps fetchWithTransientRetry, which
-    // retries a 5xx up to three times. The alternate must NOT inherit that ladder:
-    // it is a last bounded try, not a second retry stack. Without the mode split this
-    // reads four sends (one from A, three from B's ladder).
+    // Both the first and alternate accounts send once; the 503 from the
+    // alternate must remain visible rather than trigger an ambiguous replay.
     await withPoolEnv("ccx-compact-alt-single-", async config => {
       let sends = 0;
       globalThis.fetch = (async () => {
@@ -889,9 +887,9 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   });
 
-  test("the first account keeps its transient-retry ladder", async () => {
-    // The control for the test above: A's recovery is unchanged, so a transient 5xx
-    // on A is still retried in place rather than treated as a reason to fail over.
+  test("the first account surfaces an ambiguous 503 without replay", async () => {
+    // A 503 may follow processed inference. Neither same-account retry nor
+    // alternate-account recovery is permitted by default.
     await withPoolEnv("ccx-compact-alt-ladder-", async config => {
       let sends = 0;
       globalThis.fetch = (async () => {
@@ -906,9 +904,9 @@ describe("compact alternate-account attempt (#913)", () => {
         { model: "", provider: "" },
       );
 
-      // Two sends, both to A — a 503 is not 429/402, so no alternate is involved.
-      expect(sends).toBe(2);
-      expect(res.status).toBe(200);
+      // A 503 is not a definitive pre-generation quota rejection.
+      expect(sends).toBe(1);
+      expect(res.status).toBe(503);
     });
   });
 
