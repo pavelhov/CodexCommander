@@ -1,0 +1,150 @@
+{
+  "source": {
+    "kind": "installed-codex-bundled",
+    "version": "codex-cli 0.153.4",
+    "binary_sha256": "a30ec314bbd0e3721632234d07db7c99855db3b9f1e32dbe8c791947f07e7629",
+    "command": "codex debug models --bundled",
+    "extracted_fields": [
+      "slug",
+      "display_name",
+      "context_window",
+      "max_context_window",
+      "auto_compact_token_limit",
+      "effective_context_window_percent",
+      "supported_reasoning_levels",
+      "default_reasoning_level",
+      "supports_reasoning_summaries",
+      "supports_parallel_tool_calls",
+      "support_verbosity",
+      "default_verbosity",
+      "input_modalities",
+      "supports_websockets",
+      "prefer_websockets",
+      "multi_agent_version",
+      "use_responses_lite",
+      "web_search_tool_type",
+      "supports_search_tool"
+    ]
+  },
+  "models": [
+    {
+      "slug": "gpt-5.6-sol",
+      "display_name": "GPT-5.6-Sol",
+      "default_reasoning_level": "low",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth for the hardest problems"
+        },
+        {
+          "effort": "ultra",
+          "description": "Maximum reasoning with automatic task delegation"
+        }
+      ],
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "web_search_tool_type": "text_and_image",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_search_tool": true,
+      "use_responses_lite": true,
+      "multi_agent_version": "v2"
+    },
+    {
+      "slug": "gpt-5.6-luna",
+      "display_name": "GPT-5.6-Luna",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra high reasoning depth for complex problems"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth for the hardest problems"
+        }
+      ],
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "web_search_tool_type": "text_and_image",
+      "context_window": 272000,
+      "max_context_window": 872000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_search_tool": true,
+      "use_responses_lite": true,
+      "multi_agent_version": "v1"
+    },
+    {
+      "slug": "gpt-5.5",
+      "display_name": "GPT-5.5",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balances speed and reasoning depth for everyday tasks"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex problems"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra high reasoning depth for complex problems"
+        }
+      ],
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "web_search_tool_type": "text_and_image",
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "effective_context_window_percent": 95,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "supports_search_tool": true,
+      "use_responses_lite": false
+    }
+  ]
+}

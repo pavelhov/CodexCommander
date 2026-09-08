@@ -419,7 +419,7 @@ function prepareCatalog(
   const routedEntries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
     [], ordered, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
-    accountSelectors, suppressedBareNativeSlugs, new Set(),
+    accountSelectors, suppressedBareNativeSlugs, new Set(), source.catalog.models ?? [],
   );
   const accountBoundEntries = accountSelectors.length === 0
     ? []
@@ -434,6 +434,7 @@ function prepareCatalog(
       accountSelectors,
       suppressedBareNativeSlugs,
       new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
+      source.catalog.models ?? [],
     ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
   const baseline = new Map<string, number>((catalog.models ?? []).flatMap(entry => (
     typeof entry.slug === "string" && typeof entry.priority === "number"
@@ -466,6 +467,7 @@ function prepareCatalog(
     accountBoundEntries,
     nativeOpenAiSlugs(),
     suppressedBareNativeSlugs,
+    source.catalog.models ?? [],
   );
   clampCatalogModelsToSupportedEfforts(
     catalog.models,

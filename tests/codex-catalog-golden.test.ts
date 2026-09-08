@@ -80,3 +80,68 @@ describe("codex-catalog golden (pure buildCatalogEntries oracle)", () => {
     ]);
   });
 });
+
+import nativeSource from "./fixtures/catalog/native-codex-2026-09-08.json";
+import { mergeCatalogEntriesForSync } from "../src/codex/catalog/sync";
+import { ensureStrictCatalogFields } from "../src/codex/catalog/parsing";
+
+const nativeBehaviorFields = nativeSource.source.extracted_fields.filter(key =>
+  !["slug", "display_name", "supports_websockets", "prefer_websockets"].includes(key));
+function behavior(entry: Record<string, unknown>) {
+  return Object.fromEntries(nativeBehaviorFields.filter(key => key in entry).map(key => [key, entry[key]]));
+}
+
+describe("versioned native catalog fidelity", () => {
+  for (const source of nativeSource.models) {
+    test(`${source.slug} preserves source behavior and exact-account clones`, () => {
+      const built = buildCatalogEntries(source, [source.slug], [], [], true, "default", new Set(), ["main", "second"]);
+      for (const entry of built) {
+        expect(behavior(entry)).toEqual(behavior(source));
+        expect(entry.supports_websockets).not.toBe(true);
+        expect(entry.prefer_websockets).not.toBe(true);
+      }
+      const merged = mergeCatalogEntriesForSync([source], [], new Map(), [], true,
+        new Set(), source, new Set(), new Set(), "default", new Set(), false, true,
+        built.filter(entry => String(entry.slug).includes("/")), [source.slug]);
+      for (const entry of merged) expect(behavior(entry)).toEqual(behavior(source));
+      expect(mergeCatalogEntriesForSync(merged, [], new Map(), [], true,
+        new Set(), source, new Set(), new Set(), "default", new Set(), false, true,
+        built.filter(entry => String(entry.slug).includes("/")), [source.slug])).toEqual(merged);
+    });
+  }
+  test("external entries retain strict compatibility defaults", () => {
+    const row = ensureStrictCatalogFields({ slug: "external/model" }, { isRouted: true });
+    expect(row.context_window).toBe(128000);
+    expect(row.max_context_window).toBe(128000);
+    expect(row.auto_compact_token_limit).toBe(115200);
+  });
+});
+
+
+test("all supplied native source rows outrank template and pinned fallback", () => {
+  const built = buildCatalogEntries(nativeSource.models[0]!, nativeSource.models.map(row => row.slug), [],
+    [], false, "default", new Set(), ["second"], new Set(), new Set(), nativeSource.models);
+  for (const row of built) {
+    const slug = String(row.slug).replace(/^second\//, "");
+    expect(behavior(row)).toEqual(behavior(nativeSource.models.find(source => source.slug === slug)!));
+  }
+  const stale = nativeSource.models.map(row => ({ ...row, context_window: 372000, auto_compact_token_limit: 334800 }));
+  const refreshed = mergeCatalogEntriesForSync(stale, [], new Map(), [], false, new Set(), null,
+    new Set(), new Set(), "default", new Set(), false, true, [], nativeSource.models.map(row => row.slug),
+    new Set(), nativeSource.models);
+  for (const row of refreshed) {
+    expect(behavior(row)).toEqual(behavior(nativeSource.models.find(source => source.slug === row.slug)!));
+  }
+});
+
+test("source absence stays absent and missing source is marked as fallback", () => {
+  const minimal = { slug: "future-native", display_name: "Future Native" };
+  const [native] = buildCatalogEntries(minimal, [minimal.slug], []);
+  expect(behavior(native!)).toEqual({});
+  const [pinned] = buildCatalogEntries(null, ["gpt-5.6-sol"], []);
+  expect(pinned!.codexcommander_native_source).toBe("pinned-fallback");
+  expect(pinned!.auto_compact_token_limit).toBeNull();
+  const [fallback] = buildCatalogEntries(null, ["future-native"], []);
+  expect(fallback!.codexcommander_native_source).toBe("synthetic-fallback");
+  expect(fallback!.context_window).toBe(128000);
+});

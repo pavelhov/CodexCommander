@@ -278,8 +278,7 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
 
 /**
  * Pinned capability metadata is safe to use as a fallback for every supported native model.
- * Keep it separate from UPSTREAM_NATIVE_ENTRIES: that narrower map also authorizes replacing
- * persisted native rows during sync, which is currently intentional only for the GPT-5.6 family.
+ * Installed source entries take precedence; the pinned snapshot is explicitly a fallback.
  */
 const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
   ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
@@ -428,8 +427,7 @@ export function applyNativeVisibility(
 export const UPSTREAM_NATIVE_ENTRIES: Map<string, RawEntry> = new Map(
   ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
     .filter(m => typeof m.slug === "string"
-      && /^(?:gpt|codex)-/.test(m.slug as string)
-      && (m.slug as string).startsWith("gpt-5.6-"))
+      && /^(?:gpt|codex)-/.test(m.slug as string))
     .map(m => [m.slug as string, m]),
 );
 
@@ -437,14 +435,14 @@ export function upstreamNativeEntry(slug: string): RawEntry | null {
   const entry = UPSTREAM_NATIVE_ENTRIES.get(slug);
   if (!entry) return null;
   const clone = JSON.parse(JSON.stringify(entry)) as RawEntry;
-  delete clone.minimal_client_version;
+  clone.codexcommander_native_source = "pinned-fallback";
   return clone;
 }
 
 export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
   return typeof entry.slug === "string"
     && UPSTREAM_NATIVE_ENTRIES.has(entry.slug)
-    && entry.display_name === entry.slug;
+    && entry.codexcommander_native_source === "synthetic-fallback";
 }
 
 export function nativeOpenAiSlugs(
