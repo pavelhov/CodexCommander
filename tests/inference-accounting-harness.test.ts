@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { assertFixedSynthetic, captureRequest } from "./helpers/inference-recorder";
 import { compareFixture, semanticDiff } from "./helpers/inference-diff";
 import { syntheticBody } from "./fixtures/inference-accounting/fixtures";
-import { captureInChild, captureKilledChild, captureSurfacesInChild } from "../scripts/inference-offline-report";
+import { captureInChild, captureKilledChild, captureSurfacesInChild, reconcileFixtureCohort, renderFixtureAccounting, requirePinnedBaseline } from "../scripts/inference-offline-report";
 
 describe("fixed synthetic offline inference evidence", () => {
   test("unknown fields, encrypted history, images, tools and identities remain semantic", () => {
@@ -33,9 +33,19 @@ describe("fixed synthetic offline inference evidence", () => {
     try {
       const captures = await captureInChild(resolve(import.meta.dir, ".."), scratch);
       const byId = Object.fromEntries(captures.map(c => [c.id, c]));
+      const accounting = await reconcileFixtureCohort(captures);
+      expect(accounting.cohort.providerTokens.totalTokens).toBe(15);
+      expect(accounting.cohort.counts.missingUsage).toBeGreaterThan(0);
+      expect(accounting.cohort.complete).toBe(false);
+      expect(accounting.globalProviderCoverage).toBe("UNAVAILABLE");
+      expect(accounting.legacyUsageLedgerCombined).toBe(false);
+      expect(renderFixtureAccounting(accounting)).toContain("Known provider token subtotal: 9 input + 6 output = 15");
       expect(byId["compact-routed"]!.sends).toBe(1); expect(byId["compact-routed"]!.outcome).toBe("http_200");
       expect(byId["responses-websocket-reconnect"]!.sends).toBe(2);
       expect(byId["responses-websocket-reconnect"]!.telemetry.events.filter(event => event.kind === "request")).toHaveLength(2);
+      expect(byId.success!.telemetry.sourceCoverage.sourcePresent).toBe(true);
+      expect(byId["responses-websocket-reconnect"]!.telemetry.sourceKind).toBe("dispatch_journal");
+      expect(byId["responses-websocket-reconnect"]!.telemetry.sourceCoverage.readFailed).toBe(false);
       expect(byId.success!.sends).toBe(1); expect(byId.success!.wire.length).toBe(1);
       expect(byId.success!.outcome).toBe("protocol_success");
       expect(byId["transient-retry"]!.sends).toBe(2);
@@ -79,3 +89,9 @@ test("report imports independent sidecar and HTTP/2 fixture evidence without equ
     expect(rows[2]!.scope).toContain("not_websocket");
   } finally { await rm(scratch, { recursive: true, force: true }); }
 }, 20000);
+
+test("a missing pinned baseline fails locally with an actionable prerequisite", async () => {
+  const empty = await mkdtemp(join(tmpdir(), "ccx-missing-baseline-"));
+  try { await expect(requirePinnedBaseline(empty)).rejects.toThrow("No network fetch was attempted"); }
+  finally { await rm(empty, { recursive: true, force: true }); }
+});

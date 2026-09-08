@@ -1,4 +1,5 @@
 import { semanticDiff } from "./inference-diff";
+import type { DispatchSourceCoverage } from "../../src/usage/dispatch-summary";
 import type { DispatchEvent } from "../../src/usage/dispatch";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -73,7 +74,14 @@ export async function captureRequest(request: Request): Promise<WireCapture> {
   if (!["/responses", "/v1/responses"].includes(path) || request.method !== "POST") throw new Error("capture route rejected");
   return { path, method: request.method, headers, body };
 }
-export interface FixtureCapture { id: string; wire: WireCapture[]; sends: number; clientAttempts: number; outcome: string; response: string; faultInjection: string; telemetry: { events: DispatchEvent[]; summary: unknown; available: boolean } }
+export interface FixtureSourceEvidence {
+  sourceKind: "observer_sink" | "dispatch_journal" | "terminated_child_stdout" | "unavailable";
+  sourceCoverage: DispatchSourceCoverage;
+}
+export function fixtureObserverSource(events: readonly DispatchEvent[], health?: { observerFailures: number }): FixtureSourceEvidence {
+  return { sourceKind: events.length ? "observer_sink" : "unavailable", sourceCoverage: { sourcePresent: events.length > 0, ...(health ? { degradation: health } : {}) } };
+}
+export interface FixtureCapture { id: string; wire: WireCapture[]; sends: number; clientAttempts: number; outcome: string; response: string; faultInjection: string; telemetry: { events: DispatchEvent[]; summary: unknown; available: boolean } & FixtureSourceEvidence }
 export async function runAdapterCapture(sourceRoot: string, direct = false): Promise<FixtureCapture[]> {
   const origins = new Set<string>(); const originalFetch = globalThis.fetch;
   globalThis.fetch = guardedFetch(origins, originalFetch);
@@ -128,7 +136,7 @@ export async function runAdapterCapture(sourceRoot: string, direct = false): Pro
         } catch { outcome = controller.signal.aborted ? "cancelled_before_headers" : "transport_failure"; }
         finally { built.releaseBodyObservation?.(); if (observedResponse) httpAccounting?.closeAdapterObservation(observedResponse); }
         if (captureFailure) throw captureFailure;
-        captures.push({ id: fixture.id, wire, sends, clientAttempts: 1, outcome, response, faultInjection: fixture.fault === "reset" ? "after_recorder_arrival_at_fetch_seam" : "loopback_response", telemetry: { events, available: accountingAvailable, summary: accounting?.foldDispatchEvents(events) ?? null } });
+        captures.push({ id: fixture.id, wire, sends, clientAttempts: 1, outcome, response, faultInjection: fixture.fault === "reset" ? "after_recorder_arrival_at_fetch_seam" : "loopback_response", telemetry: { ...fixtureObserverSource(events, accounting?.dispatchObserverHealth()), events, available: accountingAvailable, summary: accounting?.foldDispatchEvents(events) ?? null } });
       } finally { budget.dispose(); origins.delete(origin); server.stop(true); }
     }
   } finally { globalThis.fetch = originalFetch; }
@@ -263,7 +271,7 @@ export async function runCompactCapture(sourceRoot: string): Promise<FixtureCapt
       { port: 0, multiAgentGuidanceEnabled: false, defaultProvider: "fixture", providers: { fixture: { adapter: "openai-responses", baseUrl: origin, authMode: "key", allowPrivateNetwork: true } } }, log);
     await response.body?.cancel();
     if (rejected) throw new Error("compact fixture sanitizer rejected");
-    return { id: "compact-routed", wire, sends: wire.length, clientAttempts: 1, outcome: `http_${response.status}`, response: "", faultInjection: "routed_compact_handler", telemetry: { events, available, summary: accounting?.foldDispatchEvents(events) ?? null } };
+    return { id: "compact-routed", wire, sends: wire.length, clientAttempts: 1, outcome: `http_${response.status}`, response: "", faultInjection: "routed_compact_handler", telemetry: { ...fixtureObserverSource(events, accounting?.dispatchObserverHealth()), events, available, summary: accounting?.foldDispatchEvents(events) ?? null } };
   } finally { server.stop(true); globalThis.fetch = originalFetch; }
 }
 
@@ -294,7 +302,10 @@ export function validateKillEvents(lines: string[]): DispatchEvent[] {
       if (key.endsWith("Ref")) { if (typeof value !== "string" || !/^[a-f0-9-]{36}$/.test(value)) throw new Error("kill reference rejected"); }
       else if (key === "kind") { if (!["request", "attempt", "start", "headers"].includes(String(value))) throw new Error("kill kind rejected"); }
       else if (key === "metadata") {
-        for (const [field, content] of Object.entries(value as object)) if (!({ surface: ["responses"], protocol: ["responses"], transport: ["http"], reason: ["initial"] } as Record<string, string[]>)[field]?.includes(String(content))) throw new Error("kill metadata rejected");
+        for (const [field, content] of Object.entries(value as object)) {
+          if (field === "sessionPresent" && typeof content === "boolean") continue;
+          if (!({ surface: ["responses"], protocol: ["responses"], transport: ["http"], reason: ["initial"] } as Record<string, string[]>)[field]?.includes(String(content))) throw new Error("kill metadata rejected");
+        }
       } else if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("kill numeric field rejected");
     }
     return event as DispatchEvent;

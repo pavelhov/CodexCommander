@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { captureRequest, guardedFetch, type FixtureCapture, type WireCapture } from "./inference-recorder";
+import { captureRequest, guardedFetch, type FixtureCapture, type FixtureSourceEvidence, type WireCapture } from "./inference-recorder";
 import { nativeSuccessSSE } from "../fixtures/inference-accounting/fixtures";
 import type { DispatchEvent } from "../../src/usage/dispatch";
 
@@ -52,14 +52,16 @@ export async function runWebSocketReconnectFixture(sourceRoot: string): Promise<
     if (rejected || wire.length !== 2 || completed !== 2) throw new Error("websocket reconnect count mismatch");
     const available = await Bun.file(join(sourceRoot, "src/usage/dispatch.ts")).exists();
     let events: DispatchEvent[] = []; let summary: unknown = null;
+    let source: FixtureSourceEvidence = { sourceKind: "unavailable", sourceCoverage: { sourcePresent: false } };
     if (available) {
       const accounting = await import(join(sourceRoot, "src/usage/dispatch.ts"));
-      const path = join(config.getConfigDir(), "dispatch.jsonl"); const file = Bun.file(path);
-      if (file.size > 65536) throw new Error("offline websocket journal too large");
-      events = (await file.text()).trim().split("\n").map(line => { const event = accounting.normalizeDispatchEvent(JSON.parse(line)); if (!event) throw new Error("offline websocket journal rejected"); return event; });
+      const { readDispatchJournal } = await import(join(sourceRoot, "src/usage/dispatch-log.ts"));
+      const journal = readDispatchJournal();
+      events = journal.events;
+      source = { sourceKind: "dispatch_journal", sourceCoverage: { sourcePresent: journal.sourcePresent, truncated: journal.truncated, invalidRows: journal.invalidRows, readFailed: journal.readFailed, degradation: journal.degradation } };
       if (events.filter(event => event.kind === "request").length !== 2 || events.filter(event => event.kind === "start").length !== 2) throw new Error("websocket ingress accounting duplicated");
       summary = accounting.foldDispatchEvents(events);
     }
-    return { id: "responses-websocket-reconnect", wire, sends: wire.length, clientAttempts: 2, outcome: "two_completed_generations", response: "", faultInjection: "close_reopen_between_generations", telemetry: { available, events, summary } };
+    return { id: "responses-websocket-reconnect", wire, sends: wire.length, clientAttempts: 2, outcome: "two_completed_generations", response: "", faultInjection: "close_reopen_between_generations", telemetry: { ...source, available, events, summary } };
   } finally { await server?.stop(true); upstream.stop(true); globalThis.fetch = originalFetch; globalThis.WebSocket = OriginalWebSocket; }
 }

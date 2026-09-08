@@ -3,7 +3,7 @@ import type { DispatchEvent } from "../src/usage/dispatch";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { BASELINE_REVISION, interruptCaptureChild, settleCaptureChild, guardedFetch, boundedChildText, isolatedEnvironment, probeNativeCapture, runAdapterCapture, runCompactCapture, runKillCaptureChild, validateKillEvents, captureRequest, type FixtureCapture } from "../tests/helpers/inference-recorder";
+import { BASELINE_REVISION, fixtureObserverSource, type FixtureSourceEvidence, interruptCaptureChild, settleCaptureChild, guardedFetch, boundedChildText, isolatedEnvironment, probeNativeCapture, runAdapterCapture, runCompactCapture, runKillCaptureChild, validateKillEvents, captureRequest, type FixtureCapture } from "../tests/helpers/inference-recorder";
 import { compareFixture, semanticDiff, wireNormalizations } from "../tests/helpers/inference-diff";
 
 const root = resolve(import.meta.dir, "..");
@@ -28,15 +28,17 @@ export async function captureInChild(source: string, scratch: string, direct = f
 
 interface SurfaceCapture {
   id: string; scope: string; semantics: Record<string, number | string | null>;
-  telemetry: { events: DispatchEvent[]; requestCount: number | null; attemptCount: number | null; outcomes: string[]; coverage: string };
+  telemetry: { events: DispatchEvent[]; requestCount: number | null; attemptCount: number | null; outcomes: string[]; coverage: string } & FixtureSourceEvidence;
 }
 async function runSurfaceCaptures(sourceRoot: string): Promise<SurfaceCapture[]> {
   const { runSidecarDispatchFixture } = await import("../tests/helpers/dispatch-surface-fixtures");
   const rows: SurfaceCapture[] = [];
+  let accounting: { dispatchObserverHealth(): { observerFailures: number } } | undefined;
   for (const failure of [true, false]) {
     const result = await runSidecarDispatchFixture(sourceRoot, failure);
+    accounting = await Bun.file(join(sourceRoot, "src/usage/dispatch.ts")).exists() ? await import(join(sourceRoot, "src/usage/dispatch.ts")) : undefined;
     if (result.mainText !== "synthetic main answer") throw new Error("surface fixture output rejected");
-    rows.push({ id: result.scenario, scope: "actual_vision_admission_and_main_chat_adapter_loopback", semantics: { sendInvocations: result.sendCount, sidecarSends: result.sidecarSendCount, cacheHitSends: result.cacheHitSendCount, mainOutput: result.mainText }, telemetry: { events: result.events, requestCount: result.requestCount, attemptCount: result.attemptCount, outcomes: result.outcomes, coverage: result.coverage } });
+    rows.push({ id: result.scenario, scope: "actual_vision_admission_and_main_chat_adapter_loopback", semantics: { sendInvocations: result.sendCount, sidecarSends: result.sidecarSendCount, cacheHitSends: result.cacheHitSendCount, mainOutput: result.mainText }, telemetry: { ...fixtureObserverSource(result.events, accounting?.dispatchObserverHealth()), events: result.events, requestCount: result.requestCount, attemptCount: result.attemptCount, outcomes: result.outcomes, coverage: result.coverage } });
   }
   const oldFetch = globalThis.fetch;
   // Cursor's actual HTTP/2 executor is loopback-controlled by its fixture. It has no HTTP fetch allowance.
@@ -44,7 +46,7 @@ async function runSurfaceCaptures(sourceRoot: string): Promise<SurfaceCapture[]>
   try {
     const { runCursorReconnectFixture } = await import("../tests/helpers/cursor-dispatch-fixture");
     const result = await runCursorReconnectFixture(sourceRoot);
-    rows.push({ id: result.scenario, scope: "actual_cursor_http2_precommit_retry_not_websocket", semantics: { sendInvocations: result.requestCount, transportAttempts: result.attemptCount, peerRequests: result.peerRequests }, telemetry: { events: "events" in result ? result.events as DispatchEvent[] : [], requestCount: null, attemptCount: result.attemptCount, outcomes: result.outcomes.flatMap(outcome => outcome ? [outcome] : []), coverage: result.accountingAvailable ? "complete" : "unavailable" } });
+    rows.push({ id: result.scenario, scope: "actual_cursor_http2_precommit_retry_not_websocket", semantics: { sendInvocations: result.requestCount, transportAttempts: result.attemptCount, peerRequests: result.peerRequests }, telemetry: { ...fixtureObserverSource(result.events, accounting?.dispatchObserverHealth()), events: result.events, requestCount: null, attemptCount: result.attemptCount, outcomes: result.outcomes.flatMap(outcome => outcome ? [outcome] : []), coverage: result.accountingAvailable ? "complete" : "unavailable" } });
   } finally { globalThis.fetch = oldFetch; }
   return rows;
 }
@@ -95,9 +97,53 @@ export async function captureKilledChild(source: string, scratch: string): Promi
       await Promise.all([collect(), boundedChildText(child.stderr, 65536, () => interruptCaptureChild(child)), child.exited]);
       if (!killedAfterHeaders || rejected || wire.length !== 1) throw new Error("process-kill fixture failed");
       const events = validateKillEvents(output.split("\n"));
-      return { id: "process-kill", wire, sends: wire.length, clientAttempts: 1, outcome: "unknown_after_process_kill", response: "", faultInjection: "SIGKILL_after_headers", telemetry: { available: events.length > 0, events, summary: { unresolvedStarts: events.filter(event => event.kind === "start").length, terminalEvents: 0 } } };
+      return { id: "process-kill", wire, sends: wire.length, clientAttempts: 1, outcome: "unknown_after_process_kill", response: "", faultInjection: "SIGKILL_after_headers", telemetry: { sourceKind: "terminated_child_stdout", sourceCoverage: { sourcePresent: events.length > 0, truncated: true }, available: events.length > 0, events, summary: { unresolvedStarts: events.filter(event => event.kind === "start").length, terminalEvents: 0 } } };
     } finally { clearTimeout(timer); await settleCaptureChild(child); }
   } finally { server.stop(true); await rm(home, { recursive: true, force: true }); }
+}
+
+
+/** Reconcile only the explicitly executed synthetic fixture cohort. This is not global provider coverage. */
+export async function reconcileFixtureCohort(captures: readonly { id: string; telemetry: FixtureSourceEvidence & { events: DispatchEvent[] } }[]) {
+  const originalFetch = globalThis.fetch; globalThis.fetch = guardedFetch(new Set(), originalFetch);
+  let summarizeDispatchEvents: typeof import("../src/usage/dispatch-summary")["summarizeDispatchEvents"];
+  try { ({ summarizeDispatchEvents } = await import("../src/usage/dispatch-summary")); } finally { globalThis.fetch = originalFetch; }
+  const fixtures = captures.map(capture => ({ id: capture.id, sourceKind: capture.telemetry.sourceKind, sourceCoverage: capture.telemetry.sourceCoverage, summary: summarizeDispatchEvents(capture.telemetry.events, capture.telemetry.sourceCoverage) }));
+  const sourceCoverage = {
+    sourcePresent: fixtures.length > 0 && fixtures.every(row => row.sourceCoverage.sourcePresent),
+    truncated: fixtures.some(row => row.sourceCoverage.truncated), readFailed: fixtures.some(row => row.sourceCoverage.readFailed),
+    invalidRows: fixtures.reduce((sum, row) => sum + (row.sourceCoverage.invalidRows ?? 0), 0),
+  };
+  const cohort = summarizeDispatchEvents(captures.flatMap(capture => capture.telemetry.events), sourceCoverage);
+  // Health snapshots belong to individual child processes, so do not invent a summed health counter.
+  cohort.eventCoverageComplete &&= fixtures.every(row => row.summary.eventCoverageComplete);
+  cohort.complete &&= fixtures.every(row => row.summary.complete);
+  return { scope: "executed_synthetic_fixture_cohort_only", globalProviderCoverage: "UNAVAILABLE", legacyUsageLedgerCombined: false, fixtures, cohort };
+}
+
+export function renderFixtureAccounting(accounting: Awaited<ReturnType<typeof reconcileFixtureCohort>>): string {
+  const { cohort } = accounting;
+  const counts = cohort.counts;
+  return [
+    "## Observed accounting for the synthetic fixture cohort", "",
+    "Global provider coverage: UNAVAILABLE. Native capture/replay sends are separate protocol evidence. The legacy request usage ledger is not added to these send observations.", "",
+    `Observed requests: ${counts.requests}; attempts: ${counts.attempts}; sends: ${counts.sends}; terminal events: ${counts.terminals}.`,
+    `Client cancellations: ${counts.clientCancelled}; upstream cancellations: ${counts.upstreamCancelled}; missing usage: ${counts.missingUsage}; partial usage: ${counts.partialUsage}.`, "",
+    `Known provider token subtotal: ${cohort.providerTokens.inputTokens} input + ${cohort.providerTokens.outputTokens} output = ${cohort.providerTokens.totalTokens}, from ${cohort.providerTokens.observedSends} sends.`,
+    `Known estimated-token subtotal: ${cohort.estimatedTokens.totalTokens}, from ${cohort.estimatedTokens.observedSends} sends. Cumulative observations: ${cohort.cumulativeObservations.length}; provider-credit observations: ${cohort.providerCreditObservations.length} (separate units).`,
+    `Fixture event coverage complete: ${cohort.eventCoverageComplete}. Fixture provider-token coverage complete: ${cohort.complete}. Invalid rows: ${cohort.invalidRows}; orphan events: ${cohort.orphanEvents}.`, "",
+    "Source and health evidence is collected per fixture child. The WebSocket fixture reads the real dispatch journal; other fixtures use explicit observer sinks. Process-kill truncates its child event stream. Unknown completion and missing usage remain unknown.", "",
+    "| Fixture | Source | Requests / attempts / sends | Known provider tokens | Missing / partial usage | Events complete | Tokens complete |",
+    "|---|---|---:|---:|---:|---|---|",
+    ...accounting.fixtures.map(row => `| ${row.id} | ${row.sourceKind} | ${row.summary.counts.requests} / ${row.summary.counts.attempts} / ${row.summary.counts.sends} | ${row.summary.providerTokens.totalTokens} | ${row.summary.counts.missingUsage} / ${row.summary.counts.partialUsage} | ${row.summary.eventCoverageComplete} | ${row.summary.complete} |`),
+    "", "Cache/reasoning subsets are not added again. Synthetic tokens do not establish billed cost or account debit.", "",
+  ].join("\n");
+}
+
+/** Purely local prerequisite check. Never fetch Git objects or launch capture on failure. */
+export async function requirePinnedBaseline(repository = root): Promise<void> {
+  const child = Bun.spawn(["git", "cat-file", "-e", `${BASELINE_REVISION}^{commit}`], { cwd: repository, stdout: "ignore", stderr: "ignore" });
+  if (await child.exited !== 0) throw new Error(`Pinned baseline ${BASELINE_REVISION} is unavailable locally. Run this report from a Git checkout containing that commit (shallow clones may omit it). No network fetch was attempted.`);
 }
 
 async function command(args: string[], cwd: string): Promise<string> {
@@ -107,6 +153,7 @@ async function command(args: string[], cwd: string): Promise<string> {
   return output.trim();
 }
 export async function writeOfflineReport(outputRoot = join(root, ".tmp/inference-accounting")) {
+  await requirePinnedBaseline();
   const run = await mkdtemp(join(await mkdir(outputRoot, { recursive: true }).then(() => outputRoot), "run-"));
   const baseline = join(run, "baseline-source"); await mkdir(baseline);
   await command(["git", "archive", "--format=tar", `--output=${join(run, "baseline.tar")}`, BASELINE_REVISION], root);
@@ -136,7 +183,8 @@ export async function writeOfflineReport(outputRoot = join(root, ".tmp/inference
     bounds: { paidSends: 0, childTimeoutMs: 20000, maxOutputBytes: 2097152, redirects: "rejected", environment: "allowlisted-disposable", externalTools: "not_loaded" },
     startedAt, endedAt: new Date().toISOString(), normalizations: wireNormalizations,
   };
-  const results = { protocolScope: "adapter_wire_shared_retry_routed_compact_process_kill_and_native_capture_replay", protocolDispatch: [...comparisons, ...surfaceComparisons].every(c => c.verdict === "PASS") && native.verdict !== "REGRESSION" ? "PASS" : "REGRESSION",
+  const reconciliation = { baseline: await reconcileFixtureCohort([...before, ...surfaceBefore]), current: await reconcileFixtureCohort([...after, ...surfaceAfter]) };
+  const results = { reconciliation, protocolScope: "adapter_wire_shared_retry_routed_compact_process_kill_and_native_capture_replay", protocolDispatch: [...comparisons, ...surfaceComparisons].every(c => c.verdict === "PASS") && native.verdict !== "REGRESSION" ? "PASS" : "REGRESSION",
     tokenCost: "UNAVAILABLE", debit: "UNAVAILABLE", comparisons, native, surfaceComparisons, surfaceArms: { baseline: surfaceBefore, current: surfaceAfter },
     arms: { direct, baseline: before, current: after },
     baselineCharacterization: direct.map((capture, index) => ({ id: capture.id, differences: compareFixture(capture, before[index]!).diffs })),
@@ -144,12 +192,13 @@ export async function writeOfflineReport(outputRoot = join(root, ".tmp/inference
     unsupported: { desktopNativeDefault: "UNAVAILABLE" },
     limitations: ["Executed adapter, shared retry, routed compact handler and process-kill paths are compared. Native custom HTTP capture is replayed through the pinned/current adapters in memory.",
       "Reset is injected after real loopback recorder arrival at the fetch seam. Synthetic Responses WebSocket reconnect exercises full server ingress; Cursor precommit reconnect separately exercises HTTP/2. Process-kill executes an OS-terminated reader.",
-      "Existing baseline transformations and retry behavior are characterization, not policy fixes.", "Synthetic token values establish neither token cost nor account debit."],
+      "Existing baseline transformations and retry behavior are characterization, not policy fixes.", "Continuation and routing-hint presence dimensions remain unsupported/unknown; absence of these telemetry fields is not evidence of absence.", "Synthetic token values establish neither token cost nor account debit."],
   };
   await Bun.write(join(run, "run-manifest.json"), JSON.stringify(manifest, null, 2));
   await Bun.write(join(run, "dispatch-events.jsonl"), [...after, ...surfaceAfter].flatMap(c => c.telemetry.events).map(event => JSON.stringify(event)).join("\n") + "\n");
   await Bun.write(join(run, "results.json"), JSON.stringify(results, null, 2));
-  await Bun.write(join(run, "report.md"), `# Offline inference comparison\n\nProtocol/dispatch: ${results.protocolDispatch}\n\nToken cost: UNAVAILABLE. Debit: UNAVAILABLE. Native capture/replay: ${native.verdict}. Native-default: UNAVAILABLE.\n\n${results.limitations.join("\n\n")}\n\n| Fixture | Baseline sends | Current sends | Verdict |\n|---|---:|---:|---|\n${comparisons.map((c, i) => `| ${c.id} | ${before[i]!.sends} | ${after[i]!.sends} | ${c.verdict} |`).join("\n")}\n`);
+  const surfaceTable = ["## Additional production-surface comparisons", "", "| Fixture | Baseline send invocations | Current send invocations | Current peer requests / cache-hit sends | Verdict |", "|---|---:|---:|---|---|", ...surfaceComparisons.map((row, index) => `| ${row.id} | ${surfaceBefore[index]!.semantics.sendInvocations} | ${surfaceAfter[index]!.semantics.sendInvocations} | ${surfaceAfter[index]!.semantics.peerRequests ?? "—"} / ${surfaceAfter[index]!.semantics.cacheHitSends ?? "—"} | ${row.verdict} |`), "", "Cursor is a real HTTP/2 precommit retry fixture. Responses WebSocket reconnect is separately exercised through full server ingress.", ""].join("\n");
+  await Bun.write(join(run, "report.md"), `# Offline inference comparison\n\nProtocol/dispatch: ${results.protocolDispatch}\n\nToken cost: UNAVAILABLE. Debit: UNAVAILABLE. Native custom-provider HTTP capture/replay: ${native.verdict}. Desktop native-default: UNAVAILABLE.\n\nNative evidence mode: actual native custom-provider HTTP capture and in-memory replay through pinned/current adapters when available. Only counts and sanitized differing field paths may be persisted. Capability result: ${native.reason}.\n\n${results.limitations.join("\n\n")}\n\n| Fixture | Baseline sends | Current sends | Verdict |\n|---|---:|---:|---|\n${comparisons.map((c, i) => `| ${c.id} | ${before[i]!.sends} | ${after[i]!.sends} | ${c.verdict} |`).join("\n")}\n\n${surfaceTable}\n${renderFixtureAccounting(reconciliation.current)}\nBaseline accounting source availability: ${reconciliation.baseline.cohort.eventCoverageComplete ? "observed" : "unavailable/incomplete"}; pinned wire-send counts above remain independent of missing baseline telemetry.\n`);
   return run;
 }
 if (import.meta.main) {
