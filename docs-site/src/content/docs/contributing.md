@@ -86,8 +86,8 @@ contributor work.
   Shared routing, adapter, config, or server changes need `bun run test:parallel` green.
   On a flake, rerun only the failed files; do not rerun the entire suite.
 
-The retired dual-track Go native port is not part of this repository. Bun-native TypeScript on
-both branches share one runtime; `development` is the staging branch.
+The retired dual-track Go native port is not part of this repository. Both branches use the same
+Bun-native TypeScript runtime; `development` is the staging branch.
 
 Rebase pull requests are welcome. Bringing a stale branch onto the current head is
 ordinary maintenance — name the source commits in the description.
