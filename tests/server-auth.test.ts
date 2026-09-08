@@ -1645,7 +1645,7 @@ describe("server local API auth", () => {
           headers: {
             "content-type": "application/json",
             authorization: "Bearer inbound-main-token",
-            "x-codex-parent-thread-id": threadId,
+            "thread-id": threadId,
           },
           body: JSON.stringify({ model: "gpt-test", input: "hello", stream: false }),
         });
@@ -1659,7 +1659,7 @@ describe("server local API auth", () => {
         headers: {
           "content-type": "application/json",
           authorization: "Bearer inbound-main-token",
-          "x-codex-parent-thread-id": "expired-compact",
+          "thread-id": "expired-compact",
         },
         body: JSON.stringify({ model: "gpt-test", input: "hello", stream: false }),
       });
@@ -1670,7 +1670,7 @@ describe("server local API auth", () => {
         headers: {
           "content-type": "application/json",
           authorization: "Bearer inbound-main-token",
-          "x-codex-parent-thread-id": "expired-http",
+          "thread-id": "expired-http",
         },
         body: JSON.stringify({ model: "gpt-test", input: [] }),
       });
@@ -1681,7 +1681,7 @@ describe("server local API auth", () => {
       const ws = new WebSocket(wsUrl, {
         headers: {
           authorization: "Bearer inbound-main-token",
-          "x-codex-parent-thread-id": "expired-ws",
+          "thread-id": "expired-ws",
         },
       } as unknown as string[]);
       const wsFailure = new Promise<string>((resolve, reject) => {

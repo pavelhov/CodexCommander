@@ -1405,7 +1405,7 @@ async function handleResponsesInner(
   } catch { /* The normal route error path below owns the client response. */ }
   const nativeIngress = ingressRoute !== undefined && isNativeResponsesProvider(ingressRoute.provider);
   // A known API reference can continue at the server without redundant local replay.
-  // ChatGPT HTTP lacks this reference contract and needs complete local expansion.
+  // ChatGPT HTTP retains the historical local-expansion compatibility policy.
   if (!nativeIngress) body = expandPreviousResponseInput(body);
   if (previousResponseReplayFailure(body)) {
     return formatErrorResponse(
