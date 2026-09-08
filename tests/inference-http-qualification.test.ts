@@ -15,7 +15,7 @@ test("canonical seam redirects only the exact canonical URL and rejects redirect
     expect(init?.redirect).toBe("manual"); return new Response(null);
   }) as typeof fetch);
   await fetcher("https://chatgpt.com/backend-api/codex/responses");
-  for (const url of ["https://chatgpt.com/backend-api/codex/responses?x=1", "https://api.openai.com/v1/responses", "http://127.0.0.1:1235", "https://chatgpt.com/backend-api/codex/responses/", "https://user@chatgpt.com/backend-api/codex/responses"]) await expect(fetcher(url)).rejects.toThrow();
+  for (const url of ["https://chatgpt.com/backend-api/codex/responses?x=1", "https://api.openai.com/v1/responses", "http://127.0.0.1:1235", "https://chatgpt.com/backend-api/codex/responses/", "https://user:pw@chatgpt.com/backend-api/codex/responses"]) await expect(fetcher(url)).rejects.toThrow();
   expect(calls).toBe(1);
 });
 
