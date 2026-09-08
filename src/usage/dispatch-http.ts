@@ -18,6 +18,19 @@ export function responseDispatch(response: Response): DispatchSend | undefined {
 /** Optional observer implementations are untrusted to the inference path. */
 export function observeDispatch(observe: () => void): void { try { observe(); } catch { recordDispatchObserverFailure(); } }
 
+/** Inspect materialized header names only; arbitrary iterables may be consumed by fetch. */
+function sessionHeaderPresent(headers: HeadersInit | undefined): boolean | undefined {
+  const names = ["session_id", "session-id", "thread-id"];
+  if (headers === undefined) return false;
+  if (headers instanceof Headers) return names.some(name => headers.has(name));
+  if (Array.isArray(headers)) return headers.some(entry => Array.isArray(entry) && typeof entry[0] === "string" && names.includes(entry[0].toLowerCase()));
+  if (Object.getPrototypeOf(headers) === Object.prototype || Object.getPrototypeOf(headers) === null) {
+    if (Symbol.iterator in headers) return undefined;
+    return Object.keys(headers).some(name => names.includes(name.toLowerCase()));
+  }
+  return undefined;
+}
+
 /** Invoke exactly one final fetch executor; do not read or wrap its response body. */
 export async function dispatchHttpFetch(
   executor: typeof fetch,
@@ -30,7 +43,7 @@ export async function dispatchHttpFetch(
     if (!attempt) return;
     const prior = attemptSends.get(attempt) ?? 0;
     attemptSends.set(attempt, prior + 1);
-    send = attempt.start({ transport: "http", reason: context.reason ?? (prior ? "retry" : "initial") }); });
+    send = attempt.start({ transport: "http", sessionPresent: sessionHeaderPresent(init.headers), reason: context.reason ?? (prior ? "retry" : "initial") }); });
   if (send && typeof send !== "object" && typeof send !== "function") { recordDispatchObserverFailure(); send = undefined; }
   if (send) {
     const listeners: Array<() => void> = [];

@@ -175,3 +175,27 @@ test("native count_tokens is excluded from inference sends", async () => {
     expect(await response.json()).toEqual({ input_tokens: 4 }); expect(calls).toBe(1); const after = readDispatchJournal(); expect(after.requests).toHaveLength(before.requests.length); expect(after.attempts).toHaveLength(before.attempts.length); expect(after.sends).toHaveLength(before.sends.length);
   } finally { globalThis.fetch = original; }
 });
+
+test("HTTP observer records session header presence without retaining values or changing init", async () => {
+  const { events, attempt } = accounting();
+  const headers = new Headers({ session_id: "private-session-value", "x-codex-turn-state": "private-routing-value" });
+  const init: RequestInit = { headers };
+  const executor = (async (_url: unknown, seen: RequestInit) => { expect(seen).toBe(init); return new Response(); }) as typeof fetch;
+  await dispatchHttpFetch(executor, syntheticUrl, init, { attempt });
+  const start = events.find(event => event.kind === "start");
+  expect(start?.metadata?.sessionPresent).toBe(true);
+  expect(start?.metadata?.routingHintPresent).toBeUndefined();
+  expect(JSON.stringify(events)).not.toContain("private-");
+});
+
+test("session presence leaves arbitrary header iterators untouched and handles materialized names", async () => {
+  let iterations = 0;
+  const iterable = { *[Symbol.iterator]() { iterations++; yield ["session-id", "private-session"]; } };
+  for (const [headers, expected] of [[iterable, undefined], [{ "Thread-Id": "private-session" }, true], [[["SESSION-ID", "private-session"]], true], [{ accept: "text/event-stream" }, false]] as const) {
+    const { events, attempt } = accounting();
+    const executor = (async () => new Response()) as typeof fetch;
+    await dispatchHttpFetch(executor, syntheticUrl, { headers: headers as HeadersInit }, { attempt });
+    expect(events.find(event => event.kind === "start")?.metadata?.sessionPresent).toBe(expected);
+  }
+  expect(iterations).toBe(0);
+});
