@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { assertFixedSynthetic, captureRequest } from "./helpers/inference-recorder";
 import { compareFixture, semanticDiff } from "./helpers/inference-diff";
 import { syntheticBody } from "./fixtures/inference-accounting/fixtures";
-import { captureInChild } from "../scripts/inference-offline-report";
+import { captureInChild, captureKilledChild, captureSurfacesInChild } from "../scripts/inference-offline-report";
 
 describe("fixed synthetic offline inference evidence", () => {
   test("unknown fields, encrypted history, images, tools and identities remain semantic", () => {
@@ -25,6 +25,7 @@ describe("fixed synthetic offline inference evidence", () => {
     expect(() => assertFixedSynthetic({ input: "unrecognized private content" })).toThrow("nonfixture");
     expect(() => assertFixedSynthetic({ arbitrary_private_key: true })).toThrow("field");
     expect(() => assertFixedSynthetic({ access_token: "fixture prompt" })).toThrow("field");
+    expect(() => assertFixedSynthetic({ metadata: { account_selector: 123456 } })).toThrow("number");
     expect(() => assertFixedSynthetic(syntheticBody)).not.toThrow();
   });
   test("actual adapter and shared retry sends remain independently countable", async () => {
@@ -32,6 +33,9 @@ describe("fixed synthetic offline inference evidence", () => {
     try {
       const captures = await captureInChild(resolve(import.meta.dir, ".."), scratch);
       const byId = Object.fromEntries(captures.map(c => [c.id, c]));
+      expect(byId["compact-routed"]!.sends).toBe(1); expect(byId["compact-routed"]!.outcome).toBe("http_200");
+      expect(byId["responses-websocket-reconnect"]!.sends).toBe(2);
+      expect(byId["responses-websocket-reconnect"]!.telemetry.events.filter(event => event.kind === "request")).toHaveLength(2);
       expect(byId.success!.sends).toBe(1); expect(byId.success!.wire.length).toBe(1);
       expect(byId.success!.outcome).toBe("protocol_success");
       expect(byId["transient-retry"]!.sends).toBe(2);
@@ -42,10 +46,36 @@ describe("fixed synthetic offline inference evidence", () => {
       expect(byId["cancel-before-headers"]!.outcome).toBe("cancelled_before_headers");
       expect(byId["cancel-after-output"]!.outcome).toBe("cancelled_after_output");
       for (const capture of captures) {
-        expect(capture.clientAttempts).toBe(1);
+        expect(capture.clientAttempts).toBe(capture.id === "responses-websocket-reconnect" ? 2 : 1);
         expect(capture.telemetry.available).toBe(true);
         expect(capture.telemetry.events.filter(event => event.kind === "start").length).toBe(capture.sends);
       }
     } finally { await rm(scratch, { recursive: true, force: true }); }
   }, 25000);
 });
+
+test("process kill preserves an unresolved actual send without inventing completion", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "ccx-offline-kill-test-"));
+  try {
+    const capture = await captureKilledChild(resolve(import.meta.dir, ".."), scratch);
+    expect(capture.sends).toBe(1); expect(capture.wire).toHaveLength(1);
+    expect(capture.outcome).toBe("unknown_after_process_kill");
+    expect(capture.telemetry.events.filter(event => event.kind === "start")).toHaveLength(1);
+    expect(capture.telemetry.events.filter(event => event.kind === "terminal")).toHaveLength(0);
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+}, 10000);
+
+test("report imports independent sidecar and HTTP/2 fixture evidence without equating it to WebSocket", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "ccx-offline-surface-test-"));
+  try {
+    const rows = await captureSurfacesInChild(resolve(import.meta.dir, ".."), scratch);
+    expect(rows.map(row => row.id)).toEqual(["sidecar-failure-main-success", "vision-cache-hit", "cursor_native_h2_precommit_reconnect"]);
+    expect(rows[0]!.semantics.sendInvocations).toBe(2);
+    expect(rows[0]!.telemetry.requestCount).toBe(2);
+    expect(rows[0]!.telemetry.outcomes).toContain("protocol_failure");
+    expect(rows[0]!.telemetry.outcomes).toContain("protocol_success");
+    expect(rows[1]!.semantics.cacheHitSends).toBe(0);
+    expect(rows[2]!.semantics).toEqual({ sendInvocations: 2, transportAttempts: 2, peerRequests: 1 });
+    expect(rows[2]!.scope).toContain("not_websocket");
+  } finally { await rm(scratch, { recursive: true, force: true }); }
+}, 20000);

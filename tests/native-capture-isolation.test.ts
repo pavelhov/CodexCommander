@@ -31,3 +31,29 @@ test("native evidence stays unavailable without verified containment and support
     expect(result.desktopNativeDefault).toBe("UNAVAILABLE");
   }
 });
+
+test("the Bun child actually ignores dotenv, inherited credentials and cwd preload configuration", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const home = await mkdtemp(join(tmpdir(), "ccx-offline-env-test-"));
+  try {
+    await Bun.write(join(home, ".env"), "OPENAI_API_KEY=fixture\nHTTP_PROXY=http://127.0.0.1:1\n");
+    await Bun.write(join(home, "bunfig.toml"), 'preload = ["./fixture-preload.ts"]\n');
+    await Bun.write(join(home, "fixture-preload.ts"), 'process.env.FIXTURE_PRELOAD = "loaded";');
+    await Bun.write(join(home, "isolated.toml"), "");
+    const child = Bun.spawn([process.execPath, "--no-env-file", `--config=${join(home, "isolated.toml")}`, "-e", 'console.log(JSON.stringify([Boolean(process.env.OPENAI_API_KEY),Boolean(process.env.HTTP_PROXY),Boolean(process.env.FIXTURE_PRELOAD)]))'], { cwd: home, env: isolatedEnvironment(home), stdout: "pipe", stderr: "pipe" });
+    const [output, , exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exit).toBe(0); expect(JSON.parse(output)).toEqual([false, false, false]);
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+test("bounded output termination awaits a sleeping capture child before cleanup", async () => {
+  const { boundedChildText, interruptCaptureChild, settleCaptureChild } = await import("./helpers/inference-recorder");
+  const child = Bun.spawn([process.execPath, "--no-env-file", "-e", 'console.log("fixture output");setInterval(()=>{},1000)'], { detached: process.platform !== "win32", env: {}, stdout: "pipe", stderr: "ignore" });
+  try {
+    await expect(boundedChildText(child.stdout, 1, () => interruptCaptureChild(child, true))).rejects.toThrow("output limit");
+  } finally { await settleCaptureChild(child, true); }
+  expect(await child.exited).not.toBe(0);
+  expect(() => process.kill(child.pid, 0)).toThrow();
+});

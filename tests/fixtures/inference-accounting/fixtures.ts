@@ -34,3 +34,15 @@ export const nativeSuccessSSE = [
   { type: "response.output_item.done", output_index: 0, item: nativeMessage },
   { type: "response.completed", response: { id: "fixture-response", status: "completed", output: [nativeMessage], usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } } },
 ].map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+
+export const compactPrompt = `You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM that will resume the task.
+
+Include:
+- Current progress and key decisions made
+- Important context, constraints, or user preferences
+- What remains to be done (clear next steps)
+- Any critical data, examples, or references needed to continue
+
+Be concise, structured, and focused on helping the next LLM seamlessly continue the work.`;
+export const compactFixtureBody = { model: "fixture/fixture-model", input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "fixture prompt" }] }], tools: syntheticBody.tools };
+export const compactUpstreamResponse = { id: "fixture-response", object: "response", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "fixture output" }] }], usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 } };
