@@ -182,6 +182,7 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
+  onTerminalEnd?: (reason?: unknown) => void,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
@@ -207,9 +208,9 @@ export function relaySseWithFailedTail(
     controller.close();
     const reason = "Responses terminal event received";
     // Notify the tee inspection branch as well. It has already received the
-    // same terminal-bearing upstream chunk, so its bounded drain records the
-    // real terminal and then releases the turn/upstream keep-alive connection.
-    onClientGone?.(reason);
+    // same terminal-bearing upstream chunk. Release the connection without
+    // misclassifying normal protocol completion as a client cancellation.
+    (onTerminalEnd ?? onClientGone)?.(reason);
     reader.cancel(reason).catch(() => {});
     terminalBoundary.dispose();
     return "terminal";
@@ -932,6 +933,7 @@ export type InspectionDrainBounds = { ms: number; bytes: number };
 
 export type InspectionConsumerOptions = {
   clientGoneSignal?: AbortSignal;
+  /** @deprecated Ignored: client disconnect always aborts immediately. */
   drainBounds?: Partial<InspectionDrainBounds>;
   upstream?: AbortController;
   now?: () => number;
@@ -939,8 +941,6 @@ export type InspectionConsumerOptions = {
   inspectorFactory?: (handlers: SseInspectorHandlers) => SseInspector;
 };
 
-const DEFAULT_INSPECTION_DRAIN_MS = 15_000;
-const DEFAULT_INSPECTION_DRAIN_BYTES = 32 * 1024 * 1024;
 type InspectionPumpOptions = InspectionConsumerOptions & {
   reader: ReadableStreamDefaultReader<Uint8Array>;
   inspector: SseInspector;
@@ -954,119 +954,50 @@ type InspectionPumpOptions = InspectionConsumerOptions & {
 function startBoundedInspectionPump(options: InspectionPumpOptions): void {
   const { reader, inspector, signal, clientGoneSignal } = options;
   let cancelled = false;
-  let clientGone = false;
-  let clientGoneReason: unknown;
-  let drainedBytes = 0;
-  let drainDeadline = Number.POSITIVE_INFINITY;
-  let drainTimer: ReturnType<typeof setTimeout> | undefined;
-  let drainStopped = false;
-  const drainMs = options.drainBounds?.ms ?? DEFAULT_INSPECTION_DRAIN_MS;
-  const drainBytes = options.drainBounds?.bytes ?? DEFAULT_INSPECTION_DRAIN_BYTES;
-  const now = options.now ?? Date.now;
   let cancelFired = false;
   const fireCancel = () => {
-    if (cancelFired) return;
+    if (cancelFired || inspector.terminalSeen()) return;
     cancelFired = true;
     options.onCancel?.();
   };
-  const markClientGone = () => {
-    if (clientGone || cancelled) return;
-    clientGone = true;
-    clientGoneReason = clientGoneSignal?.reason;
-    drainDeadline = now() + drainMs;
-    if (inspector.terminalSeen() || drainMs <= 0 || drainBytes <= 0) {
-      stopDrain();
-      return;
-    }
-    // Do not unref: on Bun/Windows a pending `reader.read()` can be the only
-    // wake source; an unref'd timer may never run, so a silent post-cancel
-    // drain (time bound, no bytes) hangs the suite until the job timeout.
-    drainTimer = setTimeout(stopDrain, drainMs);
-  };
-  // Ends the bounded drain by cancelling the reader: the pending read settles
-  // and the pump loop observes `drainStopped`. Deliberately NOT a shared
-  // Promise.race companion — racing every read against one pending promise
-  // retains O(chunk-count) reactions on long streams (review C1-1), the exact
-  // retention class this phase removes.
-  const stopDrain = () => {
-    if (drainStopped || cancelled) return;
-    drainStopped = true;
-    reader.cancel(clientGoneReason).catch(() => {});
-  };
-  const abortImmediately = () => {
+  const stop = (reason: unknown) => {
     if (cancelled) return;
     cancelled = true;
-    reader.cancel(signal?.reason).catch(() => {});
-    fireCancel();
+    options.upstream?.abort(reason);
+    // Do not await tee cancellation: its other branch may still own a reader.
+    reader.cancel(reason).catch(() => {});
   };
-
-  if (signal?.aborted) {
-    cancelled = true;
-    reader.cancel(signal.reason).catch(() => {});
-    inspector.dispose();
+  const onAbort = () => stop(signal?.reason);
+  const onClientGone = () => stop(clientGoneSignal?.reason);
+  if (signal?.aborted || clientGoneSignal?.aborted) {
+    stop(signal?.aborted ? signal.reason : clientGoneSignal?.reason);
     fireCancel();
+    inspector.dispose();
     options.onDone?.();
     return;
   }
-  signal?.addEventListener("abort", abortImmediately, { once: true });
-  clientGoneSignal?.addEventListener("abort", markClientGone, { once: true });
-  if (clientGoneSignal?.aborted) markClientGone();
-
+  signal?.addEventListener("abort", onAbort, { once: true });
+  clientGoneSignal?.addEventListener("abort", onClientGone, { once: true });
   const pump = async () => {
-    let clientGoneWithoutTerminal = false;
-    let boundEndedDrain = false;
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (drainStopped) {
-          // stopDrain() cancelled the reader; the settled read is the wake-up.
-          clientGoneWithoutTerminal = !inspector.terminalSeen();
-          boundEndedDrain = clientGoneWithoutTerminal;
-          break;
-        }
+        // A read already settled locally can contain the terminal. Preserve it
+        // before honoring cancellation, but never read again after cancellation.
+        if (!done && value !== undefined) inspector.feed(value);
+        if (cancelled) break;
         if (done) {
           inspector.finish();
-          if (clientGone) clientGoneWithoutTerminal = !inspector.terminalSeen();
-          else if (!cancelled) options.onCleanEof?.();
-          break;
-        }
-        if (!clientGone) {
-          inspector.feed(value);
-          continue;
-        }
-        if (now() >= drainDeadline) {
-          clientGoneWithoutTerminal = true;
-          boundEndedDrain = true;
-          break;
-        }
-        const remainingBytes = Math.max(0, drainBytes - drainedBytes);
-        const inspectedValue = value.byteLength > remainingBytes
-          ? value.subarray(0, remainingBytes)
-          : value;
-        if (inspectedValue.byteLength > 0) inspector.feed(inspectedValue);
-        drainedBytes += inspectedValue.byteLength;
-        if (inspector.terminalSeen()) break;
-        if (value.byteLength > remainingBytes
-          || drainedBytes >= drainBytes
-          || now() >= drainDeadline) {
-          clientGoneWithoutTerminal = true;
-          boundEndedDrain = true;
+          options.onCleanEof?.();
           break;
         }
       }
     } catch {
-      if (clientGone) clientGoneWithoutTerminal = !inspector.terminalSeen();
-      else if (!cancelled) options.onReadError?.();
+      if (!cancelled) options.onReadError?.();
     } finally {
-      if (drainTimer) clearTimeout(drainTimer);
-      signal?.removeEventListener("abort", abortImmediately);
-      clientGoneSignal?.removeEventListener("abort", markClientGone);
-      if (clientGone) {
-        if (boundEndedDrain) inspectionCounters.postCancelDrainStops += 1;
-        if (clientGoneWithoutTerminal) fireCancel();
-        options.upstream?.abort(clientGoneReason);
-        reader.cancel(clientGoneReason).catch(() => {});
-      }
+      signal?.removeEventListener("abort", onAbort);
+      clientGoneSignal?.removeEventListener("abort", onClientGone);
+      if (cancelled) fireCancel();
       inspector.dispose();
       options.onDone?.();
     }

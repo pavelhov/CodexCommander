@@ -1,29 +1,17 @@
 import { cleanupDispatchBody, cleanupResponseDispatch, dispatchHttpFetch, type DispatchHttpContext } from "../usage/dispatch-http";
 /**
- * Retry guard for upstream fetches that die on stale pooled keep-alive sockets.
- *
- * chatgpt.com (Cloudflare) closes idle keep-alive connections server-side; Bun's fetch pool
- * reuses the half-closed socket and the request write fails with ECONNRESET before any
- * response bytes arrive. Retrying on a fresh connection is safe for our replayable
- * (string-body) upstream requests, because fetch() rejects only before response headers —
- * a caught error here means no response was ever received.
- *
- * Deliberately narrow: timeouts, aborts, ECONNREFUSED/DNS/TLS failures, and HTTP error
- * statuses (returned as Response, never thrown) are NOT retried. Mid-stream SSE resets are
- * out of scope — the response has already resolved by then.
- *
- * MUST stay a leaf module: imports nothing from server.ts or adapters (kiro-retry imports
- * the shared abort helpers from here).
+ * Shared upstream recovery helpers. A missing response does not prove that
+ * inference never started. Ambiguous reset/5xx replay is therefore disabled
+ * by default; internal callers must explicitly opt into multiple attempts.
  */
 import { clearableDeadline } from "./abort";
 
-// 1 initial + 2 retries: the pool may hold more than one stale socket.
-const RESET_RETRY_MAX_ATTEMPTS = 3;
+const RESET_RETRY_MAX_ATTEMPTS = 1;
 const RESET_RETRY_BASE_DELAY_MS = 150;
 const RESET_RETRY_MAX_DELAY_MS = 1_000;
 
 // Transient-5xx status retry layer (pre-stream only; implementation contract).
-const TRANSIENT_RETRY_MAX_ATTEMPTS = 3; // 1 initial + 2 retries
+const TRANSIENT_RETRY_MAX_ATTEMPTS = 1;
 const TRANSIENT_RETRY_BASE_DELAY_MS = 400;
 const TRANSIENT_RETRY_MAX_DELAY_MS = 5_000;
 // A failed attempt slower than this is the "slow 502" incident shape (191s observed on
@@ -242,6 +230,7 @@ export interface ResetRetryOptions {
   abortSignal?: AbortSignal;
   /** Short host/path label for the retry warn log (no secrets/query strings). */
   label?: string;
+  /** Total sends, including the first. More than one opts into ambiguous replay. */
   attempts?: number;
 }
 
@@ -309,15 +298,15 @@ export function applyUpstreamRecoveryInit<T extends RequestInit>(
 
 /**
  * Run `doFetch`, retrying only connection-reset-shaped rejections (see
- * isConnectionResetError) with jittered backoff. The caller's thunk must be replay-safe
- * (string body); every retry is logged so persistent resets stay visible.
+ * isConnectionResetError) with jittered backoff only when explicitly enabled.
+ * A replayable body does not imply an inference request is safe to repeat.
  */
 export async function fetchWithResetRetry(
   doFetch: ReplayableFetch,
   opts: ResetRetryOptions = {},
   firstRecovery?: UpstreamSendRecovery,
 ): Promise<Response> {
-  const attempts = Math.max(1, opts.attempts ?? RESET_RETRY_MAX_ATTEMPTS);
+  const attempts = normalizedAttempts(opts.attempts, RESET_RETRY_MAX_ATTEMPTS);
   let lastError: unknown;
   let sawReset = false;
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -348,48 +337,54 @@ export async function fetchWithResetRetry(
   throw lastError ?? new Error("upstream fetch failed");
 }
 
-/**
- * fetchWithResetRetry plus a transient-5xx status retry layer, PRE-STREAM only: a
- * returned Response has by definition not been relayed to the client yet, so replaying
- * the (string-body) request is safe. The failed attempt's body is cancelled before the
- * retry; every returned response (ok, non-transient, aborted, slow, exhausted) keeps
- * its body intact. Honors Retry-After via retryBackoffDelayMs.
- *
- * A failed attempt slower than the slow budget is returned as-is (slow-502 shape);
- * note `opts.attempts` is shared with the inner reset layer (no caller passes it today).
- */
+/** One total send count across reset and HTTP-status recovery, never nested. */
 export async function fetchWithTransientRetry(
   doFetch: ReplayableFetch,
   opts: TransientRetryOptions = {},
 ): Promise<Response> {
-  const attempts = Math.max(1, opts.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS);
+  const attempts = normalizedAttempts(opts.attempts, TRANSIENT_RETRY_MAX_ATTEMPTS);
   const slowAttemptMs = opts.slowAttemptMs ?? TRANSIENT_RETRY_SLOW_ATTEMPT_MS;
   const transientStatuses: number[] = [];
-  let attemptStart = Date.now();
-  let res = await fetchWithResetRetry(doFetch, opts);
-  for (let attempt = 0; attempt < attempts - 1; attempt++) {
-    if (res.ok || !isTransientUpstreamStatus(res.status)) return res;
-    if (opts.abortSignal?.aborted) return res;
-    if (Date.now() - attemptStart > slowAttemptMs) return res;
-    console.warn(
-      `[upstream-retry] transient ${res.status}${opts.label ? ` (${opts.label})` : ""} — retrying (${attempt + 2}/${attempts})`,
-    );
+  let resetSeen = false;
+  let recovery: UpstreamSendRecovery | undefined;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
+    const attemptStart = Date.now();
+    let response: Response;
+    try {
+      response = await doFetch(recovery);
+    } catch (error) {
+      if (opts.abortSignal?.aborted) throw error;
+      if (!isConnectionResetError(error) || attempt === attempts - 1) {
+        if (transientStatuses.length || resetSeen) {
+          throw new UpstreamRetryEvidenceError(transientStatuses, error, resetSeen);
+        }
+        throw error;
+      }
+      resetSeen = true;
+      recovery = "connection-reset";
+      await sleepWithAbort(retryBackoffDelayMs(attempt, {
+        baseDelayMs: RESET_RETRY_BASE_DELAY_MS,
+        maxDelayMs: RESET_RETRY_MAX_DELAY_MS,
+      }), opts.abortSignal);
+      continue;
+    }
+    if (!isTransientUpstreamStatus(response.status) || attempt === attempts - 1
+      || opts.abortSignal?.aborted || Date.now() - attemptStart > slowAttemptMs) return response;
+    transientStatuses.push(response.status);
+    recovery = "transient-5xx";
     const delay = retryBackoffDelayMs(attempt, {
       baseDelayMs: TRANSIENT_RETRY_BASE_DELAY_MS,
       maxDelayMs: TRANSIENT_RETRY_MAX_DELAY_MS,
-      headers: res.headers,
+      headers: response.headers,
     });
-    cancelResponseBodyBestEffort(res);
+    cancelResponseBodyBestEffort(response);
     await sleepWithAbort(delay, opts.abortSignal);
-    attemptStart = Date.now();
-    transientStatuses.push(res.status);
-    try {
-      res = await fetchWithResetRetry(doFetch, opts, "transient-5xx");
-    } catch (err) {
-      // Keep the prior 5xx evidence attached: the origin already responded, so
-      // this rejection is not pre-connection and must not classify as neutral.
-      throw new UpstreamRetryEvidenceError(transientStatuses, err);
-    }
   }
-  return res;
+  throw new Error("upstream send budget exhausted");
+}
+
+function normalizedAttempts(attempts: number | undefined, fallback: number): number {
+  return attempts !== undefined && Number.isFinite(attempts)
+    ? Math.max(1, Math.floor(attempts)) : fallback;
 }

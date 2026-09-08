@@ -23,7 +23,7 @@ describe("fetchWithTransientRetry", () => {
     const first = bodyResponse(502) as Response & { __wasCancelled: () => boolean };
     const responses = [first, bodyResponse(200)];
     let calls = 0;
-    const res = await fetchWithTransientRetry(async () => responses[calls++]!, { slowAttemptMs: 60_000 });
+    const res = await fetchWithTransientRetry(async () => responses[calls++]!, { attempts: 3, slowAttemptMs: 60_000 });
     expect(calls).toBe(2);
     expect(res.status).toBe(200);
     expect(first.__wasCancelled()).toBe(true);
@@ -31,7 +31,7 @@ describe("fetchWithTransientRetry", () => {
 
   test("exhausts attempts on persistent 502 and returns the final 502 with body intact", async () => {
     let calls = 0;
-    const res = await fetchWithTransientRetry(async () => { calls++; return bodyResponse(502); }, { slowAttemptMs: 60_000 });
+    const res = await fetchWithTransientRetry(async () => { calls++; return bodyResponse(502); }, { attempts: 3, slowAttemptMs: 60_000 });
     expect(calls).toBe(3);
     expect(res.status).toBe(502);
     expect(res.body).not.toBeNull();
@@ -39,7 +39,7 @@ describe("fetchWithTransientRetry", () => {
 
   test("does not retry non-transient statuses", async () => {
     let calls = 0;
-    const res = await fetchWithTransientRetry(async () => { calls++; return bodyResponse(400); }, { slowAttemptMs: 60_000 });
+    const res = await fetchWithTransientRetry(async () => { calls++; return bodyResponse(400); }, { attempts: 3, slowAttemptMs: 60_000 });
     expect(calls).toBe(1);
     expect(res.status).toBe(400);
   });
@@ -50,7 +50,7 @@ describe("fetchWithTransientRetry", () => {
     const res = await fetchWithTransientRetry(async () => {
       calls++;
       return calls === 1 ? bodyResponse(503, { "retry-after": "1" }) : bodyResponse(200);
-    }, { slowAttemptMs: 60_000 });
+    }, { attempts: 3, slowAttemptMs: 60_000 });
     expect(res.status).toBe(200);
     // Retry-After: 1s should dominate the 400ms base backoff.
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
@@ -74,7 +74,7 @@ describe("fetchWithTransientRetry", () => {
       calls++;
       await new Promise(r => setTimeout(r, 30));
       return bodyResponse(502);
-    }, { slowAttemptMs: 10 });
+    }, { attempts: 3, slowAttemptMs: 10 });
     expect(calls).toBe(1);
     expect(res.status).toBe(502);
   });

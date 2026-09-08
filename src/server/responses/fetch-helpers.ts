@@ -1,3 +1,4 @@
+import type { UpstreamSendBudget } from "../../lib/upstream-send-budget";
 import { dispatchHttpFetch, type DispatchHttpContext } from "../../usage/dispatch-http";
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
@@ -146,11 +147,14 @@ export async function fetchWithHeaderTimeout(
   executor: typeof globalThis.fetch = globalThis.fetch,
   manualRedirect = false,
   dispatch?: DispatchHttpContext,
+  sendBudget?: UpstreamSendBudget,
 ): Promise<Response> {
+  if (abortSignal.aborted) throw abortSignal.reason ?? new DOMException("Client cancelled", "AbortError");
+  const remainingMs = sendBudget ? Math.min(timeoutMs, sendBudget.reserve(abortSignal)) : timeoutMs;
   const timeout = new AbortController();
   const timer = setTimeout(() => {
     if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
-  }, timeoutMs);
+  }, remainingMs);
   const headers = new Headers(init.headers);
   // Compressed SSE can be held until the decompressor has a complete block. Streaming calls
   // default to identity for low-latency frame delivery, while an explicit caller choice wins.

@@ -13,13 +13,9 @@
  * bun:test (a JS reader always paces); both remain "awaiting Windows user
  * verification".
  *
- * #44 cancel semantics: after client cancel the relay keeps reading upstream in
- * DISCARD-DRAIN mode (inspection only) until a terminal is seen or the bounded
- * drain window (ms/bytes) expires — a genuinely reached terminal records as
- * completed/failed, never downgraded to cancel. Only when no terminal arrives
- * within bounds does onClientCancel fire. This bounds today's unbounded tee
- * drain; the tradeoff is that client-cancel log finalization may be delayed by
- * up to the drain window.
+ * Client cancellation aborts upstream immediately. Inspection may retain a
+ * terminal from a read already settled locally, but never waits for more
+ * generation merely to complete usage accounting.
  */
 
 import { buildFailedTailPayload, createSseTerminalOutputBoundary } from "./relay";
@@ -57,28 +53,30 @@ export type EagerRelayHooks = {
   sawTerminal: () => boolean;
   /** Record a synthetic terminal (caller decides incomplete vs failed-502). */
   onSynthetic: (kind: "incomplete" | "failed") => void;
-  /** Client cancelled and NO terminal arrived within the drain bounds. */
+  /** Client cancelled before a protocol terminal was observed. */
   onClientCancel: () => void;
+  /** Delivery cancellation is recorded even when generation already completed. */
+  onDeliveryCancel?: () => void;
   /** Exactly once, after the producer fully stops (unregisterTurn parity). */
   onDone: () => void;
 };
 
 export type EagerRelayOptions = {
+  /** Client disconnect can arrive through its signal without stream.cancel(). */
+  clientSignal?: AbortSignal;
   /** Bounded client queue in bytes; producer pauses above it. Default 8 MiB. */
   maxQueueBytes?: number;
   /** Transient-budget owner for the inline-rewrite frame buffer. */
   rewriteBudget?: TranslatorBudget;
-  /** Post-cancel discard-drain wall-clock bound. Default 15 000 ms. */
+  /** @deprecated Ignored: cancellation always aborts upstream immediately. */
   postCancelDrainMs?: number;
-  /** Post-cancel discard-drain byte bound. Default 32 MiB. */
+  /** @deprecated Ignored: cancellation always aborts upstream immediately. */
   postCancelDrainBytes?: number;
   /** Injectable clock for tests. */
   now?: () => number;
 };
 
 const DEFAULT_MAX_QUEUE_BYTES = 8 * 1024 * 1024;
-const DEFAULT_DRAIN_MS = 15_000;
-const DEFAULT_DRAIN_BYTES = 32 * 1024 * 1024;
 
 export type EagerRelayCounters = {
   starts: number;
@@ -117,7 +115,7 @@ export function resetEagerRelayCountersForTest(): void {
 
 /**
  * Relay `body` to the returned stream with eager bounded reading and inline
- * inspection. `upstream` is aborted on cancel-drain expiry and observed for
+ * inspection. `upstream` is aborted immediately on cancellation and observed for
  * shutdown teardown (its abort wakes a paused producer and suppresses
  * synthetic terminals — audit M3).
  */
@@ -128,9 +126,6 @@ export function relaySseEagerBounded(
   opts?: EagerRelayOptions,
 ): ReadableStream<Uint8Array> {
   const maxQueueBytes = opts?.maxQueueBytes ?? DEFAULT_MAX_QUEUE_BYTES;
-  const drainMs = opts?.postCancelDrainMs ?? DEFAULT_DRAIN_MS;
-  const drainBytes = opts?.postCancelDrainBytes ?? DEFAULT_DRAIN_BYTES;
-  const now = opts?.now ?? Date.now;
 
   const reader = body.getReader();
   const terminalBoundary = createSseTerminalOutputBoundary();
@@ -231,13 +226,16 @@ export function relaySseEagerBounded(
       return false;
     }
   };
-  const markClientCancelled = () => {
+  const markClientCancelled = (reason?: unknown) => {
     if (cancelled) return;
     cancelled = true;
     eagerRelayCounters.clientCancels += 1;
+    try { hooks.onDeliveryCancel?.(); } catch { /* telemetry cannot delay abort */ }
+    upstream.abort(reason);
+    reader.cancel(reason).catch(() => {});
+    wakeUp();
   };
   let doneFired = false;
-  let drainTimer: ReturnType<typeof setTimeout> | null = null;
   eagerRelayCounters.starts += 1;
   eagerRelayCounters.inFlight += 1;
   eagerRelayCounters.maxInFlight = Math.max(eagerRelayCounters.maxInFlight, eagerRelayCounters.inFlight);
@@ -252,24 +250,13 @@ export function relaySseEagerBounded(
   const fireDone = () => {
     if (doneFired) return;
     doneFired = true;
-    if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
     upstream.signal.removeEventListener("abort", recordUpstreamAbort);
+    upstream.signal.removeEventListener("abort", wakeUp);
+    opts?.clientSignal?.removeEventListener("abort", onClientAbort);
     setQueuedBytes(0);
     eagerRelayCounters.inFlight = Math.max(0, eagerRelayCounters.inFlight - 1);
     try { hooks.onDone(); } catch { /* lifecycle callbacks must not break teardown */ }
   };
-  // A silent upstream after cancel would park the drain loop in reader.read();
-  // the wall-clock bound must fire regardless, so cancel arms a hard timer that
-  // aborts upstream at the deadline (the abort wakes the read).
-  const armDrainTimer = () => {
-    if (drainTimer) return;
-    drainTimer = setTimeout(() => {
-      drainTimer = null;
-      upstream.abort(new Error("post-cancel drain window expired"));
-    }, drainMs);
-    (drainTimer as { unref?: () => void }).unref?.();
-  };
-
   const producer = async () => {
     let syntheticKind: "incomplete" | "failed" | null = null;
     // reader.read() is not intrinsically tied to the upstream AbortController
@@ -287,11 +274,8 @@ export function relaySseEagerBounded(
       for (;;) {
         const result = await reader.read();
         const { done: upstreamDone, value } = result;
-        // A chunk that already settled is INSPECTED before abort is honored. A read
-        // can settle with a real chunk in the same tick the signal fires (post-cancel
-        // drain: the terminal frame arrives, then the drain timer aborts upstream).
-        // Checking the signal first discarded that frame, so the terminal was never
-        // recorded and the turn was accounted as a plain cancel.
+        // Preserve terminal evidence from a read settled before cancellation.
+        // Never issue another read after abort just to collect usage.
         if (!upstreamDone && value !== undefined) hooks.inspectChunk(value);
         if (upstream.signal.aborted) break;
         if (upstreamDone) {
@@ -311,24 +295,14 @@ export function relaySseEagerBounded(
           }
           break;
         }
-        if (cancelled) {
-          // Discard-drain: inspection only, nothing queued. Stop at terminal
-          // or when the bounded window expires.
-          drainedBytes += value.byteLength;
-          if (hooks.sawTerminal() || drainedBytes >= drainBytes || now() >= drainDeadline) {
-            break;
-          }
-          continue;
-        }
+        if (cancelled) break;
         const terminalBounded = terminalBoundary.feed(value);
         const outbound = activeRewrite ? rewriteOutbound(terminalBounded) : terminalBounded;
         if (outbound.byteLength > 0) {
           if (!enqueueClient(outbound)) {
             // Controller already torn down (client went away without cancel()).
             markClientCancelled();
-            drainDeadline = now() + drainMs;
-            armDrainTimer();
-            continue;
+            break;
           }
         }
         if (terminalBoundary.terminalSeen()) {
@@ -371,6 +345,7 @@ export function relaySseEagerBounded(
         try { rewriteBudget.releaseRetained(frameBufferBytes, { kind: "live_transient" }); } catch { /* teardown must not throw */ }
         frameBufferBytes = 0;
       }
+      upstream.signal.removeEventListener("abort", wakeParkedRead);
       terminalBoundary.dispose();
       if (syntheticKind) {
         eagerRelayCounters.syntheticTerminals += 1;
@@ -392,8 +367,9 @@ export function relaySseEagerBounded(
     }
   };
 
-  let drainedBytes = 0;
-  let drainDeadline = Number.POSITIVE_INFINITY;
+  const onClientAbort = () => markClientCancelled(opts?.clientSignal?.reason);
+  if (opts?.clientSignal?.aborted) onClientAbort();
+  else opts?.clientSignal?.addEventListener("abort", onClientAbort, { once: true });
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -407,11 +383,8 @@ export function relaySseEagerBounded(
       setQueuedBytes(0);
       wakeUp();
     },
-    cancel() {
-      markClientCancelled();
-      drainDeadline = now() + drainMs;
-      armDrainTimer();
-      wakeUp();
+    cancel(reason) {
+      markClientCancelled(reason);
     },
   });
 }

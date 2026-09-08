@@ -46,7 +46,7 @@ function messagesBody(): string {
   });
 }
 
-test("transient upstream 502 -> client 529 overloaded_error; retry fired; log keeps upstream 502", async () => {
+test("transient upstream 502 -> client 529 overloaded_error; one send; log keeps upstream 502", async () => {
   let calls = 0;
   const upstream = Bun.serve({
     port: 0,
@@ -67,9 +67,8 @@ test("transient upstream 502 -> client 529 overloaded_error; retry fired; log ke
       headers: { "content-type": "application/json" },
       body: messagesBody(),
     });
-    // Pre-stream transient retry (010) exhausts its attempts against the persistent 502 …
-    expect(calls).toBe(3);
-    // … then the Claude envelope reclassifies the transient 5xx as retryable overload (020).
+    // Surface the ambiguous failure after one send, preserving the Claude error envelope.
+    expect(calls).toBe(1);
     expect(response.status).toBe(529);
     expect(response.headers.get("retry-after")).toBe("0");
     const json = await response.json() as { type?: string; error?: { type?: string; message?: string } };

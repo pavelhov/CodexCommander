@@ -1,3 +1,4 @@
+import { UpstreamSendBudget } from "../../lib/upstream-send-budget";
 import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
 import { cleanupResponseDispatch, observeAdapterEvent, observeAdapterStream, observeDispatch, responseDispatch } from "../../usage/dispatch-http";
 import type { Server } from "bun";
@@ -321,6 +322,7 @@ interface CodexPoolAccountRetryArgs {
   outcomeStatus: number;
   upstream: AbortController;
   connectMs: number;
+  sendBudget?: UpstreamSendBudget;
   passthroughEstimate?: number;
   stream: boolean;
 }
@@ -374,7 +376,7 @@ async function retryCodexPoolOnAlternateAccount(
 ): Promise<CodexPoolAccountRetryResult> {
   const {
     req, config, route, parsed, logCtx, options, firstAuthCtx, firstResponse,
-    outcomeStatus, upstream, connectMs, passthroughEstimate, stream,
+    outcomeStatus, upstream, connectMs, sendBudget, passthroughEstimate, stream,
   } = args;
   // Defense in depth: exact account selectors must never reach alternate-account resolution,
   // even if a future caller forgets to guard this helper.
@@ -469,6 +471,7 @@ async function retryCodexPoolOnAlternateAccount(
       // dead-host rejection after the credential was seen (#914).
       route.provider.authMode === "forward",
       requestDispatchContext(logCtx, options.abortSignal ?? req.signal, "fallback"),
+      sendBudget,
     );
     // A real HTTP response proves the host was reached (#914).
     resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
@@ -1858,6 +1861,7 @@ async function handleResponsesInner(
     const upstream = new AbortController();
     linkAbortSignal(upstream, options.abortSignal);
     const connectMs = config.connectTimeoutMs ?? 200_000;
+    const sendBudget = route.provider.authMode === "forward" ? new UpstreamSendBudget(connectMs) : undefined;
     let upstreamResponse: Response;
     const transportFailureResponse = (err: unknown): Response => {
       upstream.abort();
@@ -1888,9 +1892,8 @@ async function handleResponsesInner(
       return formatErrorResponse(502, "upstream_error", msg);
     };
     try {
-      // Transient-5xx pre-stream retry (implementation contract):
-      // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
-      // Body is a replayable string; nothing has streamed to the client yet.
+      // Ambiguous reset/5xx failures are surfaced after one send. Only the
+      // explicit pre-generation rejection recovery below may send again.
       upstreamResponse = await fetchWithTransientRetry(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, passthroughEstimate, recovery);
@@ -1899,7 +1902,7 @@ async function handleResponsesInner(
             headers: request.headers,
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
-            route.provider.authMode === "forward", requestDispatchContext(logCtx, options.abortSignal ?? req.signal, recovery ? "retry" : undefined))
+            route.provider.authMode === "forward", requestDispatchContext(logCtx, options.abortSignal ?? req.signal, recovery ? "retry" : undefined), sendBudget)
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
             .then(res => {
@@ -1960,7 +1963,7 @@ async function handleResponsesInner(
               headers: request.headers,
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
-              route.provider.authMode === "forward", requestDispatchContext(logCtx, options.abortSignal ?? req.signal, recovery ? "retry" : undefined))
+              route.provider.authMode === "forward", requestDispatchContext(logCtx, options.abortSignal ?? req.signal, recovery ? "retry" : undefined), sendBudget)
               .then(res => {
                 resetUpstreamHostHealth(upstreamHostHealthKey(route.providerName, safeOriginLabel(request.url)));
                 return res;
@@ -1999,6 +2002,7 @@ async function handleResponsesInner(
           outcomeStatus: poolRetryOutcome,
           upstream,
           connectMs,
+          sendBudget,
           passthroughEstimate,
           stream: parsed.stream,
         });
@@ -2182,6 +2186,7 @@ async function handleResponsesInner(
         && (win32EagerRewrite || eagerPath?.useEagerRelay === true);
       if (eagerPath?.useEagerRelay || win32EagerRewrite) {
         const turnAc = new AbortController();
+        const unlinkTurnAbort = linkAbortSignal(turnAc, upstream.signal);
         linkAbortSignal(upstream, turnAc.signal);
         registerTurn(turnAc, options.turnAdmissionLease);
         const reportNativeTerminal = recordTerminalOutcomes
@@ -2236,11 +2241,13 @@ async function handleResponsesInner(
               reportNativeTerminal("failed", 502);
             }
           },
+          onDeliveryCancel: () => observeDispatch(() => responseDispatch(upstreamResponse)?.cancel("client")),
           onClientCancel: () => options.onNativePassthroughCancel?.(),
           onDone: () => {
+            unlinkTurnAbort();
             try { unregisterTurn(turnAc); } finally { options.settleOwnedTranslatorBudget?.(); }
           },
-        }, inlineEagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
+        }, { clientSignal: options.abortSignal, ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}) });
         // When selected, this relay closes response.completed even if upstream
         // keeps the connection alive. Windows forced-rewrite traffic and Darwin
         // explicit/validated-plaintext eager traffic apply client rewrites
@@ -2259,11 +2266,11 @@ async function handleResponsesInner(
       const [nativeBody, inspectBody] = upstreamResponse.body.tee();
       const turnAc = new AbortController();
       const clientGone = new AbortController();
+      const unlinkTurnAbort = linkAbortSignal(turnAc, upstream.signal);
       linkAbortSignal(upstream, turnAc.signal);
       registerTurn(turnAc, options.turnAdmissionLease);
       const inspectionConsumerOptions = {
         clientGoneSignal: clientGone.signal,
-        drainBounds: { ms: 15_000, bytes: 32 * 1024 * 1024 },
         upstream,
       };
       if (recordTerminalOutcomes) {
@@ -2295,7 +2302,7 @@ async function handleResponsesInner(
           inspectBody,
           reportNativeTerminal,
           turnAc.signal,
-          () => unregisterTurn(turnAc),
+          () => { unlinkTurnAbort(); unregisterTurn(turnAc); },
           logCtx,
           () => options.onNativePassthroughCancel?.(),
           rememberPassthroughResponse,
@@ -2307,7 +2314,7 @@ async function handleResponsesInner(
           inspectBody,
           logCtx,
           turnAc.signal,
-          () => unregisterTurn(turnAc),
+          () => { unlinkTurnAbort(); unregisterTurn(turnAc); },
           rememberPassthroughResponse,
           options.onFirstOutput,
           inspectionConsumerOptions,
@@ -2320,7 +2327,9 @@ async function handleResponsesInner(
       const rewrittenBody = clientBlockRewrite !== undefined || payloadRewrites.length > 0
         ? relaySseWithBlockRewrite(nativeBody, clientBlockRewrite ?? payloadRewriteAsBlockRewrite(composeSsePayloadRewrites(...payloadRewrites)), translatorBudget)
         : nativeBody;
-      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream, reason => { observeDispatch(() => responseDispatch(upstreamResponse)?.cancel("client")); clientGone.abort(reason); });
+      const clientBody = relaySseWithFailedTail(rewrittenBody, upstream,
+        reason => { observeDispatch(() => responseDispatch(upstreamResponse)?.cancel("client")); clientGone.abort(reason); },
+        reason => clientGone.abort(reason));
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
         headers,
