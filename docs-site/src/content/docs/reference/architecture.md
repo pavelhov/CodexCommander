@@ -134,6 +134,82 @@ and is not persisted across restarts. Request usage is normalized to `CodexComma
 Responses terminal events, and aggregated by `usage/` for the dashboard and optional JSONL
 diagnostics.
 
+## Dispatch accounting
+
+`usage.jsonl` remains the final request-usage ledger. New rows explicitly select logical-request
+or target-attempt usage as their authority; rows without this marker keep their previous
+interpretation. The separate `dispatch.jsonl` journal records local inference work without adding
+its observations to the usage ledger or changing retries, routing, credentials, cancellation, or
+stream consumption.
+
+A logical request can select several target attempts, and each attempt can invoke the transport
+several times. Each observed send has an opaque reference, an ordinal, wall-clock time and monotonic
+elapsed time. A start records a local invocation, not upstream receipt or a charge. Headers are
+intermediate; protocol success, protocol failure, transport failure, upstream abort and unknown
+completion remain distinct. Client cancellation is recorded separately and cannot erase an already
+observed terminal. EOF, opaque relays and a process exit without a protocol terminal can remain
+unknown.
+
+Coverage includes shared HTTP inference, recovery sends, compact requests, vision/search sidecars,
+custom Command Code/MiMo sends, image generation, Cursor initial inference frames, and explicit
+live-sideband `response.create` sends. Vision cache hits create no send. Model discovery, quota
+reads, token refresh, token counting, Cursor control/tool replies and live SDP session setup are
+excluded. Server-triggered live generations such as audio/VAD and uncorrelated live completion are
+not established by explicit-create accounting. Account warmup and Anthropic key-validation inference
+are labeled as validation traffic; warmup follows explicit account import/login/reauthentication.
+
+Only generated references, enum values, numeric measurements and presence flags enter this journal.
+It contains no prompts, tool payloads, URLs, headers or header values, raw account identities, or
+content hashes. Aliases correlate only an owned identity object within the current process; a
+snapshot without stable identity stays uncorrelated. HTTP `sessionPresent` observes only the names
+`session_id`, `session-id` and `thread-id` in materialized headers. Arbitrary header iterators remain
+uninspected. Body continuation and routing-hint presence remain unknown; Cursor separately records
+its known session presence.
+
+Usage revisions replace an earlier observation for the same send rather than adding it again.
+Reported provider tokens, estimated tokens, cumulative context checkpoints and provider credits stay
+separate. Cache input and reasoning output are inclusive subsets of token totals. Missing usage is
+unknown, and a known subtotal can coexist with incomplete coverage. Complete measured token totals
+do not establish complete pricing detail, provider billing or account debit.
+
+Both journals live in the Commander configuration directory (normally `~/.codexcommander`). Dispatch
+records are capped at 4 KiB and the reader examines a bounded 16 MiB tail. The file is append-only;
+there is no automatic rotation. Clearing the dashboard's in-memory Logs does not erase either
+journal. The dispatch file participates in configuration ownership/uninstall cleanup. File modes
+follow the usage ledger's restrictive directory/file permissions where the platform supports them.
+Appending is best effort: missing files, truncated or malformed records, unresolved sends and
+observer failures reduce coverage. Health counters describe the current process, not a guarantee
+about earlier processes or work outside the observer.
+
+### Offline comparison report
+
+From a source checkout with dependencies installed, run:
+
+```sh
+bun --no-env-file scripts/inference-offline-report.ts
+```
+
+The runner requires the pinned baseline Git object
+`f4f9b384db475e3dc7011394988269abc98123cc` locally. A shallow checkout may lack it; obtain the required
+repository history before running. The runner reports this prerequisite and does not fetch it.
+It writes `run-manifest.json`, `dispatch-events.jsonl`, `results.json` and `report.md` beneath
+`.tmp/inference-accounting/run-*`.
+
+The default comparison uses fixed synthetic fixtures, isolated child homes and declared loopback
+recorders. It retains baseline transformations and compares them against the current source with
+explicit normalization reasons. The report shows wire/send comparisons separately from each
+fixture's request, attempt, send, known-usage and coverage observations; the fixture cohort is not a
+measurement of all traffic through a real provider account. Token-cost and account-debit verdicts
+remain `UNAVAILABLE`.
+
+Native capture is supported only when the installed bundled Codex binary can run under verified
+macOS port-restricted containment, with an isolated home/workspace, allowlisted environment,
+disabled external tools/services and bounded execution/output. Otherwise it is `UNAVAILABLE`.
+The native custom-provider HTTP request is captured and replayed through pinned/current adapters
+in memory; its content is not written to the report. The report records binary version/digest,
+scalar results and sanitized difference paths. This evidence does not qualify desktop native-default
+or native WebSocket behavior.
+
 ## Transport and compaction
 
 `server/index.ts` serves HTTP/SSE on `/v1/responses` by default. If Codex attempts a Responses

@@ -95,6 +95,19 @@ provider-reported limits (5-hour / weekly / monthly windows), the provider plan,
 reference spend versus published caps — always labeled as provider-reported estimates, never billed
 spend.
 
+### Request usage and dispatch evidence
+
+Dashboard usage and Logs continue to use the final request ledger. New rows identify whether
+logical-request or target-attempt usage is authoritative; older rows retain their previous
+interpretation. The separate dispatch journal records individual upstream sends, including recovery
+and sidecar work, and is not added to dashboard token totals. Missing send usage remains unknown;
+reported tokens, estimates, cumulative context and provider credits do not form a universal spend
+ledger. Clearing the in-memory Logs does not delete the append-only journal files.
+
+For coverage, storage limits and the local synthetic comparison command, see
+[Dispatch accounting](/reference/architecture/#dispatch-accounting). The offline report makes no
+billing, debit or native-default protocol-parity guarantee.
+
 ## Model visibility
 
 The **Models** switches show final Codex visibility: a routed model is on only when its provider allowlist includes it (or no allowlist is set) and it is not disabled. Turning a model on reconciles both filters atomically; **All on** clears the provider allowlist so newly discovered models are also on.
