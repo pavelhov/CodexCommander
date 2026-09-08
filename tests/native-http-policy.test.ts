@@ -6,6 +6,7 @@ import { clearResponseStateMemoryForTests, flushResponseState } from "../src/res
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { nativeOwner, rememberNativeArtifacts } from "../src/codex/native-ownership";
 import { nativeRequestOwner } from "../src/responses/native-policy";
+import { noteSubagentModelFailure, resetSubagentModelFallbackStateForTests, setSubagentQuotaPrimeForTests } from "../src/codex/subagent-model-fallback";
 import { selectForwardHeaders } from "../src/server/ws-bridge";
 import { handleResponses, handleResponsesCompact } from "../src/server/responses";
 import type { CodexCommanderConfig } from "../src/types";
@@ -13,6 +14,7 @@ const originalFetch = globalThis.fetch;
 const originalHome = process.env.CODEXCOMMANDER_HOME;
 const originalCodexHome = process.env.CODEX_HOME;
 const dirs: string[] = [];
+afterEach(() => resetSubagentModelFallbackStateForTests());
 afterEach(async () => { await flushResponseState(); clearResponseStateMemoryForTests(); globalThis.fetch = originalFetch; if (originalHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = originalHome; if (originalCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = originalCodexHome; for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 function config(): CodexCommanderConfig {
  const dir = mkdtempSync(join(tmpdir(), "ccx-native-policy-")); dirs.push(dir); process.env.CODEXCOMMANDER_HOME = dir; process.env.CODEX_HOME = dir;
@@ -123,4 +125,39 @@ test("native API provenance fingerprints the resolved environment credential", (
   if (previous === undefined) delete process.env.CCX_NATIVE_POLICY_TEST_KEY;
   else process.env.CCX_NATIVE_POLICY_TEST_KEY = previous;
  }
+});
+
+for (const destination of ["explicit", "fallback", "wire-override"]) test(`native history remains scoped and complete on ${destination} external route`, async () => {
+ const fallback = destination !== "explicit";
+ const wireOverride = destination === "wire-override";
+ const cfg = config();
+ cfg.providers.external = { adapter: wireOverride ? "openai-responses" : "openai-chat", authMode: "key", apiKey: "fixture-key", baseUrl: wireOverride ? "https://api.openai.com/v1" : "https://external.example.test/v1", ...(wireOverride ? { modelAdapters: { fixture: "openai-chat" } } : {}) };
+ cfg.subagentModelFallback = ["external/fixture"];
+ const sent: { url: string; body: any }[] = [];
+ globalThis.fetch = (async (url: unknown, init: RequestInit) => {
+  sent.push({ url: String(url), body: JSON.parse(String(init.body)) });
+  return String(url).includes("/chat/completions")
+   ? Response.json({ id: "chat_fixture", choices: [{ message: { role: "assistant", content: "continued" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+   : Response.json({ id: "resp_scoped", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "prior answer" }] }] });
+ }) as typeof fetch;
+ await (await handleResponses(request({ model: "gpt-5.4", stream: false, input: "initial history", client_metadata: { thread_id: "owner-task" } }), cfg, {})).text();
+ if (fallback) {
+  setSubagentQuotaPrimeForTests(async () => {});
+  noteSubagentModelFailure("gpt-5.4", "429", cfg);
+ }
+ const next = (task?: string, reference = "resp_scoped") => request({ model: fallback ? "gpt-5.4" : "external/fixture", stream: false, input: "new question", previous_response_id: reference,
+  ...(task ? { client_metadata: { thread_id: task } } : {}) }, fallback ? { "x-openai-subagent": "collab_spawn" } : {});
+ for (const task of ["sibling-task", undefined]) {
+  const rejected = await handleResponses(next(task), cfg, {});
+  expect(rejected.status).toBe(409); expect(sent).toHaveLength(1);
+ }
+ if (fallback) {
+  expect((await handleResponses(next("owner-task", "missing-reference"), cfg, {})).status).toBe(409);
+  expect(sent).toHaveLength(1);
+ }
+ const continued = await handleResponses(next("owner-task"), cfg, {});
+ expect(continued.status).toBe(200); await continued.text(); expect(sent).toHaveLength(2);
+ expect(sent[1]!.url).toContain("/chat/completions");
+ const wire = JSON.stringify(sent[1]!.body.messages);
+ expect(wire).toContain("initial history"); expect(wire).toContain("prior answer"); expect(wire).toContain("new question");
 });

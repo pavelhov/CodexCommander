@@ -51,6 +51,12 @@ export function nativeReplayScope(headers: Headers, body: unknown, owner?: Nativ
   if (identity.taskId) return ownershipFingerprint("native-replay-task", identity.taskId);
   return owner ? ownershipFingerprint("native-replay-owner", `${owner.account}:${owner.generation}`) : undefined;
 }
+/** Stored native history keeps its task scope even when the destination changes. */
+export function nativeLocalReplayAuthorized(body: unknown, scope?: string): boolean {
+  const reference = body && typeof body === "object" ? (body as Record<string, unknown>).previous_response_id : undefined;
+  const stored = typeof reference === "string" ? previousResponseProviderState(reference)?.native : undefined;
+  return !stored || (scope !== undefined && stored.scope === scope);
+}
 export function nativeCompatibilityPolicy(args: {
   provider: CodexCommanderProviderConfig; body: unknown; headers: Headers; owner?: NativeOwner;
   completeLocalReplay?: boolean; effectiveModel?: string; replayScope?: string; materializeReference?: boolean;
@@ -80,7 +86,7 @@ export function nativeCompatibilityPolicy(args: {
   let replayed = args.completeLocalReplay === true;
   if (referenceNeedsReplay && !replayed && typeof record?.previous_response_id === "string" && args.replayScope) {
     const local = previousResponseProviderState(record.previous_response_id)?.native;
-    if (local?.scope === args.replayScope) {
+    if (local && nativeLocalReplayAuthorized(body, args.replayScope)) {
       const expanded = expandPreviousResponseInput(body);
       if (expanded !== body && !previousResponseReplayFailure(expanded)) { body = expanded; replayed = true; }
     }

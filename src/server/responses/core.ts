@@ -1,6 +1,6 @@
 import { resolveCodexTaskIdentity } from "../../codex/task-identity";
 import { rememberNativeArtifacts } from "../../codex/native-ownership";
-import { isNativeResponsesProvider, nativeClientMetadata, nativeCompatibilityPolicy, nativeRequestOwner, nativeReplayScope, nativeTurnId, NATIVE_RESPONSES_HEADERS } from "../../responses/native-policy";
+import { isNativeResponsesProvider, nativeClientMetadata, nativeCompatibilityPolicy, nativeLocalReplayAuthorized, nativeRequestOwner, nativeReplayScope, nativeTurnId, NATIVE_RESPONSES_HEADERS } from "../../responses/native-policy";
 import { UpstreamSendBudget } from "../../lib/upstream-send-budget";
 import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
 import { cleanupResponseDispatch, observeAdapterEvent, observeAdapterStream, observeDispatch, responseDispatch } from "../../usage/dispatch-http";
@@ -1406,7 +1406,12 @@ async function handleResponsesInner(
   const nativeIngress = ingressRoute !== undefined && isNativeResponsesProvider(ingressRoute.provider);
   // A known API reference can continue at the server without redundant local replay.
   // ChatGPT HTTP retains the historical local-expansion compatibility policy.
-  if (!nativeIngress) body = expandPreviousResponseInput(body);
+  if (!nativeIngress) {
+    if (!nativeLocalReplayAuthorized(body, nativeReplayScope(req.headers, body))) {
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable for this task; resend the complete conversation without previous_response_id.");
+    }
+    body = expandPreviousResponseInput(body);
+  }
   if (previousResponseReplayFailure(body)) {
     return formatErrorResponse(
       400,
@@ -1595,6 +1600,30 @@ async function handleResponsesInner(
   }
   } finally {
     previewSelectionAdmission?.release();
+  }
+
+  // A native request may become translated after fallback. Materialize its authorized
+  // history before parsing/normalizing for that final provider; never send only the delta.
+  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  if (nativeIngress && !isNativeResponsesProvider(route.provider) && parsed.previousResponseId) {
+    const replayBody = parsed._rawBody;
+    if (!nativeLocalReplayAuthorized(replayBody, nativeReplayScope(req.headers, replayBody))) {
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable for this task; resend the complete conversation without previous_response_id.");
+    }
+    const expanded = expandPreviousResponseInput(replayBody);
+    if (expanded === replayBody || previousResponseReplayFailure(expanded)) {
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable; resend the complete conversation without previous_response_id.");
+    }
+    sanitizeEncryptedContentInPlace((expanded as { input?: unknown }).input);
+    try {
+      parsed = { ...parsed, ...parseRequest(expanded), _previousResponseInputExpanded: true };
+      toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+    } catch (err) {
+      if (isTranslatorBudgetExceededError(err)) {
+        return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", { code: "translation_buffer_limit" });
+      }
+      return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
+    }
   }
 
   // Encrypted child tasks may only reach the canonical native backend. This check

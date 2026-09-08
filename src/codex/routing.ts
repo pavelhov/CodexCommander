@@ -1,4 +1,5 @@
 import { ownershipFingerprint, nativeOwner, readNativeOwnership, writeNativeOwnership, deleteNativeOwnership, clearNativeTaskOwnership } from "./native-ownership";
+import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { randomUUID } from "node:crypto";
 import { saveConfigPreservingClaudeCode } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
@@ -818,18 +819,24 @@ function affinityKey(threadId: string, quotaScope?: CodexQuotaScope): string {
   return ownershipFingerprint("task-affinity", JSON.stringify([threadId, threadAffinityScope(quotaScope)]));
 }
 
-function restoreThreadAffinity(threadId: string, config: CodexCommanderConfig, now: number, quotaScope?: CodexQuotaScope): void {
+function nativeMainReadsForbidden(options?: CodexAccountUsabilityOptions): boolean {
+  return options?.nativeMainSelectionOnly === true || isNativeMainTrafficBlocked();
+}
+
+function restoreThreadAffinity(threadId: string, config: CodexCommanderConfig, now: number, quotaScope?: CodexQuotaScope, selectionOptions?: CodexAccountUsabilityOptions): void {
   if (!admissibleAffinityComponent(threadId) || getThreadAffinity(threadId, quotaScope)) return;
   const saved = readNativeOwnership(affinityKey(threadId, quotaScope));
   if (!saved) return;
   for (const accountId of listLiveCodexAccountIds(config)) {
+    // Restoring main requires credential identity evidence unavailable during a fence.
+    if (accountId === MAIN_CODEX_ACCOUNT_ID && nativeMainReadsForbidden(selectionOptions)) continue;
     const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
     if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) continue;
     const identity = accountId === MAIN_CODEX_ACCOUNT_ID ? getMainAccountToken()?.chatgptAccountId : String(record?.replacedAt ?? 0);
     if (!identity) continue;
     const owner = nativeOwner(accountId, identity);
     if (owner.account !== saved.account || owner.generation !== saved.generation) continue;
-    bindThreadAffinity(threadId, accountId, now, quotaScope);
+    bindThreadAffinity(threadId, accountId, now, quotaScope, selectionOptions);
     break;
   }
 }
@@ -872,8 +879,10 @@ function isThreadAffinityExpired(entry: ThreadAffinityEntry, now: number): boole
   return now - entry.lastUsedAt > CODEX_THREAD_AFFINITY_IDLE_TTL_MS;
 }
 
-function isThreadAffinityGenerationLive(entry: ThreadAffinityEntry): boolean {
+function isThreadAffinityGenerationLive(entry: ThreadAffinityEntry, selectionOptions?: CodexAccountUsabilityOptions): boolean {
   if (entry.accountId === MAIN_CODEX_ACCOUNT_ID) {
+    if (isNativeMainTrafficBlocked()) return false;
+    if (selectionOptions?.nativeMainSelectionOnly) return true;
     const identity = getMainAccountToken()?.chatgptAccountId;
     return !!identity && ownershipFingerprint("affinity-credential", identity) === entry.credentialIdentity;
   }
@@ -915,7 +924,9 @@ function bindThreadAffinity(
   accountId: string,
   now: number,
   quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
 ): void {
+  if (accountId === MAIN_CODEX_ACCOUNT_ID && nativeMainReadsForbidden(selectionOptions)) return;
   if (!admissibleAffinityComponent(threadId) || !admissibleAffinityComponent(accountId)) return;
   const record = accountId === MAIN_CODEX_ACCOUNT_ID ? undefined : readCodexAccountRecord(accountId);
   if (accountId !== MAIN_CODEX_ACCOUNT_ID && (!record?.credential || record.deletedAt != null)) return;
@@ -1109,7 +1120,7 @@ function pickUnboundStrategyAccount(
     picked = pickRoundRobinAccount(poolKey, eligible, limit);
     if (!picked) return null;
     if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
-    if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
+    if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope, selectionOptions);
     notePoolRotationSuccess(poolKey, picked, limit);
     return picked;
   }
@@ -1119,7 +1130,7 @@ function pickUnboundStrategyAccount(
     if (!picked) return null;
     if (commit) {
       if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
-      if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
+      if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope, selectionOptions);
     }
     return picked;
   }
@@ -1329,10 +1340,12 @@ function pickPriorityPreemption(
  * on its own. Clearing the pin also removes the condition, so this writes at
  * most once per pin.
  */
-function releaseDrainedCodexAccountPin(config: CodexCommanderConfig): void {
+function releaseDrainedCodexAccountPin(config: CodexCommanderConfig, selectionOptions?: CodexAccountUsabilityOptions): void {
   const pinned = pinnedCodexAccountId(config);
   if (pinned === undefined) return;
-  const drained = !isCodexAccountUsable(config, pinned)
+  // A temporary credential fence is not evidence that an operator pin drained.
+  if (pinned === MAIN_CODEX_ACCOUNT_ID && nativeMainReadsForbidden(selectionOptions)) return;
+  const drained = !isCodexAccountUsable(config, pinned, selectionOptions)
     || isAccountNeedsReauth(pinned)
     || isCodexAccountPaused(config, pinned)
     || !hasCodexQuotaHeadroom(config, pinned);
@@ -1424,7 +1437,7 @@ export function previewCodexAccountForRequest(
   if (threadId && entry) {
     if (
       !isThreadAffinityExpired(entry, now)
-      && isThreadAffinityGenerationLive(entry)
+      && isThreadAffinityGenerationLive(entry, selectionOptions)
       && isCodexAccountSelectable(config, entry.accountId, now, quotaScope, selectionOptions)
       && !shouldFailover(config, entry.accountId, now)
     ) {
@@ -1490,9 +1503,9 @@ export function resolveCodexAccountForThreadDetailed(
   // keeps its account below, but the operator's tier ceiling must not silently
   // revive after quota resets. Independent model scopes must never persist a
   // change to shared routing state.
-  if (!isIndependentCodexQuotaScope(quotaScope)) releaseDrainedCodexAccountPin(config);
+  if (!isIndependentCodexQuotaScope(quotaScope)) releaseDrainedCodexAccountPin(config, selectionOptions);
 
-  if (threadId) restoreThreadAffinity(threadId, config, now, quotaScope);
+  if (threadId) restoreThreadAffinity(threadId, config, now, quotaScope, selectionOptions);
   const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
   if (threadId && entry) {
     if (isThreadAffinityExpired(entry, now)) {
@@ -1500,7 +1513,7 @@ export function resolveCodexAccountForThreadDetailed(
       return { status: "expired", accountId: entry.accountId };
     }
     if (
-      isThreadAffinityGenerationLive(entry)
+      isThreadAffinityGenerationLive(entry, selectionOptions)
       && isCodexAccountSelectable(config, entry.accountId, now, quotaScope, selectionOptions)
       // Affined threads must leave a failing account once the streak trips failover
       // (soft-avoid covers the first-hit case; this catches post-avoid residual streaks).
@@ -1508,7 +1521,8 @@ export function resolveCodexAccountForThreadDetailed(
     ) {
       entry.lastUsedAt = now;
       // Quota ranking affects new work only; healthy owners remain stable.
-      if (now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
+      if (now - entry.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS
+        && !(entry.accountId === MAIN_CODEX_ACCOUNT_ID && nativeMainReadsForbidden(selectionOptions))) {
         const identity = entry.accountId === MAIN_CODEX_ACCOUNT_ID ? getMainAccountToken()?.chatgptAccountId : String(readCodexAccountRecord(entry.accountId)?.replacedAt ?? 0);
         if (identity) writeNativeOwnership(affinityKey(threadId, quotaScope), nativeOwner(entry.accountId, identity), "task");
         entry.lastReevalAt = now;
@@ -1566,7 +1580,7 @@ export function resolveCodexAccountForThreadDetailed(
       ? { status: "selected", accountId: active }
       : { status: "none" };
   }
-  if (threadId) bindThreadAffinity(threadId, active, now, quotaScope);
+  if (threadId) bindThreadAffinity(threadId, active, now, quotaScope, selectionOptions);
   return { status: "selected", accountId: active };
 }
 

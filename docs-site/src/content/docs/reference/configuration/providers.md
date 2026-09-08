@@ -144,6 +144,9 @@ Cross-account acceptance and provider-side prompt-cache reuse are not guaranteed
 When a native continuation needs local history, replay is permitted only for the same task (or
 the same credential context when no task identity exists). Missing complete history returns
 `409 native_continuation_unavailable`, asking the client to resend the complete conversation.
+The same task check applies when switching or falling back to an external provider. Commander
+materializes the complete readable history before that send. A provider switch without task
+identity cannot establish the original native credential context and requires the full conversation.
 Server-issued turn state is forwarded only when its recorded account, credential generation,
 and turn match. Unknown or mismatched turn state is omitted; conversation history is retained.
 
