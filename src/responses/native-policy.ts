@@ -73,7 +73,6 @@ export function nativeCompatibilityPolicy(args: {
   if (provenance.turnState !== "same") headers.delete("x-codex-turn-state");
   // Preserve historical ChatGPT HTTP unsupported-parameter handling (38d1fea11),
   // not a newly verified rejection; see stripPreviousResponseId. Full-input turns
-  // have no reference and
   // never consult or append cached history. API Responses can keep a known reference.
   const referenceNeedsReplay = record?.previous_response_id != null
     && (args.materializeReference === true || isCanonicalOpenAiForwardProvider(args.provider) || provenance.reference !== "same");

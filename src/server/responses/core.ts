@@ -1870,7 +1870,7 @@ async function handleResponsesInner(
     const rememberPassthroughResponse = (response: { id?: unknown; output?: unknown; status?: unknown }) => {
       const owner = nativeRequestOwner(route.provider, selectedForwardHeaders, authCtx);
       const scope = nativeReplayScope(req.headers, parsed._rawBody, owner);
-      if (passthroughRecordEligible) rememberResponseState(parsed._rawBody, response, owner && scope ? { native: { ...owner, scope } } : undefined, { force: true });
+      if (passthroughRecordEligible) rememberResponseState(parsed._rawBody, response, owner && scope ? { native: { scope } } : undefined, { force: true });
       if (owner) rememberNativeArtifacts(response, undefined, owner, nativeTurnId(req.headers, parsed._rawBody));
     };
     if (!isNativeResponsesProvider(route.provider) && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
