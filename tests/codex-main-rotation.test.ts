@@ -429,7 +429,7 @@ describe("main account rotation (Option A)", () => {
     updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5, 0);
     updateAccountQuota("a", 20, 0);
     updateAccountQuota("b", 30, 0);
-    const headers = new Headers({ "x-codex-parent-thread-id": "main-affinity" });
+    const headers = new Headers({ "thread-id": "main-affinity", "x-codex-parent-thread-id": "shared-parent" });
 
     const first = await resolveCodexAuthContext(headers, config, "pool");
     expect(first).toMatchObject({ kind: "main-pool", accountId: MAIN_CODEX_ACCOUNT_ID });

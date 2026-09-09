@@ -1,3 +1,5 @@
+import { dispatchHttpFetch, cleanupResponseDispatch, observeDispatch, responseDispatch } from "../usage/dispatch-http";
+import { dispatchAlias } from "../usage/dispatch";
 /**
  * /v1/alpha/search relay.
  *
@@ -31,7 +33,7 @@ import {
 import { routeModel } from "../router";
 import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
-import type { RequestLogContext } from "./request-log";
+import { initializeRequestDispatch, type RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
@@ -52,6 +54,7 @@ export async function handleSearch(
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
+  initializeRequestDispatch(logCtx, "search");
   try { validateForwardAdmissionCredential(req.headers, config); }
   catch (err) {
     if (err instanceof ForwardAdmissionCredentialError) return formatErrorResponse(401, "authentication_error", err.message);
@@ -144,13 +147,17 @@ export async function handleSearch(
   const timeoutMs = config.search?.timeoutMs ?? SEARCH_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, req.signal);
   const sidecarExit = sidecarEnter("search");
+  observeDispatch(() => { logCtx.dispatchAttempt = logCtx.dispatchRequest?.attempt({ surface: "search", protocol: "provider", routeRef: dispatchAlias(config.providers[upstream.providerName]) }); });
+  const dispatch = { attempt: logCtx.dispatchAttempt, clientSignal: req.signal };
+  let observedResponse: Response | undefined;
   try {
-    const upstreamResponse = await fetch(url, {
+    const upstreamResponse = await dispatchHttpFetch(fetch, url, {
       method: "POST",
       headers,
       body: JSON.stringify(relayBody),
       signal: linkedSignal.signal,
-    });
+    }, dispatch);
+    observedResponse = upstreamResponse;
     const payload = await upstreamResponse.arrayBuffer();
     if (payload.byteLength > SEARCH_RESPONSE_MAX_BYTES) {
       return formatErrorResponse(502, "upstream_error", `search response too large (${payload.byteLength} bytes)`);
@@ -175,6 +182,10 @@ export async function handleSearch(
       `search relay failed: ${err instanceof Error ? err.message : String(err)}`,
     );
   } finally {
+    if (observedResponse) {
+      observeDispatch(() => responseDispatch(observedResponse!)?.terminal("unknown"));
+      cleanupResponseDispatch(observedResponse);
+    }
     sidecarExit();
     linkedSignal.cleanup();
   }

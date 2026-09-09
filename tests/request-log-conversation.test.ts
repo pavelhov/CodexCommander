@@ -71,18 +71,18 @@ describe("sessionIdHeaderFromRequest", () => {
 });
 
 describe("conversationIdFromResponsesRequest", () => {
-  test("prefers parent thread header over session / thread / cursor", () => {
+  test("prefers own thread over session and never inherits parent", () => {
     expect(conversationIdFromResponsesRequest({
       clientThreadId: "parent-thread",
       sessionIdHeader: "session",
       threadIdHeader: "thread",
       cursorConversationId: "cursor",
-    })).toBe(digest32("parent-thread"));
+    })).toBe(digest32("thread"));
     expect(conversationIdFromResponsesRequest({
       sessionIdHeader: "session",
       threadIdHeader: "thread",
       cursorConversationId: "cursor",
-    })).toBe(digest32("session"));
+    })).toBe(digest32("thread"));
     expect(conversationIdFromResponsesRequest({
       threadIdHeader: "thread",
       cursorConversationId: "cursor",
@@ -156,4 +156,8 @@ describe("request log conversation persistence / filter", () => {
     };
     expect(requestLogEntryFromPersistedUsage(persisted).conversationId).toBe(digest32("thread-xyz"));
   });
+});
+
+test("Responses log identity uses structured own task metadata", () => {
+  expect(conversationIdFromResponsesRequest({headers:new Headers(),clientMetadata:{thread_id:"own-metadata",parent_thread_id:"parent"}})).toBe(digest32("own-metadata"));
 });

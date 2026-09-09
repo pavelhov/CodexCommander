@@ -13,6 +13,7 @@ import {
   clearCodexUpstreamHealth,
   clearCodexUpstreamHealthForAccount,
   clearThreadAccountMap,
+  clearThreadAccountMapMemoryForTests,
   clearThreadAccountMapForAccount,
   computeCodexUsageScore,
   getCodexAccountCooldownUntil,
@@ -33,7 +34,7 @@ import {
   tryAcquireCodexQuotaProbeLease,
 } from "../src/codex/routing";
 import { clearPoolRotationState } from "../src/codex/pool-rotation";
-import { removeCodexAccountCredential, saveCodexAccountCredential } from "../src/codex/account-store";
+import { removeCodexAccountCredential, saveCodexAccountCredential, readCodexAccountRecord, saveCodexAccountCredentialIfGeneration } from "../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
@@ -1010,6 +1011,33 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("scoped-lru-0", config, after, "shared")).toBe("a");
     expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 1, "spark")).toBe("a");
     expect(resolveCodexAccountForThread("scoped-lru-0", config, after + 2)).toBe("b");
+  }, 15_000);
+
+  test("main account affinity cannot restore across a different main login", () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    writeFileSync(authPath, JSON.stringify({tokens:{access_token:"main-one",account_id:"main-one-id"}}));
+    const config = makeConfig({activeCodexAccountId:MAIN_CODEX_ACCOUNT_ID});
+    updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 10); updateAccountQuota("a", 10); updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("main-restart", config)).toBe(MAIN_CODEX_ACCOUNT_ID);
+    clearThreadAccountMapMemoryForTests();
+    writeFileSync(authPath, JSON.stringify({tokens:{access_token:"main-two",account_id:"main-two-id"}}));
+    config.activeCodexAccountId = "b";
+    expect(resolveCodexAccountForThread("main-restart", config)).toBe("b");
+  });
+
+  test("healthy affinity survives restart and same-account credential refresh", () => {
+    const config = makeConfig();
+    updateAccountQuota("a", 10); updateAccountQuota("b", 10);
+    expect(resolveCodexAccountForThread("restart-child", config)).toBe("a");
+    clearThreadAccountMapMemoryForTests();
+    config.activeCodexAccountId = "b";
+    updateAccountQuota("a", 95); updateAccountQuota("b", 5);
+    expect(resolveCodexAccountForThread("restart-child", config)).toBe("a");
+    const record = readCodexAccountRecord("a")!;
+    expect(saveCodexAccountCredentialIfGeneration("a", record.generation, { ...record.credential!, accessToken: "refreshed-access" })).toBe(true);
+    expect(resolveCodexAccountForThread("restart-child", config)).toBe("a");
+    clearThreadAccountMapMemoryForTests();
+    expect(resolveCodexAccountForThread("restart-child", config)).toBe("a");
   });
 
   test("generation mismatch invalidates a mapped thread before reuse", () => {
@@ -1302,8 +1330,8 @@ describe("codex routing", () => {
     expect(config.activeCodexAccountId).toBe("a");
   });
 
-  // Bound threads re-evaluate quota after the configured interval.
-  test("bound thread over threshold switches after the re-eval interval", () => {
+  // Quota ranking is for new work; healthy existing owners remain sticky.
+  test("bound thread over threshold stays after the re-eval interval", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
@@ -1314,11 +1342,11 @@ describe("codex routing", () => {
     updateAccountQuota("a", 95);
     updateAccountQuota("b", 5);
     const later = now + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
-    expect(resolveCodexAccountForThread("t1", config, later)).toBe("b");
-    expect(config.activeCodexAccountId).toBe("b");
+    expect(resolveCodexAccountForThread("t1", config, later)).toBe("a");
+    expect(config.activeCodexAccountId).toBe("a");
   });
 
-  test("bound thread over threshold switches immediately without waiting for re-eval (#584)", () => {
+  test("bound thread over threshold stays immediately without waiting for re-eval (#584)", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
@@ -1326,9 +1354,9 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
     updateAccountQuota("a", 95);
     updateAccountQuota("b", 5);
-    // Depleted primary must not stay pinned for up to 60s while a cooler account exists.
-    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("b");
-    expect(config.activeCodexAccountId).toBe("b");
+    // Ranking changes alone do not invalidate a healthy owner.
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("a");
+    expect(config.activeCodexAccountId).toBe("a");
   });
 
   test("bound thread under threshold stays even if a lower account exists", () => {
@@ -1359,7 +1387,7 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("t1", config, later)).toBe("a");
   });
 
-  test("bound thread over threshold switches once and does not ping-pong", () => {
+  test("bound thread over threshold stays once and does not ping-pong", () => {
     const config = makeConfig();
     const now = 1_800_000_000_000;
     updateAccountQuota("a", 10);
@@ -1367,10 +1395,10 @@ describe("codex routing", () => {
     expect(resolveCodexAccountForThread("t1", config, now)).toBe("a");
     updateAccountQuota("a", 95);
     updateAccountQuota("b", 5);
-    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("b");
-    // A subsequent interval does not ping-pong back: b is now the lowest.
+    expect(resolveCodexAccountForThread("t1", config, now + 1_000)).toBe("a");
+    // Later ranking checks preserve the same owner.
     const later2 = now + 1_000 + CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS + 1;
-    expect(resolveCodexAccountForThread("t1", config, later2)).toBe("b");
+    expect(resolveCodexAccountForThread("t1", config, later2)).toBe("a");
   });
 
   test("bound thread with an all-unknown pool does not flap on re-eval", () => {
@@ -1745,7 +1773,7 @@ describe("codex account selection order", () => {
     expect(resolveCodexAccountForThread("thread-1", config)).toBe("b");
   });
 
-  test("a bound thread over threshold moves to the highest tier with headroom", () => {
+  test("a bound thread over threshold keeps its healthy owner despite priority changes", () => {
     const config = makeConfig({ activeCodexAccountId: "b" });
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -1753,7 +1781,7 @@ describe("codex account selection order", () => {
 
     config.codexAccountPriorities = { a: 1 };
     updateAccountQuota("b", 90);
-    expect(resolveCodexAccountForThread("thread-1", config)).toBe("a");
+    expect(resolveCodexAccountForThread("thread-1", config)).toBe("b");
   });
 
   test("no stored order leaves the pick sequence untouched", () => {

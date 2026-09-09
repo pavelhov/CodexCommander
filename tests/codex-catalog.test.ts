@@ -812,17 +812,18 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
   test("configured displayName does not override genuine native upstream marketing names", () => {
     // Native gpt-5.6-* entries come from the pinned upstream snapshot with their real display
     // names; they carry no CatalogModel (isRouted=false), so a configured displayName can never
-    // reach them — and the fallback-quality discriminator (display_name === slug) still works.
+    // reach them. Synthetic fallback provenance is explicit.
     const entries = buildCatalogEntries(nativeTemplate(), ["gpt-5.6-sol"], []);
     const sol = entries.find(e => e.slug === "gpt-5.6-sol");
     expect(sol?.display_name).toBe("GPT-5.6-Sol");
 
-    // A fallback-quality native (display_name stamped with the bare slug) is still upgraded to
+    // An explicitly marked synthetic native is still upgraded to
     // the upstream entry by sync — displayName on routed models does not interfere with that path.
     const synthesizedLuna = {
       ...nativeTemplate(),
       slug: "gpt-5.6-luna",
       display_name: "gpt-5.6-luna",
+      codexcommander_native_source: "synthetic-fallback",
       priority: 9,
     };
     const merged = mergeCatalogEntriesForSync([synthesizedLuna], [], new Map(), [], false);
@@ -1090,18 +1091,19 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.auto_compact_token_limit).toBe(115_200);
   });
 
-  test("native gpt-5.4 uses its 1M context window override", () => {
+  test("native gpt-5.4 preserves different source context and maximum windows", () => {
     const template = {
       ...nativeTemplate(),
+      slug: "gpt-5.4",
       context_window: 272_000,
       max_context_window: 1_000_000,
     };
     const entries = buildCatalogEntries(template, ["gpt-5.4"], []);
     const native = entries.find(e => e.slug === "gpt-5.4");
 
-    expect(native?.context_window).toBe(1_000_000);
+    expect(native?.context_window).toBe(272_000);
     expect(native?.max_context_window).toBe(1_000_000);
-    expect(native?.auto_compact_token_limit).toBe(900_000);
+    expect(native).not.toHaveProperty("auto_compact_token_limit");
   });
 
   test("native gpt-5.3-codex-spark uses its 100k context window instead of inherited codex max", () => {
@@ -1118,7 +1120,7 @@ describe("Codex catalog routed normalization", () => {
     expect(native?.auto_compact_token_limit).toBe(90_000);
   });
 
-  test("native GPT-5.6 entries add max and ultra reasoning even when cloned from an older template", () => {
+  test("native GPT-5.6 fallback uses pinned reasoning while the exact older source stays unchanged", () => {
     const entries = buildCatalogEntries({
       ...nativeTemplate(),
       context_window: 272_000,
@@ -1132,10 +1134,8 @@ describe("Codex catalog routed normalization", () => {
     ]);
     expect(gpt56?.context_window).toBe(372_000);
     expect(gpt56?.max_context_window).toBe(372_000);
-    expect(gpt56?.auto_compact_token_limit).toBe(334_800);
-    expect((gpt55?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual([
-      "low", "medium", "high", "xhigh", "max", "ultra",
-    ]);
+    expect(gpt56?.auto_compact_token_limit).toBeNull();
+    expect(gpt55?.supported_reasoning_levels).toEqual(nativeTemplate().supported_reasoning_levels);
   });
 
   test("gpt-5.6 natives come from the pinned upstream snapshot (PR #31684) with exact per-slug specs", () => {
@@ -1169,9 +1169,9 @@ describe("Codex catalog routed normalization", () => {
     expect(terra?.multi_agent_version).toBe("v2");
     expect(luna?.multi_agent_version).toBe("v1");
 
-    // ccx adaptations: client-version gate stripped; ws preference gated off by default.
+    // Preserve the pinned client-version gate; native WebSocket remains unsupported.
     for (const e of [sol, terra, luna]) {
-      expect(e).not.toHaveProperty("minimal_client_version");
+      expect(e?.minimal_client_version).toBe("0.142.2");
       expect(e).not.toHaveProperty("prefer_websockets");
       expect(e).not.toHaveProperty("supports_websockets");
       expect(e?.context_window).toBe(372_000);
@@ -1180,20 +1180,21 @@ describe("Codex catalog routed normalization", () => {
     }
   });
 
-  test("gpt-5.6 snapshot entries keep prefer_websockets when websockets are enabled", () => {
+  test("gpt-5.6 snapshot entries do not advertise native WS when the translated bridge is enabled", () => {
     const entries = buildCatalogEntries(nativeTemplate(), ["gpt-5.6-sol"], [], undefined, true);
     const sol = entries.find(e => e.slug === "gpt-5.6-sol");
-    expect(sol?.prefer_websockets).toBe(true);
-    expect(sol?.supports_websockets).toBe(true);
+    expect(sol).not.toHaveProperty("prefer_websockets");
+    expect(sol).not.toHaveProperty("supports_websockets");
   });
 
   test("catalog sync upgrades fallback-quality gpt-5.6 entries but preserves genuine ones", () => {
-    // Fallback-quality: display_name stamped with the bare slug (ccx synthesis signature),
+    // Explicitly marked synthetic fallback:
     // wrong ladder (ultra on luna) left by an older ccx version.
     const synthesizedLuna = {
       ...nativeTemplate(),
       slug: "gpt-5.6-luna",
       display_name: "gpt-5.6-luna",
+      codexcommander_native_source: "synthetic-fallback",
       priority: 9,
       supported_reasoning_levels: [
         { effort: "low", description: "l" }, { effort: "max", description: "m" }, { effort: "ultra", description: "u" },
@@ -1323,19 +1324,14 @@ describe("Codex catalog routed normalization", () => {
     expect(native).toBeDefined();
     expect(native).toHaveProperty("model_messages");
     expect(native?.tool_mode).toBe("code");
-    // Default mode clears multi_agent_version on non-pinned natives (gpt-5.5
-    // has no upstream pin — codex feature flag decides the surface).
-    expect(native?.multi_agent_version).toBeUndefined();
-    // Non-5.6 natives do not support responses-lite: the template may carry it from a
-    // 5.6 entry, but deriveEntry strips it so codex-rs does not inject
-    // reasoning.context: "all_turns" for models that reject it.
-    expect(native?.use_responses_lite).toBeUndefined();
-    // WebSocket + lite flags are stripped for non-5.6 natives.
+    // Exact native source fields survive unchanged, except unsupported native WS.
+    expect(native?.multi_agent_version).toBe(nativeTemplate().multi_agent_version);
+    expect(native?.use_responses_lite).toBe(nativeTemplate().use_responses_lite);
     expect(native?.supports_websockets).toBeUndefined();
     expect(native?.web_search_tool_type).toBe("text_and_image");
     expect(native?.supports_search_tool).toBe(true);
-    expect(native?.service_tier).toBe("priority");
-    expect(native?.service_tiers).toEqual([{ id: "priority" }]);
+    expect(native?.service_tier).toBe(nativeTemplate().service_tier);
+    expect(native?.service_tiers).toEqual(nativeTemplate().service_tiers);
   });
 
   test("catalog sync keeps native OpenAI rows when adopted providers expose matching ids", () => {
@@ -1372,7 +1368,7 @@ describe("Codex catalog routed normalization", () => {
     expect(merged.find(entry => entry.slug === "gpt-5.4-mini")?.priority).toBe(10);
   });
 
-  test("buildCatalogEntries advertises supports_websockets only on explicit opt-in", () => {
+  test("buildCatalogEntries advertises translated WebSockets only for opted-in external routes", () => {
     const goModels = [{ provider: "anthropic", id: "claude-sonnet-4-6", owned_by: "anthropic" }];
 
     const defaultOff = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], goModels);
@@ -1380,7 +1376,7 @@ describe("Codex catalog routed normalization", () => {
     expect(defaultOff.find(e => e.slug === "anthropic/claude-sonnet-4-6")).not.toHaveProperty("supports_websockets");
 
     const on = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], goModels, undefined, true);
-    expect(on.find(e => e.slug === "gpt-5.5")?.supports_websockets).toBe(true);
+    expect(on.find(e => e.slug === "gpt-5.5")).not.toHaveProperty("supports_websockets");
     expect(on.find(e => e.slug === "anthropic/claude-sonnet-4-6")?.supports_websockets).toBe(true);
 
     const off = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], goModels, undefined, false);

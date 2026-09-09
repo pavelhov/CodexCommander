@@ -1,3 +1,5 @@
+import { createDispatchRequest, type DispatchAttempt } from "../usage/dispatch";
+import { dispatchHttpFetch, observeDispatch, responseDispatch, cleanupResponseDispatch } from "../usage/dispatch-http";
 import type { CodexCommanderProviderConfig } from "../types";
 import { validateCursorApiKey } from "../adapters/cursor/run-bearer";
 import { deriveKeyLoginMap, enrichProviderFromRegistry, type DerivedKeyLoginProvider } from "../providers/derive";
@@ -78,7 +80,11 @@ export async function validateApiKey(
       || isPublicCatalogOnlyKeyValidation(providerName, provider.baseUrl)) return "unknown";
     if (provider.adapter === "anthropic") {
       const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-      const res = await fetch(`${base}/v1/messages`, {
+      let attempt: DispatchAttempt | undefined;
+      observeDispatch(() => {
+        attempt = createDispatchRequest().attempt({ surface: "validation", reason: "key-validation", protocol: "messages" });
+      });
+      const res = await dispatchHttpFetch(fetch, `${base}/v1/messages`, {
         method: "POST",
         headers: anthropicKeyValidationHeaders(provider, key),
         body: JSON.stringify({
@@ -88,7 +94,10 @@ export async function validateApiKey(
         }),
         redirect: "error",
         signal: AbortSignal.timeout(8000),
-      });
+      }, { attempt, reason: "key-validation" });
+      // This validator checks headers only and never owns a body reader. Preserve that behavior.
+      observeDispatch(() => responseDispatch(res)?.terminal("unknown"));
+      cleanupResponseDispatch(res);
       if (res.ok) return true;
       if (res.status === 401 || res.status === 403) return false;
       return "unknown";

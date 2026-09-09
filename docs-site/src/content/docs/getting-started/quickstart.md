@@ -39,8 +39,8 @@ left untouched.
 The current source tree seeds GPT-5.6 Sol/Terra/Luna for ChatGPT passthrough, OpenAI API-key,
 OpenRouter, and
 the experimental Cursor adapter. They work only when that upstream account has access. The OpenAI
-API-key and OpenRouter presets advertise a 372,000-token usable context window; Cursor keeps its own
-adapter metadata.
+API-key and OpenRouter presets advertise a 1,050,000-token context window. ChatGPT passthrough follows
+the installed native catalog, while Cursor keeps its own adapter metadata.
 :::
 
 ## 2. Start the proxy

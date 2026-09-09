@@ -63,6 +63,8 @@ export const BUNDLED_CATALOG_CACHE_MS = 60_000;
 export type ReadonlyRawCatalog = DeepReadonly<RawCatalog>;
 
 interface BundledCatalogMemo {
+  /** Last runtime epoch whose command/version matched this source. TTL expiry preserves it. */
+  verifiedRuntimeEpoch?: number;
   /** Selected runtime identity; must change when doctor/sync picks a different binary. */
   readonly key: string;
   readonly expiresAt: number;
@@ -110,7 +112,11 @@ function publishBundledCatalogCache(
   value: RawCatalog | null,
 ): void {
   const epoch = ++bundledCatalogEpoch;
+  const runtime = peekCodexRuntimeProcessCache();
+  const verifiedRuntimeEpoch = runtime.kind === "available"
+    && key === bundledRuntimeKey(runtime.value.runtime) ? runtime.epoch : undefined;
   bundledCatalogCache = {
+    verifiedRuntimeEpoch,
     key,
     expiresAt,
     epoch,
@@ -131,6 +137,28 @@ export function bundledCatalogCacheState(): Readonly<BundledCatalogCacheState> {
     epoch: bundledCatalogEpoch,
     valueIdentity: bundledCatalogCache?.valueIdentity ?? null,
   });
+}
+
+/**
+ * Read an already-verified source without disk access or runtime probes. Refresh TTLs
+ * do not change capabilities: an expired runtime memo retains its epoch, while an
+ * explicit clear or newly observed runtime changes that epoch and revokes authority.
+ */
+export function peekBundledNativeCatalogEntry(slug: string): DeepReadonly<RawEntry> | undefined {
+  const memo = bundledCatalogCache;
+  if (!memo?.value) return undefined;
+  if (memo.key.split("\0")[2] !== (readEnv("CODEXCOMMANDER_HOME") ?? "")) return undefined;
+  const runtime = peekCodexRuntimeProcessCache();
+  if (runtime.kind === "available") {
+    if (memo.key !== bundledRuntimeKey(runtime.value.runtime)) {
+      memo.verifiedRuntimeEpoch = undefined;
+      return undefined;
+    }
+    memo.verifiedRuntimeEpoch = runtime.epoch;
+  } else if (memo.verifiedRuntimeEpoch !== runtime.epoch) {
+    return undefined;
+  }
+  return memo.value.models?.find(entry => entry.slug === slug && !slug.includes("/"));
 }
 
 /** Test-only: clear the bundled-catalog cache (owned here; sync.ts calls this instead of assigning the import). */

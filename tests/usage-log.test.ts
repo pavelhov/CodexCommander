@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendUsageEntry,
+  decodeUsageRow,
   currentUsageLogRevision,
   normalizeUsageEntryForTest,
   readRecentUsageEntries,
@@ -762,4 +763,18 @@ describe("usage log", () => {
     expect(readRecentUsageEntries(0)).toEqual([]);
     expect(readRecentUsageEntries(-1)).toEqual([]);
   });
+});
+
+test("optional accounting authority round-trips and malformed authority is rejected", () => {
+  const base: PersistedUsageEntry = { requestId: "authority-fixture", timestamp: 1, provider: "openai", model: "gpt-5.5", status: 200, durationMs: 1, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 2 } };
+  for (const authority of ["logical", "attempts"] as const) {
+    const current = { ...base, accounting: { version: 1 as const, authority } };
+    appendUsageEntry(current);
+    expect(readUsageEntries().at(-1)?.accounting).toEqual(current.accounting);
+  }
+  const row = { schemaVersion: USAGE_LOG_SCHEMA_VERSION, ...normalizeUsageEntryForTest(base) };
+  expect(decodeUsageRow(row)?.accounting).toBeUndefined();
+  for (const accounting of [{ version: 2, authority: "logical" }, { version: 1, authority: "send" }, { version: 1, authority: "logical", content: "unexpected" }]) {
+    expect(decodeUsageRow({ ...row, accounting })).toBeNull();
+  }
 });

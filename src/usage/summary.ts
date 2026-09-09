@@ -540,6 +540,33 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
   return providers.sort((a, b) => b.requests - a.requests);
 }
 
+/** Resolve the sole ledger authority before every token and cost selection site.
+ * Historical rows retain their original interpretation; no journal row enters here. */
+function authoritativeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
+  if (!entry.accounting) return entry;
+  if (entry.accounting.authority === "logical") return { ...entry, attempts: undefined };
+  const seen = new Set<number>();
+  const attempts = (entry.attempts ?? []).filter(attempt => {
+    if (seen.has(attempt.ordinal)) return false;
+    seen.add(attempt.ordinal); return true;
+  });
+  const known = attempts.filter(attempt => attempt.usage);
+  const totals = blankTotals();
+  for (const attempt of known) addTokens(totals, attempt);
+  return {
+    ...entry, attempts,
+    usageStatus: foldAttributionStatuses(attempts.map(attempt => attempt.usageStatus)),
+    usage: known.length ? {
+      inputTokens: totals.inputTokens, outputTokens: totals.outputTokens,
+      ...(known.some(attempt => attempt.usage?.cacheReadInputTokens !== undefined) ? { cacheReadInputTokens: totals.cacheReadInputTokens } : {}),
+      ...(known.some(attempt => attempt.usage?.cacheCreationInputTokens !== undefined) ? { cacheCreationInputTokens: totals.cacheCreationInputTokens } : {}),
+      ...(known.some(attempt => attempt.usage?.reasoningOutputTokens !== undefined) ? { reasoningOutputTokens: totals.reasoningOutputTokens } : {}),
+      ...(known.some(attempt => attempt.usage?.estimated) ? { estimated: true } : {}),
+    } : undefined,
+    totalTokens: known.length ? totals.totalTokens : undefined,
+  };
+}
+
 export function summarizeUsage(
   entries: PersistedUsageEntry[],
   range: UsageRange,
@@ -547,7 +574,7 @@ export function summarizeUsage(
   surface: UsageSurface = "all",
 ): UsageSummary {
   const { since } = rangeWindow(range, now);
-  const filteredEntries = entries.filter(entry => {
+  const filteredEntries = entries.map(authoritativeUsageEntry).filter(entry => {
     if (since !== null && entry.timestamp < since) return false;
     if (surface === "claude") return entry.surface === "claude" || entry.surface === "claude-desktop";
     if (surface === "grok") return entry.surface === "grok";

@@ -157,8 +157,9 @@ also preserve known independent quota groups: `gpt-5.3-codex-spark` does not pre
 from trying the shared GPT-5.6 Terra/Luna quota, while models in that shared group still protect one
 another. Explicit `Retry-After` and default cooldowns always remain account-wide.
 
-**Session affinity.** Codex thread→account affinity is process-local (in-memory only; not persisted
-across proxy restarts). On credential failures (`401` / `403`) the account is quarantined for
+**Session affinity.** Healthy Codex tasks keep their account across quota-ranking changes and
+proxy restarts through a bounded private ownership cache. Missing or invalid cache entries are
+treated as unbound. On credential failures (`401` / `403`) the account is quarantined for
 reauth and affinities for that account are cleared. On `429`, the account enters cooldown, affinities
 are cleared, and pool selection may rotate — threads are not pinned through a rate-limit response.
 
@@ -438,13 +439,13 @@ visible even while live catalogs lag:
 
 | Codex route | Seeded model ids | Codex-visible context |
 | --- | --- | --- |
-| Codex login (Pool or Direct) | `gpt-5.6-*` | 372,000 |
+| Codex login (Pool or Direct) | `gpt-5.6-*` | Installed native catalog value; pinned metadata when unavailable |
 | OpenAI (API key) | `openai-apikey/gpt-5.6-*` plus `*-pro` | 1,050,000 (922,000 max input) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 1,050,000 |
 | Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
 
-The native GPT-5.6 entries preserve the pinned upstream reasoning ladders (for example, Luna has
-`max` but no `ultra`). Routed entries use their provider metadata and reasoning mappings. All four
+The native GPT-5.6 entries preserve the installed upstream reasoning ladders; pinned metadata is
+the fallback. Routed entries use their provider metadata and reasoning mappings. All four
 paths remain upstream-gated; Cursor's live discovery additionally filters its static seed to models
 the logged-in account can use.
 

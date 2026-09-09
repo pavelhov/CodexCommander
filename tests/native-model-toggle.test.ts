@@ -1,3 +1,5 @@
+import nativeCatalogSource from "./fixtures/catalog/native-codex-2026-09-08.json";
+import pinnedNativeCatalog from "../src/codex/data/upstream-models.json";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   accountBoundNativeDisplayName,
@@ -18,7 +20,7 @@ import {
 import { handleManagementAPI } from "../src/server/management-api";
 import { applyMultiAgentMode, applyNativeOpenAiContextOverride } from "../src/codex/catalog/parsing";
 import type { CodexCommanderConfig } from "../src/types";
-import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { bundledCatalogFixture, createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let previousCodexCliPath: string | undefined;
@@ -27,7 +29,14 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 beforeEach(() => {
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
   isolatedCodexHome = installIsolatedCodexHome("ccx-native-toggle-codex-");
-  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path, {
+    catalog: { models: bundledCatalogFixture().models.map(row => ({
+      ...row,
+      ...Object.fromEntries(Object.entries(pinnedNativeCatalog.models.find(source => source.slug === row.slug) ?? {})
+        .filter(([key]) => ["context_window", "max_context_window", "default_reasoning_level", "supported_reasoning_levels"].includes(key))),
+      ...nativeCatalogSource.models.find(source => source.slug === row.slug),
+    })) },
+  });
 });
 
 afterEach(() => {
@@ -80,7 +89,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(rows.find(r => r.slug === "gpt-5.6-sol")?.disabled).toBe(true);
     expect(rows.find(r => r.slug === "gpt-5.5")?.disabled).toBe(false);
     // Known context metadata rides along for the dashboard.
-    expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+    expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(272_000);
   });
 
   test("configured public selectors replace bare picker rows with account-qualified native clones", () => {
@@ -228,7 +237,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     });
 
     applyMultiAgentMode([trusted, malformed, unmarked], "default");
-    expect(trusted.multi_agent_version).toBe("v1");
+    expect(trusted.multi_agent_version).toBe("v2");
     expect(malformed.multi_agent_version).toBeUndefined();
     expect(unmarked.multi_agent_version).toBeUndefined();
   });
@@ -308,6 +317,7 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     // Fallback-quality luna (display_name === slug) gets upgraded to the snapshot entry AND
     // must still come out hidden when disabled — the flip runs as the last pass.
     const synthesizedLuna = {
+      codexcommander_native_source: "synthetic-fallback",
       ...nativeTemplate(),
       slug: "gpt-5.6-luna",
       display_name: "gpt-5.6-luna",

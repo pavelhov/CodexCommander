@@ -1,3 +1,4 @@
+import { dispatchHttpFetch, cleanupResponseDispatch } from "../usage/dispatch-http";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -230,12 +231,12 @@ export function createMimoFreeAdapter(provider: CodexCommanderProviderConfig): P
     },
 
     async fetchResponse(request: AdapterRequest, ctx): Promise<Response> {
-      const response = await fetch(request.url, {
+      const response = await dispatchHttpFetch(fetch, request.url, {
         method: request.method,
         headers: request.headers as Record<string, string>,
         body: request.body,
         signal: ctx?.abortSignal,
-      });
+      }, ctx?.dispatch);
 
       // Retry predicate: 401 (expired/invalid JWT) retries ONCE with a fresh token.
       // 403 is NOT retried — Xiaomi uses it for anti-abuse "Illegal access" and there is
@@ -243,18 +244,19 @@ export function createMimoFreeAdapter(provider: CodexCommanderProviderConfig): P
       if (response.status === 401) {
         // Drain the first response body before issuing the retry.
         try { await response.body?.cancel(); } catch { /* already consumed */ }
+        cleanupResponseDispatch(response);
         resetMimoJwtCache();
         const freshJwt = await getMimoJwt(ctx?.abortSignal);
         const retryHeaders = {
           ...(request.headers as Record<string, string>),
           "Authorization": `Bearer ${freshJwt}`,
         };
-        return fetch(request.url, {
+        return dispatchHttpFetch(fetch, request.url, {
           method: request.method,
           headers: retryHeaders,
           body: request.body,
           signal: ctx?.abortSignal,
-        });
+        }, ctx?.dispatch);
       }
 
       return response;

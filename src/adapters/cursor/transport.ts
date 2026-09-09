@@ -1,5 +1,6 @@
 import type { CodexCommanderProviderConfig } from "../../types";
 import type { CursorClientMessage, CursorRunRequest, CursorServerMessage } from "./types";
+import type { DispatchHttpContext } from "../../usage/dispatch-http";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 
 export interface CursorTransport {
@@ -15,6 +16,8 @@ export interface CursorTransport {
 }
 
 export interface CursorTransportFactoryInput {
+  /** Process-local dispatch observation; never serialized into Cursor frames. */
+  dispatch?: DispatchHttpContext;
   provider: CodexCommanderProviderConfig;
   translatorBudget: TranslatorBudget;
   headers?: Headers;

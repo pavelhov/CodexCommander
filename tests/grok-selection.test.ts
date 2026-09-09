@@ -1,3 +1,5 @@
+import nativeCatalogSource from "./fixtures/catalog/native-codex-2026-09-08.json";
+import pinnedNativeCatalog from "../src/codex/data/upstream-models.json";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,7 +9,7 @@ import { syncGrokConfig } from "../src/grok/sync";
 import { nativeOpenAiContextWindow, visibleNativeSlugs } from "../src/codex/catalog";
 import type { CatalogModel } from "../src/codex/catalog";
 import type { CodexCommanderConfig } from "../src/types";
-import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { bundledCatalogFixture, createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 let previousCodexCliPath: string | undefined;
@@ -16,7 +18,14 @@ let isolatedCodexHome: IsolatedCodexHome | null = null;
 beforeEach(() => {
   previousCodexCliPath = process.env.CODEX_CLI_PATH;
   isolatedCodexHome = installIsolatedCodexHome("ccx-grok-selection-codex-");
-  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path, {
+    catalog: { models: bundledCatalogFixture().models.map(row => ({
+      ...row,
+      ...Object.fromEntries(Object.entries(pinnedNativeCatalog.models.find(source => source.slug === row.slug) ?? {})
+        .filter(([key]) => ["context_window", "max_context_window", "default_reasoning_level", "supported_reasoning_levels"].includes(key))),
+      ...nativeCatalogSource.models.find(source => source.slug === row.slug),
+    })) },
+  });
 });
 
 afterEach(() => {

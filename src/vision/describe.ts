@@ -1,3 +1,6 @@
+import type { DispatchAttempt } from "../usage/dispatch";
+import { dispatchHttpFetch, cleanupResponseDispatch, observeDispatch, responseDispatch } from "../usage/dispatch-http";
+import { sidecarDispatch } from "../usage/dispatch-sidecar";
 import type { CodexCommanderProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
@@ -55,6 +58,7 @@ export async function describeImage(
   settings: VisionSettings,
   abortSignal?: AbortSignal,
   recordOutcome?: SidecarOutcomeRecorder,
+  dispatchParent?: DispatchAttempt,
 ): Promise<DescribeOutcome> {
   const invalid = validateImageUrl(imageUrl);
   if (invalid) return { text: "", error: invalid };
@@ -86,17 +90,20 @@ export async function describeImage(
   const linkedSignal = signalWithTimeout(settings.timeoutMs, abortSignal);
   const sidecarExit = sidecarEnter("vision");
   const t0 = Date.now();
+  const dispatch = sidecarDispatch(dispatchParent, "responses", abortSignal, "vision");
+  let observedResponse: Response | undefined;
   try {
     const res = await fetchWithResetRetry(
-      () => fetch(`${forwardProvider.baseUrl}/responses`, {
+      () => dispatchHttpFetch(fetch, `${forwardProvider.baseUrl}/responses`, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
-      }),
+      }, dispatch),
       { abortSignal: linkedSignal.signal, label: "vision-sidecar" },
     );
     recordOutcome?.(res.status);
+    observedResponse = res;
     if (!res.ok) {
       const t = await res.text().catch(() => "");
       console.warn(`[vision] sidecar HTTP ${res.status} (${Date.now() - t0}ms)`);
@@ -119,6 +126,10 @@ export async function describeImage(
     console.warn(`[vision] sidecar ${kind} (${Date.now() - t0}ms)`);
     return { text: "", error: e instanceof Error ? e.message : String(e) };
   } finally {
+    if (observedResponse) {
+      observeDispatch(() => responseDispatch(observedResponse!)?.terminal("unknown"));
+      cleanupResponseDispatch(observedResponse);
+    }
     sidecarExit();
     linkedSignal.cleanup();
   }

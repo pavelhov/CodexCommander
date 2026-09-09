@@ -1,3 +1,4 @@
+import nativeCatalogSource from "./fixtures/catalog/native-codex-2026-09-08.json";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,8 +39,9 @@ function installTempHomes(): { codexHome: string; codexCommanderHome: string; re
 function nativeCatalogFixture(slug = "gpt-5.5"): string {
   return JSON.stringify({
     models: [{
+      ...nativeCatalogSource.models.find(row => row.slug === slug),
       slug,
-      display_name: slug,
+      display_name: nativeCatalogSource.models.find(row => row.slug === slug)?.display_name ?? slug,
       description: "native",
       priority: 9,
       visibility: "list",

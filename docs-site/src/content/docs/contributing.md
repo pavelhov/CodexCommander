@@ -64,7 +64,7 @@ Publishing automation is not included in this repository.
 
 ## Continuous integration
 
-Every pull request and every push to `main` runs one automatic GitHub check: **`ci`**
+Every pull request and every push to `main` or `development` runs one automatic GitHub check: **`ci`**
 (`.github/workflows/ci.yml`). That is the only required automation for ordinary
 contributions.
 
@@ -75,9 +75,10 @@ contributor work.
 
 ## Branches and pull requests
 
-- **`main` is the sole default, integration, and pull-request target.** Open feature and
-  fix pull requests against `main`.
-- Branch from the current **`main`** tip.
+- **`development` holds the latest integrated fixes.** Open feature and fix pull requests
+  against it, branching from its current tip.
+- **`main` remains the stable default branch.** Promote `development` through a separate
+  pull request once the combined fixes and qualification checks pass.
 - Write a real description: what changed, why, and how you verified it (named commands
   and results). Empty or placeholder-only descriptions are not enough for review.
 - If the change touches the dashboard UI, include a screenshot in the description.
@@ -85,8 +86,8 @@ contributor work.
   Shared routing, adapter, config, or server changes need `bun run test:parallel` green.
   On a flake, rerun only the failed files; do not rerun the entire suite.
 
-The retired dual-track Go native port is not part of this repository. Bun-native TypeScript on
-`main` is the single runtime line.
+The retired dual-track Go native port is not part of this repository. Both branches use the same
+Bun-native TypeScript runtime; `development` is the staging branch.
 
 Rebase pull requests are welcome. Bringing a stale branch onto the current head is
 ordinary maintenance — name the source commits in the description.

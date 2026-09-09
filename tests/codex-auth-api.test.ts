@@ -2730,12 +2730,19 @@ describe("codex-auth API", () => {
   });
 
   test("the account list reports selection order, defaulting to zero", async () => {
+    let quotaCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain("/wham/usage");
+      quotaCalls++;
+      return Response.json({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 0 } } });
+    }) as typeof fetch;
     const config = makeConfig({ codexAccountPriorities: { work: 2 } });
     seedPoolAccount(config, { id: "work", email: "work@example.test" });
     seedPoolAccount(config, { id: "side", email: "side@example.test" });
 
     const accounts = await listCodexAuthAccounts(config);
 
+    expect(quotaCalls).toBe(2);
     expect(accounts.find(a => a.id === "work")?.priority).toBe(2);
     expect(accounts.find(a => a.id === "side")?.priority).toBe(0);
     expect(accounts.find(a => a.isMain)?.priority).toBe(0);

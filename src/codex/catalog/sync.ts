@@ -23,7 +23,7 @@ import {
   resetBundledCatalogCacheForTests,
 } from "./bundled";
 import { isMultiAgentV2Enabled } from "../features";
-import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, ensureGpt56ReasoningLevels, ensureUltraReasoningLevel, isGpt56NativeSlug } from "./effort";
+import { applyCatalogModelMetadata, applyReasoningLevels, catalogEntryEfforts, ensureGpt56ReasoningLevels, isGpt56NativeSlug } from "./effort";
 import { clearGatherRoutedModelsInflight, lastDropWarnSignature } from "./provider-fetch";
 import { accountSelectorShadowCollisionWarnings, clearLastComboCatalogOmissions, comboCatalogWarningSignatures, comboMasqueradeCollisionWarnings, openAiApiCollisionWarnings, resolveSlugAliasCollisions, slugAliasCollisionWarnings, warnAccountSelectorShadowedProviderOnce, warnComboMasqueradeCollisionOnce } from "./aggregation";
 import {
@@ -176,12 +176,7 @@ export function effectiveSubagentRoster(
 
 export function finishUpstreamNativeEntry(clone: RawEntry, priority: number): RawEntry {
   if (priority !== 9) clone.priority = priority;
-  applyNativeOpenAiContextOverride(clone);
-  // GPT-5.6 natives keep their exact upstream ladders (e.g. luna has max but no ultra).
-  // Older natives (gpt-5.5 / 5.4 / 5.4-mini / 5.3-codex-spark) get mock max + ultra
-  // (wire-clamped to xhigh). Ultra is always advertised regardless of v2 toggle.
-  if (!isGpt56NativeSlug(String(clone.slug ?? ""))) ensureUltraReasoningLevel(clone);
-  return ensureStrictCatalogFields(normalizeServiceTiers(clone));
+  return clone;
 }
 
 /**
@@ -245,17 +240,18 @@ export function deriveEntry(
   priority: number,
   model?: CatalogModel,
   exactComboSlugs: ReadonlySet<string> = new Set(),
+  nativeSourceEntries: readonly RawEntry[] = [],
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
   const isRouted = model !== undefined;
   if (!isRouted && !slug.includes("/")) {
-    // Supported native slug covered by the upstream snapshot: use the REAL entry (exact
-    // reasoning ladder — e.g. luna has no ultra — default effort, identity, model_messages)
-    // instead of cloning an older template.
+    const source = nativeSourceEntries.find(entry => entry.slug === slug)
+      ?? (template?.slug === slug ? template : undefined);
+    if (source) return finishUpstreamNativeEntry(JSON.parse(JSON.stringify(source)) as RawEntry, priority);
     const upstream = upstreamNativeEntry(slug);
     if (upstream) return finishUpstreamNativeEntry(upstream, priority);
   }
-  if (template) {
+  if (template && isRouted) {
     const e = JSON.parse(JSON.stringify(template)) as RawEntry;
     e.slug = slug;
     e.display_name = routedDisplayName(slug);
@@ -286,21 +282,6 @@ export function deriveEntry(
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
       if (model) applyJawcodeCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
-    } else {
-      applyNativeOpenAiContextOverride(e);
-      if (isGpt56NativeSlug(slug)) ensureGpt56ReasoningLevels(e);
-      else ensureUltraReasoningLevel(e);
-     // Non-5.6 natives (5.5, 5.4, 5.4-mini, spark) do not support responses-lite;
-     // the template may carry the flag from a 5.6 entry — strip it so codex-rs does
-     // not inject reasoning.context: "all_turns" for models that reject it.
-     if (!isGpt56NativeSlug(slug)) {
-        // Spark NEEDS use_responses_lite: true — it controls the tool delivery format
-        // (AdditionalTools in input vs top-level tools). The reasoning params that
-        // use_responses_lite triggers (context: "all_turns", summary) are stripped
-        // separately in the passthrough adapter (stripUnsupportedReasoningParams).
-        if (!slug.includes("codex-spark")) delete e.use_responses_lite;
-        delete e.supports_websockets;
-      }
     }
     return ensureStrictCatalogFields(normalizeServiceTiers(e), {
       preserveExactInputModalities: preserveExact,
@@ -312,6 +293,7 @@ export function deriveEntry(
     slug, display_name: routedDisplayName(slug), description: desc,
     shell_type: "shell_command", visibility: "list", supported_in_api: true,
     priority, base_instructions: "You are a helpful coding assistant.",
+    ...(!isRouted ? { codexcommander_native_source: "synthetic-fallback" } : {}),
     ...(isRouted ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
   };
   if (isRouted) {
@@ -341,6 +323,7 @@ export function buildCatalogEntries(
   accountSelectors: readonly string[] = [],
   suppressedBareNativeSlugs: ReadonlySet<string> = new Set(),
   disabledNativeAccountSlugs: ReadonlySet<string> = new Set(),
+  nativeSourceEntries: readonly RawEntry[] = [],
 ): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models as spawn_agent suggestions (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
@@ -375,7 +358,7 @@ export function buildCatalogEntries(
     .filter(model => model.provider === COMBO_NAMESPACE)
     .map(catalogModelSlug));
   for (const slug of gptSlugs) {
-    const native = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9);
+    const native = deriveEntry(template, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, exactComboSlugs, nativeSourceEntries);
     // deriveEntry keeps the genuine upstream snapshot priority for snapshot-backed
     // natives (terra=2, luna=3); route it through the shared native policy so an
     // unfeatured native can never outrank the featured block (spawn_agent top-5).
@@ -463,11 +446,12 @@ export function buildCatalogEntries(
     }
     out.push(e);
   }
-  // Central capability override (phase 120.4): the advertised flag must match the implemented WS
-  // endpoint. Overrides both the routed strip (normalizeRoutedCatalogEntry) and any native template
-  // leak (deriveEntry clones the template as-is for native slugs).
+  // The inbound translated WS bridge is available to external routes only. Native
+  // HTTP forwarding does not implement the native upstream WebSocket contract.
   for (const entry of out) {
-    if (wsEnabled) entry.supports_websockets = true;
+    const native = !isNativeAliasCatalogEntry(entry)
+      && (!String(entry.slug).includes("/") || trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
+    if (wsEnabled && !native) entry.supports_websockets = true;
     else {
       delete entry.supports_websockets;
       // Snapshot-backed native entries carry prefer_websockets: never advertise a preference
@@ -675,6 +659,7 @@ export function mergeCatalogEntriesForSync(
       isNativeAliasCatalogEntry(entry) && typeof entry.slug === "string" ? [entry.slug] : []
     )),
   ),
+  nativeSourceEntries: readonly RawEntry[] = [],
 ): RawEntry[] {
   const rank = new Map(featured.map((slug, i) => [slug, i] as const));
   const resolvedNativeSlugs = includeNativeOpenAi
@@ -684,21 +669,20 @@ export function mergeCatalogEntriesForSync(
   const freshBareComboAliases = new Set(routedEntries.flatMap(entry => (
     isNativeAliasCatalogEntry(entry) && typeof entry.slug === "string" ? [entry.slug] : []
   )));
-  const nativeSourceEntries = includeNativeOpenAi
+  const resolvedNativeEntries = includeNativeOpenAi
     ? catalogModels
     .filter(m => typeof m.slug === "string"
       && !(m.slug as string).includes("/")
       && m.owned_by !== COMBO_NAMESPACE
       && (supportedNativeSet.has(m.slug as string)
         || !/^(?:gpt|codex)-/.test(m.slug as string)))
-    .map(m => {
+    .map(persisted => {
+      const m = nativeSourceEntries.find(entry => entry.slug === persisted.slug) ?? persisted;
       const slug = m.slug as string;
       const baselinePriority = baseline.get(slug) ?? (m.priority as number);
       const priority = nativeCatalogEntryPriority(slug, rank, featured.length, baselinePriority);
-      // Fallback-quality entries (ccx synthesis / codex-rs model_info fallback: display_name
-      // stamped with the bare slug) are upgraded to the pinned upstream snapshot entry so a
-      // previously synthesized ladder (e.g. luna advertising ultra) self-heals on sync. A
-      // genuine catalog entry (real display name) is preserved untouched.
+      // Only explicitly synthesized rows may be upgraded to the pinned fallback.
+      // A display name equal to its slug is not evidence of synthetic metadata.
       if (shouldUpgradeToUpstreamEntry(m)) {
         const upstream = upstreamNativeEntry(slug)!;
         const upgradePriority = nativeCatalogEntryPriority(
@@ -711,14 +695,10 @@ export function mergeCatalogEntriesForSync(
         finished.priority = upgradePriority;
         return finished;
       }
-      const preserved = normalizeServiceTiers({ ...m, priority });
-      // Older natives kept from disk still need the mock top tiers (max + ultra always
-      // for subagent max spawns; wire-clamped to the model's real top rung).
-      if (!isGpt56NativeSlug(slug)) ensureUltraReasoningLevel(preserved);
-      return preserved;
+      return { ...m, priority };
     })
     : [];
-  const native = nativeSourceEntries.filter(entry =>
+  const native = resolvedNativeEntries.filter(entry =>
     typeof entry.slug !== "string"
       || (!freshBareComboAliases.has(entry.slug) && !suppressedBareNativeSlugs.has(entry.slug))
   );
@@ -732,11 +712,11 @@ export function mergeCatalogEntriesForSync(
     if (nativeSlugs.has(slug) || freshBareComboAliases.has(slug) || suppressedBareNativeSlugs.has(slug)) continue;
     nativeSlugs.add(slug);
     const priority = nativeCatalogEntryPriority(slug, rank, featured.length, 9);
-    native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority));
+    native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority, undefined, exactComboSlugs, nativeSourceEntries));
   }
   }
 
-  const nativeSourceBySlug = new Map([...nativeSourceEntries, ...native].flatMap(entry =>
+  const nativeSourceBySlug = new Map([...resolvedNativeEntries, ...native].flatMap(entry =>
     typeof entry.slug === "string" ? [[entry.slug, entry] as const] : []
   ));
   const alignedAccountBoundEntries = accountBoundEntries.map(entry => {
@@ -822,17 +802,17 @@ export function mergeCatalogEntriesForSync(
 
   const managedEntries = [...finalRoutedEntries, ...alignedAccountBoundEntries];
   const mergedEntries = [...native, ...managedEntries].map(m => {
-    const normalized = normalizeServiceTiers(m);
-    if (!isNativeAliasCatalogEntry(normalized)) applyNativeOpenAiContextOverride(normalized);
+    const isRouted = finalRoutedEntries.includes(m);
+    const normalized = isRouted ? normalizeServiceTiers(m) : m;
     const exactCombo = typeof m.slug === "string" && exactComboSlugs.has(m.slug);
     const e = ensureStrictCatalogFields(normalized, {
       preserveExactInputModalities: exactCombo,
-      isRouted: finalRoutedEntries.includes(m),
+      isRouted,
     });
     // Mock-max universality (260709): preserved routed entries from disk may predate
     // the max rung — ensure it here so subagent max spawns validate on every
     // reasoning-capable entry. max only: 5.6 exact ladders (luna: no ultra) stay intact.
-    if (!exactCombo) {
+    if (!exactCombo && isRouted) {
       const levels = Array.isArray(e.supported_reasoning_levels)
         ? e.supported_reasoning_levels as Array<{ effort?: string }>
         : [];
@@ -842,7 +822,7 @@ export function mergeCatalogEntriesForSync(
         e.supported_reasoning_levels = levels;
       }
     }
-    if (wsEnabled) e.supports_websockets = true;
+    if (wsEnabled && isRouted) e.supports_websockets = true;
     else {
       delete e.supports_websockets;
       // Match buildCatalogEntries: never advertise a websocket preference while WS is off.

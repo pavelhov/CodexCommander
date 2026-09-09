@@ -274,16 +274,17 @@ describe("Codex catalog sync hardening", () => {
     expect(rows).toEqual(firstRows);
     const firstBare = firstRows.find(row => row.slug === "gpt-5.5");
     const firstTeam = firstRows.find(row => row.slug === "team/gpt-5.5");
-    expect(firstBare).toMatchObject({
-      context_window: 272_000,
-      max_context_window: 272_000,
-      auto_compact_token_limit: 244_800,
-    });
-    expect(firstTeam).toMatchObject({
-      context_window: firstBare?.context_window,
-      max_context_window: firstBare?.max_context_window,
-      auto_compact_token_limit: firstBare?.auto_compact_token_limit,
-    });
+    const source = bundledCatalogFixture(SYNC_BUNDLED_SLUGS).models.find(row => row.slug === "gpt-5.5")!;
+    for (const row of [firstBare, firstTeam]) {
+      expect(row).toBeDefined();
+      for (const key of ["context_window", "max_context_window", "auto_compact_token_limit"]) {
+        expect(row).not.toHaveProperty(key);
+      }
+      expect(row).toMatchObject({
+        base_instructions: source.base_instructions,
+        supported_reasoning_levels: source.supported_reasoning_levels,
+      });
+    }
     expect(rows.some(row => row.slug === "vendor/stable-model")).toBe(true);
     expect(rows.some(row => row.slug === "foreign/gpt-5.5")).toBe(true);
     expect(rows.some(row => row.slug === "removed/gpt-5.5")).toBe(false);
@@ -294,7 +295,6 @@ describe("Codex catalog sync hardening", () => {
     expect(team).toMatchObject({
       display_name: "team / 5.5",
       codexcommander_catalog_kind: accountMarker,
-      comp_hash: "native-5.5-hash",
       visibility: "list",
     });
     expect(team?.description).toBe(bare?.description);
@@ -306,12 +306,9 @@ describe("Codex catalog sync hardening", () => {
     for (const nativeSlug of ["gpt-5.5", "gpt-5.4"]) {
       const native = rows.find(row => row.slug === nativeSlug);
       const qualified = rows.find(row => row.slug === `team/${nativeSlug}`);
-      expect(qualified).toMatchObject({
-        comp_hash: native?.comp_hash,
-        base_instructions: native?.base_instructions,
-        model_messages: native?.model_messages,
-        tool_mode: native?.tool_mode,
-      });
+      const behavior = (row: typeof native) => Object.fromEntries(Object.entries(row ?? {})
+        .filter(([key]) => !["slug", "display_name", "priority", "visibility", "codexcommander_catalog_kind"].includes(key)));
+      expect(behavior(qualified)).toEqual(behavior(native));
     }
     expect(JSON.stringify(rows)).not.toContain("stored-team-account");
     expect(JSON.stringify(rows)).not.toContain("private@example.test");

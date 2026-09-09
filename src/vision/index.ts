@@ -1,3 +1,4 @@
+import type { DispatchAttempt } from "../usage/dispatch";
 import { createHash } from "node:crypto";
 import type { CodexCommanderConfig, CodexCommanderContentPart, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderTextContent } from "../types";
 import { modelInList } from "../types";
@@ -311,6 +312,7 @@ async function executeDescription(
   selectedForwardHeaders: Headers,
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
+  dispatchParent?: DispatchAttempt,
 ): Promise<DescribeOutcome> {
   if (plan.backend === "anthropic") {
     const sidecar = plan.anthropicSidecar;
@@ -323,6 +325,7 @@ async function executeDescription(
       sidecar.provider,
       plan.settings,
       abortSignal,
+      dispatchParent,
     );
   }
   if (!plan.forwardSidecar) return { text: "", error: "OpenAI vision sidecar is unavailable" };
@@ -335,6 +338,7 @@ async function executeDescription(
     plan.settings,
     abortSignal,
     recordSidecarOutcome,
+    dispatchParent,
   );
 }
 
@@ -351,6 +355,7 @@ export async function describeImagesInPlace(
   abortSignal?: AbortSignal,
   recordSidecarOutcome?: SidecarOutcomeRecorder,
   translatorBudget?: TranslatorBudget,
+  dispatchParent?: DispatchAttempt,
 ): Promise<void> {
   // 1. Gather every image part across messages, each with its own message's text as context.
   const jobs: ImageJob[] = [];
@@ -406,7 +411,7 @@ export async function describeImagesInPlace(
     executions.push(async () => {
       let outcome: DescribeOutcome;
       try {
-        outcome = await executeDescription(job, plan, selectedForwardHeaders, abortSignal, recordSidecarOutcome);
+        outcome = await executeDescription(job, plan, selectedForwardHeaders, abortSignal, recordSidecarOutcome, dispatchParent);
       } catch (error) {
         outcome = { text: "", error: error instanceof Error ? error.message : String(error) };
       }

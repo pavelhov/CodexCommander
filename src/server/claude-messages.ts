@@ -1,3 +1,6 @@
+import { initializeRequestDispatch, requestDispatchContext } from "./request-log";
+import { cleanupDispatchSend, cleanupResponseDispatch, dispatchHttpFetch, responseDispatch, observeDispatch, observeDispatchUsage, type DispatchHttpContext } from "../usage/dispatch-http";
+import type { DispatchSend } from "../usage/dispatch";
 /**
  * Anthropic Messages inbound (/v1/messages + /v1/messages/count_tokens) for Claude Code.
  *
@@ -161,6 +164,7 @@ export function tapAnthropicSseForLog(
   finalize: (status: number, meta: { closeReason: PassthroughCloseReason }) => void,
   guard?: PassthroughBodyGuard,
   onFirstOutput?: () => void,
+  dispatchSend?: DispatchSend,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
@@ -168,6 +172,7 @@ export function tapAnthropicSseForLog(
   const recordFirstOutputOnce = () => {
     if (firstOutputSeen) return;
     firstOutputSeen = true;
+    observeDispatch(() => dispatchSend?.output());
     onFirstOutput?.();
   };
   let buffer = "";
@@ -183,6 +188,8 @@ export function tapAnthropicSseForLog(
       let data: unknown;
       try { data = JSON.parse(dataLine); } catch { continue; }
       if (!isRec(data)) continue;
+      if (data.type === "message_stop") observeDispatch(() => dispatchSend?.terminal("protocol_success"));
+      if (data.type === "error") observeDispatch(() => dispatchSend?.terminal("protocol_failure"));
       if (data.type === "content_block_delta" && isRec(data.delta)) {
         const delta = data.delta;
         const output = delta.text ?? delta.thinking ?? delta.partial_json;
@@ -207,6 +214,7 @@ export function tapAnthropicSseForLog(
 
   const recordUsage = () => {
     logCtx.usage = anthropicUsageToCodexCommander(Object.keys(usageAcc).length > 0 ? usageAcc : undefined);
+    observeDispatchUsage(dispatchSend, logCtx.usage);
   };
   const failBody = (closeReason: "body_stall" | "body_overflow", errType: string, message: string) => {
     if (settled) return;
@@ -214,6 +222,8 @@ export function tapAnthropicSseForLog(
     idle.cancel();
     detachAbort();
     recordUsage();
+    observeDispatch(() => dispatchSend?.terminal("unknown"));
+    cleanupDispatchSend(dispatchSend);
     finalize(200, { closeReason });
     const payload = JSON.stringify({ type: "error", error: { type: errType, message } });
     try {
@@ -240,6 +250,8 @@ export function tapAnthropicSseForLog(
     settled = true;
     idle.cancel();
     detachAbort();
+    observeDispatch(() => dispatchSend?.cancel("client"));
+    cleanupDispatchSend(dispatchSend);
     finalize(499, { closeReason: "client_cancel" });
     try { tapController?.close(); } catch { /* downstream already torn down */ }
     reader.cancel(guard?.reqSignal?.reason).catch(() => {});
@@ -271,6 +283,8 @@ export function tapAnthropicSseForLog(
           idle.cancel();
           detachAbort();
           recordUsage();
+          observeDispatch(() => dispatchSend?.terminal("unknown"));
+          cleanupDispatchSend(dispatchSend);
           finalize(200, { closeReason: "terminal" });
           controller.close();
           return;
@@ -294,6 +308,8 @@ export function tapAnthropicSseForLog(
         idle.cancel();
         detachAbort();
         recordUsage();
+        observeDispatch(() => dispatchSend?.terminal("transport_failure"));
+        cleanupDispatchSend(dispatchSend);
         finalize(200, { closeReason: "terminal" });
         try { controller.error(err); } catch { /* torn down */ }
       }
@@ -305,6 +321,8 @@ export function tapAnthropicSseForLog(
         detachAbort();
         finalize(499, { closeReason: "client_cancel" });
       }
+      observeDispatch(() => dispatchSend?.cancel("client"));
+      cleanupDispatchSend(dispatchSend);
       reader.cancel(reason).catch(() => {});
     },
   });
@@ -352,6 +370,9 @@ async function anthropicNativePassthrough(
     { method: "POST", headers, body: JSON.stringify(body) },
     config.connectTimeoutMs ?? 200_000,
     req.signal,
+    clearableDeadline,
+    fetch,
+    pathname.endsWith("/count_tokens") ? undefined : requestDispatchContext(logCtx, req.signal),
   );
   if (result.kind === "timeout") {
     finalize(504, { closeReason: "non_stream" });
@@ -380,6 +401,7 @@ async function anthropicNativePassthrough(
       finalize,
       bodyGuard,
       () => logIds?.turnAdmissionLease?.markAgentActivityFirstOutput(),
+      responseDispatch(upstream),
     );
     let responseBody = tapped;
     if (lease && turnAbort) {
@@ -403,6 +425,7 @@ async function anthropicNativePassthrough(
   // idle/size bounds — headers are NOT yet sent here, so real statuses are available.
   const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
   const bodyResult = await readBoundedPassthroughBody(upstream, bodyGuard);
+  if (bodyResult.kind !== "ok") cleanupResponseDispatch(upstream);
   if (bodyResult.kind === "client_cancel") {
     finalize(499, { closeReason: "client_cancel" });
     return anthropicErrorResponse(499, "client closed request during anthropic passthrough", "api_error");
@@ -418,13 +441,20 @@ async function anthropicNativePassthrough(
   const text = bodyResult.text;
   if (upstream.ok) {
     try {
-      const parsed = JSON.parse(text) as { usage?: Rec; content?: unknown[] };
-      if (isRec(parsed?.usage)) logCtx.usage = anthropicUsageToCodexCommander(parsed.usage);
+      const parsed = JSON.parse(text) as { usage?: Rec; content?: unknown[]; type?: string; stop_reason?: unknown };
+      observeDispatch(() => {
+        const send = responseDispatch(upstream);
+        if (parsed.type === "error") send?.terminal("protocol_failure");
+        else if (parsed.type === "message" && parsed.stop_reason != null) send?.terminal("protocol_success");
+      });
+      if (isRec(parsed?.usage)) { logCtx.usage = anthropicUsageToCodexCommander(parsed.usage); observeDispatchUsage(responseDispatch(upstream), logCtx.usage); }
       if (Array.isArray(parsed?.content) && parsed.content.length > 0) {
         logIds?.turnAdmissionLease?.markAgentActivityFirstOutput();
       }
     } catch { /* count_tokens etc. */ }
   }
+  observeDispatch(() => responseDispatch(upstream)?.terminal("unknown"));
+  cleanupResponseDispatch(upstream);
   finalize(upstream.status, { closeReason: "non_stream" });
   const retryAfter = upstream.headers.get("retry-after");
   return new Response(text, {
@@ -550,10 +580,11 @@ export async function fetchWithHeaderDeadline(
   parent?: AbortSignal,
   makeDeadline: typeof clearableDeadline = clearableDeadline,
   fetchImpl: typeof fetch = fetch,
+  dispatch?: DispatchHttpContext,
 ): Promise<HeaderDeadlineFetchResult> {
   const deadline = makeDeadline(timeoutMs, parent);
   try {
-    const upstream = await fetchImpl(input, { ...init, signal: deadline.signal });
+    const upstream = await dispatchHttpFetch(fetchImpl, input, { ...init, signal: deadline.signal }, dispatch);
     return { kind: "response", upstream };
   } catch (error) {
     if (deadline.didExpire()) return { kind: "timeout" };
@@ -588,6 +619,7 @@ async function handleClaudeMessagesWithBudget(
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: ActiveTurnLease },
 ): Promise<Response> {
+  initializeRequestDispatch(logCtx, "messages");
   logCtx.surface = "claude";
   const disabled = claudeInboundDisabled(config);
   if (disabled) {

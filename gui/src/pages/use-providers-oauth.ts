@@ -156,7 +156,7 @@ export function useProvidersOAuth({
             finished = true;
             break;
           }
-          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ccx sync --restart-codex" }), true);
+          notify(t("prov.loginOk", { provider: oauthLabel(provider), action: t("sub.catalog.applyAction"), section: t("nav.subagents") }), true);
           setLoginInfo(null);
           fetchConfig();
           const knownProviders = Object.keys(accountSets);

@@ -10,13 +10,13 @@
   rows from the pinned upstream models.json snapshot
   (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
 - clones a native template for routed `provider/model` entries;
-- forces strict Codex catalog fields required by the current parser;
+- preserves authoritative native field values and absence; fills strict parser defaults for routed compatibility entries;
 - hides `disabledModels` without blocking direct routing (routed provider ids are excluded;
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row
   and all account-selector clones and drop that model family from raw `/v1/models`);
 - applies exact provider/model compatibility exclusions after live discovery and metadata
   augmentation, so upstream-advertised but uncallable rows never enter dashboard or Codex pickers;
-- strips native-only service tier and WebSocket metadata unless explicitly enabled;
+- preserves native service-tier metadata; removes native WebSocket advertisement until upstream native WS is implemented, independently of the external translated bridge toggle;
 - backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
   (`catalog-backup-<id>.json`), so a restore resolves the backup for the catalog it is restoring
   rather than assuming a single file;
@@ -184,7 +184,7 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   bare ids remain routable and stay in raw `/v1/models` unless explicitly disabled. Missing stored
   account targets are not advertised, and private account ids never become catalog labels.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
-  usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
+  usable; new-work quota thresholds do not move it. Own-task identity takes precedence over session fallback, and parent identity describes ancestry only. Valid private bindings survive restart (`src/codex/routing.ts`).
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the
   generation it started from still holds; a lost race raises a generation-conflict error rather
   than overwriting the newer credential (`src/codex/account-store.ts`). Callers handle that error;
@@ -200,7 +200,7 @@ real turn depends on it (`src/codex/warmup.ts`).
 | Mode | Behavior |
 | --- | --- |
 | `"v1"` | Force ALL entries to `multi_agent_version = "v1"` — overrides upstream pins (sol/terra included). |
-| `"default"` (install default) | Respect upstream model pins (sol/terra=v2, luna=v1). When the native `multi_agent_v2` flag is enabled, otherwise-unpinned entries are stamped v2; when it is disabled, they remain unpinned. On sync, stale forced values are cleared and upstream pins restored. |
+| `"default"` (install default) | Preserve authoritative native values, including an absent `multi_agent_version`. Routed compatibility entries may follow the `multi_agent_v2` feature flag. On sync, stale forced native values are replaced by source values. |
 | `"v2"` | Force ALL entries to `multi_agent_version = "v2"` — overrides upstream pins (luna included). |
 
 The override is applied as a final pass in both `buildCatalogEntries` (live `/v1/models` path) and
@@ -238,8 +238,9 @@ fail-closed guard.
 
 ## Ultra reasoning level
 
-Ultra is always advertised in the catalog regardless of the `multi_agent_v2` toggle. The v2 toggle
-controls only the multi-agent collab surface, not ultra visibility. The `nativeEffortClamp` function
+Native reasoning levels follow the source catalog; CodexCommander does not append `max` or `ultra`
+to an authoritative native ladder. Routed compatibility entries retain their configured levels.
+The v2 toggle controls only the multi-agent collab surface. The `nativeEffortClamp` function
 wire-clamps ultra/max to each model's real top rung (e.g. gpt-5.5 ultra → xhigh on the wire).
 
 `effortCap` and `subagentEffortCap` are hard ceilings applied on the V2 path
@@ -332,3 +333,20 @@ native passthrough is enabled; `modelMap` claims and `nativePassthrough:false` r
 guard avoids creating oversized skill messages before the proxy can intervene; inbound elision remains
 the fallback if a client still sends a blocked bundle. An explicit empty list disables both routed-model
 behaviors.
+
+## Native guidance placement and cache continuity
+
+Native Responses full-input requests insert Commander guidance after the leading developer/system/additional-tools
+items and before the first conversation item. This keeps full-input tool continuations append-only
+relative to the already-injected request. Routed provider guidance retains its tail placement.
+Existing exact-guidance deduplication within a trusted local replay prefix still applies; compaction
+triggers remain the final input item. Guidance content, eligibility, roster ownership and routing do
+not change. Live Responses-lite qualification reproduced flat cache reads with tail guidance and
+restored growing cache reuse with initial-block placement. This is not a guarantee of upstream cache
+availability, cross-account cache reuse, or a quota-percent conversion.
+
+Native guidance is computed during final-route normalization but inserted only after native
+compatibility policy has settled the raw history. When that policy materializes a local reference,
+carry its proxy-private replay-prefix length into guidance deduplication. Do not infer trusted
+history from client fields or reorder old stored guidance. Native reference passthrough remains
+reference passthrough; guidance insertion must not trigger history expansion itself.

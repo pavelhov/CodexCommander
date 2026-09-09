@@ -1921,11 +1921,12 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
-    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    const postThreadTurn = (input: unknown, threadId = "desktop-thread-external") => handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-codex-parent-thread-id": "desktop-thread-external",
+        "thread-id": threadId,
+        "x-codex-parent-thread-id": "shared-parent",
       },
       body: JSON.stringify({
         model: "cursortest/grok-4.5",
@@ -1945,9 +1946,12 @@ describe("cursor conversation continuity across store:false chains", () => {
 
     expect(seen).toHaveLength(2);
     expect(seen[1]).toBe(seen[0]);
+    expect((await postThreadTurn("sibling task", "desktop-thread-sibling")).status).toBe(200);
+    expect(seen).toHaveLength(3);
+    expect(seen[2]).not.toBe(seen[0]);
   });
 
-  test("native composer reuses conversationId across store:false turns via parent thread id", async () => {
+  test("native composer reuses conversationId across store:false turns via own thread id", async () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
@@ -1955,7 +1959,8 @@ describe("cursor conversation continuity across store:false chains", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-codex-parent-thread-id": "desktop-thread-native",
+        "thread-id": "desktop-thread-native",
+        "x-codex-parent-thread-id": "shared-parent",
       },
       body: JSON.stringify({
         model: "cursortest/composer-2.5",

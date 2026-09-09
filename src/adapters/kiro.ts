@@ -1,3 +1,4 @@
+import { closeAdapterObservation, observeAdapterEvent, observeDispatchUsage, responseDispatch, type DispatchHttpContext } from "../usage/dispatch-http";
 import { decodeEventStream } from "../lib/eventstream-decoder";
 import { estimateTokens } from "../lib/token-estimate";
 import { debugProviderDiagnostic } from "../lib/debug";
@@ -1552,15 +1553,18 @@ export async function* parseKiroStream(
   );
   let firstNext = await first.next();
   while (!firstNext.done) {
+    observeAdapterEvent(response, firstNext.value);
     yield firstNext.value;
     firstNext = await first.next();
   }
   const firstResult = firstNext.value;
   try {
     if (!firstResult.needsFallback) {
-      if (firstResult.terminal) yield firstResult.terminal;
+      if (firstResult.terminal) { observeAdapterEvent(response, firstResult.terminal); yield firstResult.terminal; }
       return;
     }
+    observeDispatchUsage(responseDispatch(response), firstResult.usage);
+    closeAdapterObservation(response);
     if (!fallbackFactory) {
       yield retryableKiroIncomplete(
         "uncompleted_kiro_response",
@@ -1649,10 +1653,14 @@ export async function* parseKiroStream(
     );
     let secondNext = await second.next();
     while (!secondNext.done) {
+      observeAdapterEvent(fallback.response, secondNext.value);
       yield secondNext.value;
       secondNext = await second.next();
     }
     const secondResult = secondNext.value;
+    if (secondResult.terminal) observeAdapterEvent(fallback.response, secondResult.terminal);
+    else observeDispatchUsage(responseDispatch(fallback.response), secondResult.usage);
+    closeAdapterObservation(fallback.response);
     try {
       if (!secondResult.terminal) {
         yield retryableKiroIncomplete(
@@ -1705,6 +1713,7 @@ export function createKiroAdapter(provider: CodexCommanderProviderConfig): Provi
   let requestSnapshot: CodexCommanderParsedRequest | undefined;
   let firstRequestBodyBytes = 0;
   let requestAbortSignal: AbortSignal | undefined;
+  let requestDispatch: DispatchHttpContext | undefined;
 
   const build = async (
     parsed: CodexCommanderParsedRequest,
@@ -1839,6 +1848,7 @@ export function createKiroAdapter(provider: CodexCommanderProviderConfig): Provi
       budget.releaseRetained(retryBodyUpperBound - retryBodyBytes, { kind: "request_copies" });
       const response = await fetchKiroWithRetry(retry.request, {
         abortSignal: requestAbortSignal,
+        dispatch: requestDispatch ? { ...requestDispatch, reason: "continuation" } : undefined,
         returnRawErrors: true,
         stream: true,
       });
@@ -1893,6 +1903,7 @@ export function createKiroAdapter(provider: CodexCommanderProviderConfig): Provi
       // Keep it for the adapter-owned bounded continuation so cancelling the client turn aborts
       // both the first Kiro request and its one allowed completion retry.
       if (ctx?.abortSignal) requestAbortSignal = ctx.abortSignal;
+      requestDispatch = ctx?.dispatch;
       return fetchKiroWithRetry(request, ctx);
     },
 

@@ -1,3 +1,5 @@
+import { observeSidecarFrame } from "../usage/dispatch-sidecar";
+import { observeDispatch, responseDispatch } from "../usage/dispatch-http";
 /** A single web source backing the sidecar's answer. */
 export interface WebSearchSource {
   url: string;
@@ -158,6 +160,7 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
       console.warn(`[web-search-parse] malformed SSE JSON (${payload.length} chars): ${payload.slice(0, 120)}`);
       return;
     }
+    observeSidecarFrame(response, data);
     const type = data.type as string | undefined;
     if (type === "response.output_text.delta" && typeof data.delta === "string") {
       acc.deltaText += data.delta;
@@ -190,6 +193,9 @@ export async function parseSidecarSSE(response: Response): Promise<WebSearchResu
         if (line.startsWith("data: ")) handle(line.slice(6).trim());
       }
     }
+  } catch (error) {
+    observeDispatch(() => responseDispatch(response)?.terminal("protocol_failure"));
+    throw error;
   } finally {
     reader.releaseLock();
   }
