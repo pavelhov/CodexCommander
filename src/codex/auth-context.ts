@@ -1,3 +1,4 @@
+import { resolveCodexTaskIdentity } from "./task-identity";
 import {
   CodexCredentialGenerationConflictError,
   CodexCredentialRefreshLockTimeoutError,
@@ -223,6 +224,8 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
 }
 
 export interface ResolveCodexAuthContextOptions {
+  /** Optional canonical client correlation metadata; never use parent identity as owner. */
+  clientMetadata?: unknown;
   excludeAccountId?: string;
   /** Resolve exactly this account without consulting or mutating Pool selection. */
   accountId?: string;
@@ -278,7 +281,7 @@ export async function resolveCodexAuthContext(
     // routing inspect it. Selectors arriving after the fence skip reconciliation
     // and may still route to non-main pool accounts without touching switch state.
     if (!nativeMainReadsForbidden) reconcileMainCodexAccountRuntimeState();
-    const threadId = headers.get("x-codex-parent-thread-id");
+    const threadId = resolveCodexTaskIdentity(headers, options.clientMetadata).taskId ?? null;
     const resolution = fixedAccountId !== undefined
       ? { status: "selected" as const, accountId: fixedAccountId }
       : options.excludeAccountId

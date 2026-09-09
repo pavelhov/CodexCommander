@@ -1,3 +1,6 @@
+import { resolveCodexTaskIdentity } from "../../codex/task-identity";
+import { rememberNativeArtifacts } from "../../codex/native-ownership";
+import { isNativeResponsesProvider, nativeClientMetadata, nativeCompatibilityPolicy, nativeLocalReplayAuthorized, nativeRequestOwner, nativeReplayScope, nativeTurnId, NATIVE_RESPONSES_HEADERS } from "../../responses/native-policy";
 import { UpstreamSendBudget } from "../../lib/upstream-send-budget";
 import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
 import { cleanupResponseDispatch, observeAdapterEvent, observeAdapterStream, observeDispatch, responseDispatch } from "../../usage/dispatch-http";
@@ -389,6 +392,7 @@ async function retryCodexPoolOnAlternateAccount(
       config,
       "pool",
       {
+        clientMetadata: nativeClientMetadata(parsed._rawBody),
         excludeAccountId: firstAuthCtx.accountId,
         modelId: route.modelId,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
@@ -418,7 +422,7 @@ async function retryCodexPoolOnAlternateAccount(
   if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
     recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
       ...quotaMeta,
-      threadId: req.headers.get("x-codex-parent-thread-id"),
+      threadId: resolveCodexTaskIdentity(req.headers, nativeClientMetadata(parsed._rawBody)).taskId ?? null,
       modelId: route.modelId,
       probeLeaseId: codexProbeLeaseId(firstAuthCtx),
       probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
@@ -428,12 +432,17 @@ async function retryCodexPoolOnAlternateAccount(
     });
   }
 
-  const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
+  let retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
   const retryProvider = applyCodexAuthContextToProvider(
     stripCodexRuntimeProviderFields(route.provider),
     retryAuthCtx,
     "pool",
   );
+  for (const name of NATIVE_RESPONSES_HEADERS) { const value = req.headers.get(name); if (value) retryHeaders.set(name, value); }
+  const retryPolicy = nativeCompatibilityPolicy({ provider: retryProvider, body: parsed._rawBody, headers: retryHeaders,
+    owner: nativeRequestOwner(retryProvider, retryHeaders, retryAuthCtx), completeLocalReplay: parsed._previousResponseInputExpanded === true });
+  if (retryPolicy.unavailable) { releaseCodexAuthContextProbeLease(retryAuthCtx); return { kind: "no-alternate" }; }
+  retryHeaders = retryPolicy.headers;
   const retryAdapter = resolveAdapter(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
     config.cacheRetention,
@@ -804,6 +813,7 @@ async function resolveResponsesCodexAuth(
   config: CodexCommanderConfig,
   route: RouteResult,
   options: HandleResponsesOptions,
+  clientMetadata?: unknown,
 ): Promise<ResponsesAuthResolution> {
   try {
     if (route.codexAccountMode === "direct") validateForwardAdmissionCredential(req.headers, config);
@@ -811,6 +821,7 @@ async function resolveResponsesCodexAuth(
     if (route.codexAccountMode) {
       authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
         accountId: route.codexAccountId,
+        clientMetadata,
         modelId: route.modelId,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
       });
@@ -942,7 +953,7 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.options.serviceTier = tier;
   }
-  applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
+  if (!isNativeResponsesProvider(route.provider)) applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
 
   {
     const encryptedCodexTasks = isCanonicalOpenAiForwardProvider(route.provider)
@@ -1383,7 +1394,24 @@ async function handleResponsesInner(
     (body as { input?: unknown } | undefined)?.input,
   );
   const originalBody = body;
-  body = expandPreviousResponseInput(body);
+  let ingressRoute: RouteResult | undefined;
+  const ingressModel = body && typeof body === "object" ? (body as { model?: unknown }).model : undefined;
+  try {
+    const model = body && typeof body === "object" ? (body as { model?: unknown }).model : undefined;
+    if (typeof model === "string") {
+      ingressRoute = routeModel(config, model, evidenceFromBody(body));
+      ingressRoute.provider = resolveWireProtocolOverride(ingressRoute.providerName, ingressRoute.modelId, ingressRoute.provider, inboundWire);
+    }
+  } catch { /* The normal route error path below owns the client response. */ }
+  const nativeIngress = ingressRoute !== undefined && isNativeResponsesProvider(ingressRoute.provider);
+  // A known API reference can continue at the server without redundant local replay.
+  // ChatGPT HTTP retains the historical local-expansion compatibility policy.
+  if (!nativeIngress) {
+    if (!nativeLocalReplayAuthorized(body, nativeReplayScope(req.headers, body))) {
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable for this task; resend the complete conversation without previous_response_id.");
+    }
+    body = expandPreviousResponseInput(body);
+  }
   if (previousResponseReplayFailure(body)) {
     return formatErrorResponse(
       400,
@@ -1398,7 +1426,7 @@ async function handleResponsesInner(
   // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
   // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
   // verbatim). Genuine backend ciphertext is left byte-identical (looksLikeBackendCiphertext).
-  {
+  if (!nativeIngress) {
     const rewritten = sanitizeEncryptedContentInPlace(
       (body as { input?: unknown } | undefined)?.input,
     );
@@ -1416,7 +1444,7 @@ async function handleResponsesInner(
     if (previousResponseInputExpanded) parsed._previousResponseInputExpanded = true;
     parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
     parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
-    const clientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim();
+    const clientThreadId = resolveCodexTaskIdentity(req.headers, nativeClientMetadata(body)).taskId;
     if (clientThreadId) parsed._clientThreadId = clientThreadId;
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
@@ -1437,6 +1465,8 @@ async function handleResponsesInner(
   // absent or synthetically injected (session_id from prompt_cache_key).
   if (!logCtx.conversationId) {
     logCtx.conversationId = conversationIdFromResponsesRequest({
+      headers: req.headers,
+      clientMetadata: nativeClientMetadata(parsed._rawBody),
       clientThreadId: parsed._clientThreadId,
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
       threadIdHeader: req.headers.get("thread-id"),
@@ -1476,7 +1506,8 @@ async function handleResponsesInner(
 
   let route: RouteResult;
   try {
-    route = routeModel(config, parsed.modelId, evidenceFromBody(parsed._rawBody));
+    route = ingressRoute && parsed.modelId === ingressModel
+      ? ingressRoute : routeModel(config, parsed.modelId, evidenceFromBody(parsed._rawBody));
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
     if (err instanceof NoAvailableComboTargetsError) {
@@ -1525,7 +1556,7 @@ async function handleResponsesInner(
   // Preview the preferred Codex account without acquiring a probe lease or refreshing
   // tokens — auth is resolved only after the final route is selected.
   if (threadSpawn && !options.comboAttempt && route.codexAccountId === undefined) {
-    const threadId = req.headers.get("x-codex-parent-thread-id");
+    const threadId = resolveCodexTaskIdentity(req.headers, nativeClientMetadata(parsed._rawBody)).taskId ?? null;
     const previewAccountId = previewCodexAccountForRequest(
       threadId,
       config,
@@ -1571,24 +1602,34 @@ async function handleResponsesInner(
     previewSelectionAdmission?.release();
   }
 
+  // A native request may become translated after fallback. Materialize its authorized
+  // history before parsing/normalizing for that final provider; never send only the delta.
+  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  if (nativeIngress && !isNativeResponsesProvider(route.provider) && parsed.previousResponseId) {
+    const replayBody = parsed._rawBody;
+    if (!nativeLocalReplayAuthorized(replayBody, nativeReplayScope(req.headers, replayBody))) {
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable for this task; resend the complete conversation without previous_response_id.");
+    }
+    const expanded = expandPreviousResponseInput(replayBody);
+    if (expanded === replayBody || previousResponseReplayFailure(expanded)) {
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable; resend the complete conversation without previous_response_id.");
+    }
+    sanitizeEncryptedContentInPlace((expanded as { input?: unknown }).input);
+    try {
+      parsed = { ...parsed, ...parseRequest(expanded), _previousResponseInputExpanded: true };
+      toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+    } catch (err) {
+      if (isTranslatorBudgetExceededError(err)) {
+        return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", { code: "translation_buffer_limit" });
+      }
+      return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
+    }
+  }
+
   // Encrypted child tasks may only reach the canonical native backend. This check
   // runs against the FINAL route so native-only fallback can rescue a routed primary.
   if (!isCanonicalOpenAiForwardProvider(route.provider) && unreadableEncryptedAgentTask) {
     return unreadableEncryptedAgentTaskResponse();
-  }
-
-  // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
-  // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
-  // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
-  if (
-    hasUnexpandedPreviousResponse
-    && isCanonicalOpenAiForwardProvider(route.provider)
-  ) {
-    return formatErrorResponse(
-      400,
-      "invalid_request_error",
-      "OpenAI forward continuation state is unavailable or expired; start a new session instead of reusing this previous_response_id.",
-    );
   }
 
   // Captured before normalization: whether the CLIENT asked for SSE. The
@@ -1616,13 +1657,31 @@ async function handleResponsesInner(
   });
 
   {
-    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options);
+    const finalAuth = await resolveResponsesCodexAuth(req, config, route, options, nativeClientMetadata(parsed._rawBody));
     if (!finalAuth.ok) return finalAuth.response;
     authCtx = finalAuth.authCtx;
     selectedForwardHeaders = finalAuth.headers;
   }
 
   route.provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
+  if (isNativeResponsesProvider(route.provider)) {
+    for (const name of NATIVE_RESPONSES_HEADERS) {
+      const value = req.headers.get(name); if (value) selectedForwardHeaders.set(name, value);
+    }
+    const owner = nativeRequestOwner(route.provider, selectedForwardHeaders, authCtx);
+    const policy = nativeCompatibilityPolicy({ provider: route.provider, body: parsed._rawBody,
+      replayScope: nativeReplayScope(req.headers, parsed._rawBody, owner),
+      headers: selectedForwardHeaders, owner,
+      completeLocalReplay: parsed._previousResponseInputExpanded === true });
+    selectedForwardHeaders = policy.headers;
+    parsed._rawBody = policy.body;
+    if (policy.replayed) parsed._previousResponseInputExpanded = true;
+    if (policy.unavailable) {
+      releaseCodexAuthContextProbeLease(authCtx);
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable; resend the complete conversation without previous_response_id.");
+    }
+  }
+
   logCtx.provider = route.codexAccountNamespace
     ? `${route.providerName}-${route.codexAccountNamespace}`
     : formatCodexProviderForLog(route.providerName, codexLogAccountId(authCtx), config);
@@ -1837,11 +1896,13 @@ async function handleResponsesInner(
     // recording it would let a later expansion rehydrate the chain Codex just replaced.
     const passthroughRecordEligible = parsed._compactionRequest !== true
       && (!parsed.previousResponseId || parsed._previousResponseInputExpanded === true);
-    const rememberPassthroughResponse = passthroughRecordEligible
-      ? (response: { id?: unknown; output?: unknown; status?: unknown }) =>
-        rememberResponseState(parsed._rawBody, response, undefined, { force: true })
-      : undefined;
-    if (parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
+    const rememberPassthroughResponse = (response: { id?: unknown; output?: unknown; status?: unknown }) => {
+      const owner = nativeRequestOwner(route.provider, selectedForwardHeaders, authCtx);
+      const scope = nativeReplayScope(req.headers, parsed._rawBody, owner);
+      if (passthroughRecordEligible) rememberResponseState(parsed._rawBody, response, owner && scope ? { native: { scope } } : undefined, { force: true });
+      if (owner) rememberNativeArtifacts(response, undefined, owner, nativeTurnId(req.headers, parsed._rawBody));
+    };
+    if (!isNativeResponsesProvider(route.provider) && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
       console.warn(
         `[responses] previous_response_id ${parsed.previousResponseId} not found in local replay state `
         + `(model ${parsed.modelId}); forwarding without it — earlier turns may be missing from this request`,
@@ -1878,7 +1939,7 @@ async function handleResponsesInner(
       }
       if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, outcome, {
-          threadId: req.headers.get("x-codex-parent-thread-id"),
+          threadId: resolveCodexTaskIdentity(req.headers, nativeClientMetadata(parsed._rawBody)).taskId ?? null,
           fixedAccount: authCtx.fixedAccount,
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),
@@ -2020,6 +2081,8 @@ async function handleResponsesInner(
         }
       }
     }
+    const artifactOwner = nativeRequestOwner(route.provider, selectedForwardHeaders, authCtx);
+    if (artifactOwner && upstreamResponse.ok) rememberNativeArtifacts({}, upstreamResponse.headers, artifactOwner, nativeTurnId(req.headers, parsed._rawBody));
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) logCtx.resolvedModel = resolvedModel;
@@ -2039,7 +2102,7 @@ async function handleResponsesInner(
       route.provider,
       route.modelId,
       logCtx,
-      req.headers.get("x-codex-parent-thread-id"),
+      resolveCodexTaskIdentity(req.headers, nativeClientMetadata(parsed._rawBody)).taskId ?? null,
     );
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
     // Capture quota from upstream response for multi-account tracking
@@ -2080,7 +2143,7 @@ async function handleResponsesInner(
       )) {
         recordCodexUpstreamOutcome(config, authCtx.accountId, upstreamResponse.status, {
           ...quotaMeta,
-          threadId: req.headers.get("x-codex-parent-thread-id"),
+          threadId: resolveCodexTaskIdentity(req.headers, nativeClientMetadata(parsed._rawBody)).taskId ?? null,
           fixedAccount: authCtx.fixedAccount,
           modelId: route.modelId,
           probeLeaseId: codexProbeLeaseId(authCtx),

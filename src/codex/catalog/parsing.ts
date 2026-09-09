@@ -275,6 +275,11 @@ export function ensureStrictCatalogFields(
   entry: RawEntry,
   options: { preserveExactInputModalities?: boolean; isRouted?: boolean } = {},
 ): RawEntry {
+  // Authoritative native metadata is already client-shaped. Missing behavioral fields
+  // are meaningful upstream defaults, including an absent compact threshold.
+  if (options.isRouted !== true
+    && (isNativeOpenAiEntry(entry) || trustedAccountBoundNativeCatalogSlug(entry) !== undefined)
+    && entry.codexcommander_native_source !== "synthetic-fallback") return entry;
   if (typeof entry.supports_reasoning_summaries !== "boolean") entry.supports_reasoning_summaries = false;
   if (typeof entry.default_reasoning_summary !== "string") entry.default_reasoning_summary = "none";
   if (typeof entry.support_verbosity !== "boolean") entry.support_verbosity = true;
@@ -332,6 +337,9 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
     for (const entry of entries) {
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const nativeAlias = entry.codexcommander_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
+      const native = !nativeAlias && (isNativeOpenAiEntry(entry)
+        || trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
+      if (native && entry.codexcommander_native_source !== "synthetic-fallback") continue;
       const upstreamPin = nativeAlias
         ? nativeMultiAgentVersion(slug)
         : UPSTREAM_NATIVE_ENTRIES.get(trustedAccountBoundNativeCatalogSlug(entry) ?? slug)?.multi_agent_version;
@@ -352,6 +360,7 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
 }
 
 export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls = false): RawEntry {
+  delete entry.codexcommander_native_source;
   delete entry.model_messages;
   delete entry.tool_mode;
   delete entry.multi_agent_version;

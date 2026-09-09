@@ -1,4 +1,20 @@
-import { describe, expect, test } from "bun:test";
+import { setBundledCatalogCacheForTests, resetBundledCatalogCacheForTests } from "../src/codex/catalog/bundled";
+import { setCodexRuntimeResolveCacheForTests, resetCodexRuntimeResolveCacheForTests } from "../src/codex/runtime";
+
+// Synthetic installed-catalog fixture explicitly exercises both sides of the 1M boundary.
+beforeEach(() => {
+  const runtime = { command: "/fixture/codex", version: "context-test", source: "environment" as const };
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+  setBundledCatalogCacheForTests(runtime, { models: [
+    { slug: "gpt-5.4", context_window: 1_000_000 },
+    { slug: "gpt-5.6-sol", context_window: 272_000 },
+  ] });
+});
+afterEach(() => {
+  resetBundledCatalogCacheForTests();
+  resetCodexRuntimeResolveCacheForTests();
+});
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AUTO_COMPACT_WINDOW_DEFAULT, boundedContextWindows, buildClaudeContextWindows, effectiveModelEnv, resolveAutoContext, shouldMarkOneMillion, withOneMillionMarker } from "../src/claude/context-windows";
 import { desktop3pAlias } from "../src/claude/desktop-3p";
 
@@ -21,10 +37,10 @@ describe("claude context-window map (implementation contract B2)", () => {
 
   test("registers native slugs (bare + desktop alias + readable alias)", () => {
     const map = buildClaudeContextWindows(["gpt-5.6-sol", "gpt-5.4"], []);
-    // Authoritative native overrides: gpt-5.6 natives 372k, gpt-5.4 native 1M.
-    expect(map["gpt-5.6-sol"]).toBe(372_000);
-    expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(372_000);
-    expect(map["claude-ccx2-native--gpt-5.6-sol"]).toBe(372_000);
+    // The explicit source fixture supplies 272k Sol and a 1M native test row.
+    expect(map["gpt-5.6-sol"]).toBe(272_000);
+    expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(272_000);
+    expect(map["claude-ccx2-native--gpt-5.6-sol"]).toBe(272_000);
     expect(map["gpt-5.4"]).toBe(1_000_000);
   });
 
@@ -92,7 +108,7 @@ describe("auto-context (implementation contract 020 + audit 021)", () => {
     const auto = { enabled: true, compactWindow: 350_000 };
     expect(shouldMarkOneMillion(1_000_000, { enabled: false, compactWindow: 350_000 })).toBe(true);
     expect(shouldMarkOneMillion(372_000, auto)).toBe(true);
-    expect(shouldMarkOneMillion(372_000, { enabled: true, compactWindow: 380_000 })).toBe(false); // real < threshold
+    expect(shouldMarkOneMillion(272_000, { enabled: true, compactWindow: 380_000 })).toBe(false); // real < threshold
     expect(shouldMarkOneMillion(200_000, auto)).toBe(false); // floor is exclusive
     expect(shouldMarkOneMillion(128_000, auto)).toBe(false);
     expect(shouldMarkOneMillion(undefined, auto)).toBe(false);
@@ -117,11 +133,11 @@ describe("auto-context (implementation contract 020 + audit 021)", () => {
     ]);
     expect(map["gpt-5.6-luna"]).toBe(400_000);
     expect(map["shared-model"]).toBeUndefined();
-    expect(map["gpt-5.6-sol"]).toBe(372_000); // native override, not 999k
+    expect(map["gpt-5.6-sol"]).toBe(272_000); // native override, not 999k
   });
 
-  test("effectiveModelEnv auto-marks a 372k helper slot under the default auto mode", () => {
-    const windows = buildClaudeContextWindows(["gpt-5.6-sol"], []);
+  test("effectiveModelEnv auto-marks a source window above the configured compact threshold", () => {
+    const windows = { "gpt-5.6-sol": 372_000, "claude-ccx2-native--gpt-5.6-sol": 372_000 };
     const env = effectiveModelEnv({ smallFastModel: "gpt-5.6-sol" }, windows);
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("gpt-5.6-sol[1m]");
     // Readable-alias slot value gets the same marking (audit 051 #4).

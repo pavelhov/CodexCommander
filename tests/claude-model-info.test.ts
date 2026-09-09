@@ -1,4 +1,20 @@
-import { describe, expect, test } from "bun:test";
+import { setBundledCatalogCacheForTests, resetBundledCatalogCacheForTests } from "../src/codex/catalog/bundled";
+import { setCodexRuntimeResolveCacheForTests, resetCodexRuntimeResolveCacheForTests } from "../src/codex/runtime";
+
+// Synthetic installed-catalog fixture explicitly exercises both sides of the 1M boundary.
+beforeEach(() => {
+  const runtime = { command: "/fixture/codex", version: "context-test", source: "environment" as const };
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+  setBundledCatalogCacheForTests(runtime, { models: [
+    { slug: "gpt-5.4", context_window: 1_000_000 },
+    { slug: "gpt-5.6-sol", context_window: 272_000 },
+  ] });
+});
+afterEach(() => {
+  resetBundledCatalogCacheForTests();
+  resetCodexRuntimeResolveCacheForTests();
+});
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { buildAnthropicModelInfos, nativeEffectiveLadder } from "../src/claude/model-info";
 import { nativeEffortClamp } from "../src/codex/catalog";
 
@@ -83,7 +99,7 @@ describe("anthropic-flavor ModelInfo discovery entries (implementation contract 
   test("[1m] variants cover 1M NATIVES too (audit R1#1) — and skip sub-1M natives", () => {
     const infos = buildAnthropicModelInfos(["gpt-5.4", "gpt-5.6-sol"], []);
     const variants = infos.filter(i => i.id.endsWith("[1m]"));
-    expect(variants).toHaveLength(1); // gpt-5.4 (1M) only; gpt-5.6-sol native is 372k
+    expect(variants).toHaveLength(1); // gpt-5.4 (1M) only; gpt-5.6-sol native is 272k
   });
 
   test("[1m] variant never double-suffixes or duplicates (audit R1#11)", () => {
@@ -104,7 +120,7 @@ describe("anthropic-flavor ModelInfo discovery entries (implementation contract 
     ], auto);
     const variants = infos.filter(i => i.id.endsWith("[1m]"));
     // The [1m] marker makes Claude Code account 1e6 tokens: only the
-    // authoritative 1M model may carry it — never the 372K route.
+    // authoritative 1M model may carry it — never the 272K route.
     expect(variants).toHaveLength(1);
     expect(variants[0]!.display_name.includes("gpt-5.4")).toBe(true);
     expect(variants[0]!.display_name.endsWith("· 1M")).toBe(true);
@@ -131,7 +147,7 @@ describe("anthropic-flavor ModelInfo discovery entries (implementation contract 
     ], auto, "readable");
     const ids = infos.map(i => i.id);
     expect(ids).toContain("claude-ccx2-native--gpt-5.6-sol");
-    // 372k native: NO [1m] variant under the authoritative-window contract.
+    // 272k native: NO [1m] variant under the authoritative-window contract.
     expect(ids).not.toContain("claude-ccx2-native--gpt-5.6-sol[1m]");
     expect(ids).toContain("claude-ccx2-cursor--gpt-5.6-luna");
     expect(ids).toContain("claude-ccx2-cursor--gpt-5.6-luna[1m]");

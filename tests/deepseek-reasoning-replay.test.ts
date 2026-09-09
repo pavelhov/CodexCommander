@@ -102,10 +102,10 @@ describe("DeepSeek Responses replay keeps reasoning on the wire", () => {
     expect(body.input[2]).toMatchObject({ type: "function_call_output", call_id: "call_1", output: "rain" });
   });
 
-  test("a canonical OpenAI provider still blanks reasoning content", () => {
+  test("a canonical OpenAI provider preserves native readable reasoning content", () => {
     const provider = { ...providerConfigSeed(getProviderRegistryEntry("openai-apikey")!), apiKey: "sk-test" };
     const body = buildBody(provider);
     const item = (body.input as Record<string, unknown>[])[0]!;
-    expect(item.content).toEqual([]);
+    expect(item.content).toEqual([{ type: "reasoning_text", text: "think step by step" }]);
   });
 });

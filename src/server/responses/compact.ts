@@ -1,3 +1,6 @@
+import { resolveCodexTaskIdentity } from "../../codex/task-identity";
+import { rememberNativeArtifacts } from "../../codex/native-ownership";
+import { nativeClientMetadata, nativeCompatibilityPolicy, nativeRequestOwner, nativeReplayScope, nativeTurnId, NATIVE_RESPONSES_HEADERS } from "../../responses/native-policy";
 import { UpstreamSendBudget } from "../../lib/upstream-send-budget";
 import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
 import { cleanupResponseDispatch, responseDispatch, observeDispatch } from "../../usage/dispatch-http";
@@ -10,7 +13,7 @@ import {
 } from "../../config";
 import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
-import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
+import { FORWARD_HEADERS, normalizeNativeResponsesHistory } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { NoEligiblePolicyCandidateError, routeModel } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
@@ -147,6 +150,7 @@ async function resolveAlternateCompactContext(args: {
   selectedModelId: string | undefined;
   excludeAccountId: string | null;
   turnAdmissionLease?: ActiveTurnLease;
+  body?: unknown;
 }): Promise<{ authCtx: CodexAuthContext; provider: CodexCommanderProviderConfig; headers: Headers } | null> {
   const { req, config, route, selectedModelId, excludeAccountId, turnAdmissionLease } = args;
   if (!route.codexAccountMode || !excludeAccountId) return null;
@@ -154,14 +158,15 @@ async function resolveAlternateCompactContext(args: {
     const authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
       ...(selectedModelId ? { modelId: selectedModelId } : {}),
       excludeAccountId,
+      clientMetadata: nativeClientMetadata(args.body),
       beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
     });
     if (!authCtx.accountId || authCtx.accountId === excludeAccountId) return null;
     const provider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
     const headers = new Headers({ "content-type": "application/json" });
     const selected = headersForCodexAuthContext(req.headers, authCtx);
-    for (const name of FORWARD_HEADERS) {
-      const value = selected.get(name);
+    for (const name of [...FORWARD_HEADERS, ...NATIVE_RESPONSES_HEADERS]) {
+      const value = selected.get(name) ?? (NATIVE_RESPONSES_HEADERS.some(header => header === name) ? req.headers.get(name) : null);
       if (value) headers.set(name, value);
     }
     const override = (provider as { _codexAccountOverride?: { accessToken: string; chatgptAccountId: string } })._codexAccountOverride;
@@ -286,6 +291,7 @@ export async function handleResponsesCompact(
     }
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "responses");
   const selectedModelId = route.modelId;
   logCtx.requestedModel = raw.model;
   logCtx.model = selectedModelId;
@@ -321,17 +327,18 @@ export async function handleResponsesCompact(
     // active for this thread while normal turns succeed.
     let compactProvider = route.provider;
     let authCtx: CodexAuthContext = { kind: "main", accountId: null };
-    const headers = new Headers({ "content-type": "application/json" });
+    let headers = new Headers({ "content-type": "application/json" });
     try {
       if (route.codexAccountMode) {
         authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
+          clientMetadata: nativeClientMetadata(body),
           accountId: route.codexAccountId,
           modelId: selectedModelId,
           beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
         });
         const selected = headersForCodexAuthContext(req.headers, authCtx);
         compactProvider = applyCodexAuthContextToProvider(route.provider, authCtx, route.codexAccountMode);
-        for (const name of FORWARD_HEADERS) {
+        for (const name of [...FORWARD_HEADERS, ...NATIVE_RESPONSES_HEADERS]) {
           const value = selected.get(name);
           if (value) headers.set(name, value);
         }
@@ -362,12 +369,21 @@ export async function handleResponsesCompact(
       headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
     }
     const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
-    // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's
-    // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
-    // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
-    const compactBody = sanitizeReasoningInputContent(compactBodyRaw) as typeof compactBodyRaw;
+    // Both native endpoints repair proxy-created envelopes without rewriting native siblings.
+    let compactBody = normalizeNativeResponsesHistory(compactBodyRaw) as typeof compactBodyRaw;
+    for (const name of NATIVE_RESPONSES_HEADERS) { const value = req.headers.get(name); if (value) headers.set(name, value); }
+    const owner = nativeRequestOwner(compactProvider, headers, authCtx);
+    const policy = nativeCompatibilityPolicy({ provider: compactProvider, body: compactBody, headers, effectiveModel: route.modelId, owner,
+      replayScope: nativeReplayScope(req.headers, body, owner), materializeReference: true });
+    compactBody = policy.body as typeof compactBody;
+    if (policy.replayed) { const { previous_response_id: _previous, ...full } = compactBody as Record<string, unknown>; compactBody = full as typeof compactBody; }
+    headers = policy.headers;
+    if (policy.unavailable) {
+      releaseCodexAuthContextProbeLease(authCtx);
+      return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable; resend the complete conversation without previous_response_id.");
+    }
     const compactUrl = `${base}/responses/compact`;
-    const compactThreadId = req.headers.get("x-codex-parent-thread-id");
+    const compactThreadId = resolveCodexTaskIdentity(req.headers, nativeClientMetadata(body)).taskId;
     const connectMs = config.connectTimeoutMs ?? 200_000;
     const sendBudget = new UpstreamSendBudget(connectMs);
     // Takes its context explicitly: the alternate-account flow below records a rejection
@@ -479,6 +495,7 @@ export async function handleResponsesCompact(
         selectedModelId,
         excludeAccountId: authCtx.accountId,
         turnAdmissionLease,
+        body,
       });
       // Resolution can await a credential refresh, so the client may have gone away
       // while we were choosing B. Re-check before spending anything: recording A,
@@ -490,6 +507,8 @@ export async function handleResponsesCompact(
         return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
       }
       if (alternate) {
+        const alternatePolicy = nativeCompatibilityPolicy({ provider: alternate.provider, body: compactBody, headers: alternate.headers, effectiveModel: route.modelId, owner: nativeRequestOwner(alternate.provider, alternate.headers, alternate.authCtx) });
+        alternate.headers = alternatePolicy.headers;
         // Same order the regular path uses (core.ts:349-357): a 429/402 carries the
         // quota snapshot that produced it, so refresh A's cache before recording its
         // rejection. Skipping this leaves quota-strategy routing and the dashboard
@@ -553,6 +572,8 @@ export async function handleResponsesCompact(
       logCtx.dispatchSend = responseDispatch(upstream);
       const text = await buffered.clone().text();
       inspectResponseLogJson(logCtx, text);
+      const owner = nativeRequestOwner(compactProvider, headers, outcomeCtx);
+      if (owner) { try { rememberNativeArtifacts(JSON.parse(text), upstream.headers, owner, nativeTurnId(req.headers, body)); } catch { /* Invalid upstream JSON is not provenance. */ } }
     }
     observeDispatch(() => responseDispatch(upstream)?.terminal("unknown"));
     cleanupResponseDispatch(upstream);
@@ -568,7 +589,7 @@ export async function handleResponsesCompact(
     input: [...inputItems, { type: "compaction_trigger" }],
   };
   const internalHeaders = new Headers({ "content-type": "application/json" });
-  for (const name of FORWARD_HEADERS) {
+  for (const name of [...FORWARD_HEADERS, ...NATIVE_RESPONSES_HEADERS]) {
     const value = req.headers.get(name);
     if (value) internalHeaders.set(name, value);
   }

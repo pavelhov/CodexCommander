@@ -1,3 +1,4 @@
+import { isNativeResponsesProvider, NATIVE_RESPONSES_HEADERS } from "../responses/native-policy";
 import { createHash } from "node:crypto";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type CodexCommanderParsedRequest, type CodexCommanderProviderConfig, type CodexCommanderUsage } from "../types";
@@ -164,6 +165,20 @@ function scrubCodexCommanderCompactionItems(body: unknown): unknown {
     };
   });
 
+  return changed ? { ...body, input } : body;
+}
+
+/** Repair only proxy-created items; native encrypted and readable siblings stay identical. */
+export function normalizeNativeResponsesHistory(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || typeof item.encrypted_content !== "string"
+      || !/^(?:ccx1:|ccxr1:)/.test(item.encrypted_content)) return item;
+    const repaired = sanitizeReasoningInputContent(scrubCodexCommanderCompactionItems({ input: [item] })) as { input: unknown[] };
+    if (repaired.input[0] !== item) changed = true;
+    return repaired.input[0];
+  });
   return changed ? { ...body, input } : body;
 }
 
@@ -544,15 +559,14 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
 }
 
 /**
- * Remove `previous_response_id` before forwarding. Two triggers:
- * - the proxy expanded the request into a full input replay (the id is now redundant), or
- * - the target is the ChatGPT backend (`authMode: "forward"`), whose Codex REST endpoint
- *   categorically rejects the parameter with `{"detail":"Unsupported parameter:
- *   previous_response_id"}` (strict allowlist; it also rejects `metadata` and
- *   `max_output_tokens`). Codex only sends the id on WS turns, and CodexCommander converts those to
- *   internal HTTP requests, so forwarding it upstream is a guaranteed 400 — stripping is
- *   strictly better even when the local replay state missed. API-key mode keeps the field on
- *   unexpanded requests: the platform `/v1/responses` supports real server-side storage.
+ * Remove the reference after local expansion, or for the established ChatGPT HTTP
+ * compatibility path. Codex's HTTP request type contains full input; its WS create
+ * type adds previous_response_id. The original compatibility change (38d1fea11)
+ * records ChatGPT HTTP returning "Unsupported parameter: previous_response_id".
+ * This is inherited backend-compatibility evidence, not a fresh live assertion.
+ * Core requires complete task-scoped replay before dispatching canonical ChatGPT
+ * reference requests. Ordinary full-input native turns never enter that replay path.
+ * API-key Responses keeps a known native reference without local expansion.
  */
 function stripPreviousResponseId(body: unknown, strip: boolean): unknown {
   if (!strip || !isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, "previous_response_id")) return body;
@@ -1152,7 +1166,7 @@ export function createResponsesPassthroughAdapter(provider: CodexCommanderProvid
         if (runtimeProvider._codexAccountRequired && !runtimeProvider._codexAccountOverride) {
           throw new Error("Codex pool account auth is required but unavailable");
         }
-        for (const h of FORWARD_HEADERS) {
+        for (const h of [...FORWARD_HEADERS, ...(isNativeResponsesProvider(provider) ? NATIVE_RESPONSES_HEADERS : [])]) {
           const v = incoming?.headers.get(h);
           if (v) headers[h] = v;                                        // …so forwarded auth always wins.
         }
@@ -1173,10 +1187,19 @@ export function createResponsesPassthroughAdapter(provider: CodexCommanderProvid
         if (provider.headers) Object.assign(headers, provider.headers);
       }
 
+      const native = isNativeResponsesProvider(provider);
+      if (native) {
+        // Native protocol metadata comes from the policy-approved request context.
+        // Static provider headers cannot reintroduce a discarded sticky token.
+        for (const name of Object.keys(headers)) {
+          if (NATIVE_RESPONSES_HEADERS.some(header => header === name.toLowerCase())) delete headers[name];
+        }
+        for (const h of NATIVE_RESPONSES_HEADERS) { const v = incoming.headers.get(h); if (v) headers[h] = v; }
+      }
       const forward = provider.authMode === "forward";
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
-        parsed._rawBody,
+        native ? normalizeNativeResponsesHistory(parsed._rawBody) : parsed._rawBody,
         forward || parsed._previousResponseInputExpanded === true,
       );
       const stateless = provider.statelessResponses === true;
@@ -1186,12 +1209,12 @@ export function createResponsesPassthroughAdapter(provider: CodexCommanderProvid
       // pair from its own storage either, so it needs the same repair the forward
       // backend gets — dropping previous_response_id is not much use if the body that
       // reaches the wire is unparseable.
-      if (forward || stateless) {
+      if (!native && (forward || stateless)) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
       }
-      if (forward) {
+      if (!native && forward) {
         outBody = stripUnsupportedForwardParams(outBody);
-      } else {
+      } else if (!native) {
         outBody = preferConfiguredHostedTools(
           outBody,
           provider,
@@ -1200,22 +1223,22 @@ export function createResponsesPassthroughAdapter(provider: CodexCommanderProvid
         );
         outBody = normalizeImageGenClientTools(outBody);
       }
-      if (forward || parsed._previousResponseInputExpanded === true) {
+      if (!native && (forward || parsed._previousResponseInputExpanded === true)) {
         outBody = repairOversizedReplayCallIds(outBody);
       }
-      outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      if (!native) outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
       // Repair stored history from before the bridge emitted both keys: a conversation
       // that already recorded a single-query web_search_call replays it every turn, and
       // a strict parser rejects the whole request over it (#930).
-      outBody = backfillWebSearchQueries(outBody);
+      if (!native) outBody = backfillWebSearchQueries(outBody);
       // Same predicate as the routedCompaction gate in handleResponses(): an
       // authMode check would let a noncanonical custom forward provider skip this
       // rewrite while the server still routes it as a summarizer turn (#422).
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubCodexCommanderCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
-      const finalBody = stripDisabledReasoningSummaries(
+      const sanitizedBody = native ? outBody : normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubCodexCommanderCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
+      const finalBody = native ? sanitizedBody : stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,
         parsed.modelId,

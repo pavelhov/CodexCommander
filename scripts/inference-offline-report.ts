@@ -1,3 +1,4 @@
+import { captureHttpQualificationInChild } from "../tests/helpers/inference-http-qualification";
 import { runWebSocketReconnectFixture } from "../tests/helpers/inference-websocket-fixture";
 import type { DispatchEvent } from "../src/usage/dispatch";
 import { createHash } from "node:crypto";
@@ -166,7 +167,7 @@ export async function writeOfflineReport(outputRoot = join(root, ".tmp/inference
   const surfaceComparisons = surfaceBefore.map((capture, index) => { const diffs = semanticDiff(capture.semantics, surfaceAfter[index]!.semantics); return { id: capture.id, scope: capture.scope, verdict: diffs.length ? "REGRESSION" : "PASS", diffs }; });
   const comparisons = before.map((capture, index) => ({ id: capture.id, ...compareFixture(capture, after[index]!) }));
   const hash = (input: string) => createHash("sha256").update(input).digest("hex");
-  const harnessFiles = ["scripts/inference-offline-report.ts", "tests/helpers/inference-recorder.ts", "tests/helpers/inference-diff.ts", "tests/helpers/inference-websocket-fixture.ts", "tests/helpers/dispatch-surface-fixtures.ts", "tests/helpers/cursor-dispatch-fixture.ts", "tests/fixtures/inference-accounting/fixtures.ts"];
+  const harnessFiles = ["scripts/inference-offline-report.ts", "tests/helpers/inference-recorder.ts", "tests/helpers/inference-diff.ts", "tests/helpers/inference-websocket-fixture.ts", "tests/helpers/dispatch-surface-fixtures.ts", "tests/helpers/cursor-dispatch-fixture.ts", "tests/fixtures/inference-accounting/fixtures.ts", "tests/helpers/inference-http-qualification.ts", "tests/native-http-qualification-scenarios.test.ts"];
   const sourceDigests: Record<string, string> = {};
   for (const arm of [{ name: "baseline", dir: baseline }, { name: "current", dir: root }]) {
     const digest = createHash("sha256"); const paths = [...new Bun.Glob("src/**/*.{ts,mjs}").scanSync({ cwd: arm.dir })].sort();
@@ -174,17 +175,18 @@ export async function writeOfflineReport(outputRoot = join(root, ".tmp/inference
     sourceDigests[arm.name] = digest.digest("hex");
   }
   const native = await captureNativeInChild(baseline, root, run);
+  const httpPilotReadiness = await captureHttpQualificationInChild(root, run);
   const manifest = { schemaVersion: 1, sourceDigests, baselineRevision: BASELINE_REVISION,
     currentRevision: await command(["git", "rev-parse", "HEAD"], root), currentWorktreeDirty: Boolean(await command(["git", "status", "--porcelain"], root)),
     harnessSha256: hash((await Promise.all(harnessFiles.map(path => readFile(join(root, path), "utf8")))).join("\n")),
     binary: { name: "bun", version: Bun.version, sha256: createHash("sha256").update(await readFile(process.execPath)).digest("hex") },
     fixtures: [...after, ...surfaceAfter].map(f => f.id), seed: "fixed-no-random-fixture-values", provenance: "executed_responses_adapter_and_shared_http_retry",
-    transport: "synthetic-loopback-http", native,
+    transport: "synthetic-loopback-http", native, httpPilotReadiness,
     bounds: { paidSends: 0, childTimeoutMs: 20000, maxOutputBytes: 2097152, redirects: "rejected", environment: "allowlisted-disposable", externalTools: "not_loaded" },
     startedAt, endedAt: new Date().toISOString(), normalizations: wireNormalizations,
   };
   const reconciliation = { baseline: await reconcileFixtureCohort([...before, ...surfaceBefore]), current: await reconcileFixtureCohort([...after, ...surfaceAfter]) };
-  const results = { reconciliation, protocolScope: "adapter_wire_shared_retry_routed_compact_process_kill_and_native_capture_replay", protocolDispatch: [...comparisons, ...surfaceComparisons].every(c => c.verdict === "PASS") && native.verdict !== "REGRESSION" ? "PASS" : "REGRESSION",
+  const results = { reconciliation, httpPilotReadiness, protocolScope: "adapter_wire_shared_retry_routed_compact_process_kill_and_native_capture_replay", protocolDispatch: [...comparisons, ...surfaceComparisons].every(c => c.verdict === "PASS") && native.verdict !== "REGRESSION" ? "PASS" : "REGRESSION",
     tokenCost: "UNAVAILABLE", debit: "UNAVAILABLE", comparisons, native, surfaceComparisons, surfaceArms: { baseline: surfaceBefore, current: surfaceAfter },
     arms: { direct, baseline: before, current: after },
     baselineCharacterization: direct.map((capture, index) => ({ id: capture.id, differences: compareFixture(capture, before[index]!).diffs })),
@@ -198,7 +200,7 @@ export async function writeOfflineReport(outputRoot = join(root, ".tmp/inference
   await Bun.write(join(run, "dispatch-events.jsonl"), [...after, ...surfaceAfter].flatMap(c => c.telemetry.events).map(event => JSON.stringify(event)).join("\n") + "\n");
   await Bun.write(join(run, "results.json"), JSON.stringify(results, null, 2));
   const surfaceTable = ["## Additional production-surface comparisons", "", "| Fixture | Baseline send invocations | Current send invocations | Current peer requests / cache-hit sends | Verdict |", "|---|---:|---:|---|---|", ...surfaceComparisons.map((row, index) => `| ${row.id} | ${surfaceBefore[index]!.semantics.sendInvocations} | ${surfaceAfter[index]!.semantics.sendInvocations} | ${surfaceAfter[index]!.semantics.peerRequests ?? "—"} / ${surfaceAfter[index]!.semantics.cacheHitSends ?? "—"} | ${row.verdict} |`), "", "Cursor is a real HTTP/2 precommit retry fixture. Responses WebSocket reconnect is separately exercised through full server ingress.", ""].join("\n");
-  await Bun.write(join(run, "report.md"), `# Offline inference comparison\n\nProtocol/dispatch: ${results.protocolDispatch}\n\nToken cost: UNAVAILABLE. Debit: UNAVAILABLE. Native custom-provider HTTP capture/replay: ${native.verdict}. Desktop native-default: UNAVAILABLE.\n\nNative evidence mode: actual native custom-provider HTTP capture and in-memory replay through pinned/current adapters when available. Only counts and sanitized differing field paths may be persisted. Capability result: ${native.reason}.\n\n${results.limitations.join("\n\n")}\n\n| Fixture | Baseline sends | Current sends | Verdict |\n|---|---:|---:|---|\n${comparisons.map((c, i) => `| ${c.id} | ${before[i]!.sends} | ${after[i]!.sends} | ${c.verdict} |`).join("\n")}\n\n${surfaceTable}\n${renderFixtureAccounting(reconciliation.current)}\nBaseline accounting source availability: ${reconciliation.baseline.cohort.eventCoverageComplete ? "observed" : "unavailable/incomplete"}; pinned wire-send counts above remain independent of missing baseline telemetry.\n`);
+  await Bun.write(join(run, "report.md"), `# Offline inference comparison\n\nProtocol/dispatch: ${results.protocolDispatch}\n\nHTTP pilot readiness: ${httpPilotReadiness.verdict}. This is a separate actual-client direct-versus-full-Commander HTTP comparison, with executed production-mock scenario receipts. Desktop native-default and account debit parity remain unavailable.\n\nToken cost: UNAVAILABLE. Debit: UNAVAILABLE. Native custom-provider HTTP capture/replay: ${native.verdict}. Desktop native-default: UNAVAILABLE.\n\nNative evidence mode: actual native custom-provider HTTP capture and in-memory replay through pinned/current adapters when available. Only counts and sanitized differing field paths may be persisted. Capability result: ${native.reason}.\n\n${results.limitations.join("\n\n")}\n\n| Fixture | Baseline sends | Current sends | Verdict |\n|---|---:|---:|---|\n${comparisons.map((c, i) => `| ${c.id} | ${before[i]!.sends} | ${after[i]!.sends} | ${c.verdict} |`).join("\n")}\n\n${surfaceTable}\n${renderFixtureAccounting(reconciliation.current)}\nBaseline accounting source availability: ${reconciliation.baseline.cohort.eventCoverageComplete ? "observed" : "unavailable/incomplete"}; pinned wire-send counts above remain independent of missing baseline telemetry.\n`);
   return run;
 }
 if (import.meta.main) {

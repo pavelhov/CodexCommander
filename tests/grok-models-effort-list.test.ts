@@ -1,3 +1,5 @@
+import nativeCatalogSource from "./fixtures/catalog/native-codex-2026-09-08.json";
+import pinnedNativeCatalog from "../src/codex/data/upstream-models.json";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -5,7 +7,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { CodexCommanderConfig } from "../src/types";
-import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { bundledCatalogFixture, createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 setDefaultTimeout(30_000);
@@ -40,7 +42,14 @@ function effortConfig(): CodexCommanderConfig {
 beforeEach(() => {
   testHome = mkdtempSync(join(tmpdir(), "ccx-grok-effort-list-"));
   isolatedCodexHome = installIsolatedCodexHome("ccx-grok-effort-list-codex-");
-  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path, {
+    catalog: { models: bundledCatalogFixture().models.map(row => ({
+      ...row,
+      ...Object.fromEntries(Object.entries(pinnedNativeCatalog.models.find(source => source.slug === row.slug) ?? {})
+        .filter(([key]) => ["context_window", "max_context_window", "default_reasoning_level", "supported_reasoning_levels"].includes(key))),
+      ...nativeCatalogSource.models.find(source => source.slug === row.slug),
+    })) },
+  });
   process.env.CODEXCOMMANDER_HOME = testHome;
 });
 

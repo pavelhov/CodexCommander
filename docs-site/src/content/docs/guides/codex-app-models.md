@@ -57,6 +57,27 @@ so only through an already-running, protected-runtime-proven proxy; otherwise Co
 explicit Start. See [Codex Integration](/guides/codex-integration/) for config injection, catalog
 sync, shims, WebSocket fallback, and restore mechanics.
 
+## Comparing usage with native Codex
+
+Compare the same client version, account, model, reasoning effort, service tier, prompts, and
+tool availability. Use fresh conversations and keep other work off the measured account during
+the comparison. Orchestration guidance, different tools, and delegated agents can change the
+work performed and its token use; matching the model name alone does not make runs comparable.
+
+The repository's offline inference fixtures count physical upstream sends and inspect protocol
+changes against local mock servers. Their token values are synthetic. A passing fixture does
+not establish OpenAI billing parity or encrypted-history portability between accounts.
+The HTTP comparison uses an isolated custom-provider client profile; Desktop's native default
+transport and upstream authentication require separate verification.
+
+`bun scripts/inference-pilot-dry-run.ts --manifest <local-manifest.json>` exercises a six-start,
+single-concurrency reservation against loopback mock servers. It refuses invalid qualification,
+missing rate evidence, unexpected retries, and unknown usage. This command never launches a live
+pilot and reports live admission as unavailable: its manifest identity is supplied fixture data,
+not an attestation of the running client. A real pilot needs verified current subscription-credit
+rates, a fixed account and build, and enforcement around every physical send in both arms.
+Credit reservations are estimates; an in-flight request can exceed its estimated token allowance.
+
 ## Why routed models show up
 
 Codex's model picker expects Codex-shaped catalog entries. CodexCommander builds routed entries by cloning
@@ -75,14 +96,13 @@ including OpenAI service-tier metadata.
 ## Current stable model coverage
 
 The native fallback set includes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-`gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. For the GPT-5.5/5.4 family, CodexCommander preserves
-the installed Codex catalog's richer live entries and only synthesizes a missing entry. The bundled
-upstream snapshot is used only for GPT-5.6, where it supplies the real per-model identity and
-metadata instead of an older-template approximation.
+`gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. Matching installed Codex catalog entries are
+authoritative for every native model. The pinned upstream snapshot supplies fallback metadata
+when an installed entry is unavailable; template synthesis is the final fallback.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| Codex login (no eligible account selectors) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. |
+| Codex login (no eligible account selectors) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. Native context, maximum context, and compaction fields follow the installed client catalog. |
 | Codex login (eligible account selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
 | OpenAI (API key) | Exactly eight namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three `*-pro` virtual ids (1,050,000 context; 922,000 max input for all eight) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
@@ -129,10 +149,9 @@ inheritance, fallback, and encrypted-task behavior.
 
 ## Reasoning top tiers
 
-Reasoning-tier visibility is independent of the V1/base/V2 surface mode. Generated reasoning-capable
-entries advertise `max` so direct sub-agent effort overrides validate; current generated routed
-entries and older native GPT entries also advertise `ultra`. Exact upstream GPT-5.6 ladders are
-preserved, so Luna has `max` but no `ultra`.
+Native reasoning tiers follow the authoritative client catalog without invented `max` or `ultra` rungs. Routed compatibility entries retain their supported synthetic effort choices. Explicit V1/V2 surface selection remains separate.
+
+Native fields that the source omits, including a compaction limit, stay absent. Account-qualified native rows inherit the same behavioral metadata. If installed source metadata is unavailable, fallback rows are identified as such. Native WebSocket capability is not advertised by the HTTP forwarding path; the translated WebSocket bridge remains available for external routes.
 
 On the wire, routed adapters map or clamp unsupported tiers. For older native models whose real
 ladder stops at `xhigh`, `nativeEffortClamp` maps a direct `max` or an `ultra` selection to `xhigh`

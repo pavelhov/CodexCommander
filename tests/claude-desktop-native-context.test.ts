@@ -1,3 +1,5 @@
+import nativeCatalogSource from "./fixtures/catalog/native-codex-2026-09-08.json";
+import pinnedNativeCatalog from "../src/codex/data/upstream-models.json";
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +8,7 @@ import { buildClaudeDesktopState } from "../src/server/management/shared";
 import { nativeOpenAiContextWindow, visibleNativeSlugs } from "../src/codex/catalog";
 import { generateDesktop3pModels } from "../src/claude/desktop-3p";
 import type { CodexCommanderConfig } from "../src/types";
-import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
+import { bundledCatalogFixture, createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { installIsolatedCodexHome } from "./helpers/isolated-codex-home";
 
 setDefaultTimeout(30_000);
@@ -33,13 +35,20 @@ test("buildClaudeDesktopState gives native rows their real context window", asyn
   const previousCodexCliPath = process.env.CODEX_CLI_PATH;
   const isolatedCodexHome = installIsolatedCodexHome("ccx-desktop-context-codex-");
   process.env.CODEXCOMMANDER_CLAUDE_DESKTOP_CONFIG_DIR = home;
-  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path);
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(isolatedCodexHome.path, {
+    catalog: { models: bundledCatalogFixture().models.map(row => ({
+      ...row,
+      ...Object.fromEntries(Object.entries(pinnedNativeCatalog.models.find(source => source.slug === row.slug) ?? {})
+        .filter(([key]) => ["context_window", "max_context_window", "default_reasoning_level", "supported_reasoning_levels"].includes(key))),
+      ...nativeCatalogSource.models.find(source => source.slug === row.slug),
+    })) },
+  });
   try {
     const state = await buildClaudeDesktopState(config);
     const sol = state.models.find(m => m.route === "native/gpt-5.6-sol");
     expect(sol).toBeDefined();
     expect(sol!.contextWindow).toBe(nativeOpenAiContextWindow("gpt-5.6-sol"));
-    expect(sol!.contextWindow).toBe(372_000);
+    expect(sol!.contextWindow).toBe(272_000);
 
     // Every native row that the catalog knows a window for must carry it.
     for (const slug of visibleNativeSlugs(config)) {
@@ -65,5 +74,5 @@ test("the desktop-3p writer resolves the same native window as the DTO", () => {
   // capability is not lost between the dashboard and the written config.
   const sol = models.find(m => m.labelOverride.toLowerCase().includes("sol"));
   expect(sol).toBeDefined();
-  expect(expected).toBe(372_000);
+  expect(expected).toBe(272_000);
 });

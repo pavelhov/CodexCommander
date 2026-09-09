@@ -859,7 +859,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, loadBundledCodexCatalog, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
         const nativeSlugs = includeNativeOpenAi ? nativeOpenAiSlugs() : [];
@@ -920,7 +920,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const catalogNativeSlugs = accountSelectors.length > 0
             ? nativeOpenAiSlugs()
             : nativeSlugs;
-          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs);
+          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs, new Set(), loadBundledCodexCatalog()?.models ?? []);
           return jsonResponse({
             models: applyNativeVisibility(
               entries,
