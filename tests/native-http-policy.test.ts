@@ -187,3 +187,30 @@ test("native full-input tool continuations keep roster guidance in the stable in
   else process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE = oldState;
  }
 });
+
+test("native reference tool continuations reuse stored guidance exactly once", async () => {
+ const cfg = config(); cfg.multiAgentGuidanceEnabled = true; cfg.subagentModels = [{ model: "gpt-5.4" }];
+ const oldState = process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+ process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
+ writeFileSync(join(process.env.CODEX_HOME!, "codexcommander-catalog.json"), JSON.stringify({ models: [{ slug: "gpt-5.4", visibility: "list", priority: 0, multi_agent_version: "v2", supported_reasoning_levels: [{ effort: "low", description: "low" }] }] }));
+ const sent: any[] = [];
+ globalThis.fetch = (async (_url: unknown, init: RequestInit) => { sent.push(JSON.parse(String(init.body))); return Response.json({ id: `resp_guidance_${sent.length}`, status: "completed", output: [{ type: "custom_tool_call", call_id: `call_${sent.length-1}`, name: "fixture", input: "read" }] }); }) as typeof fetch;
+ const initial = [{ type: "message", role: "developer", content: [{ type: "input_text", text: "Client policy" }] }, { type: "message", role: "user", content: [{ type: "input_text", text: "Game spec" }] }];
+ try {
+  for (let turn = 0; turn < 3; turn++) {
+   const input = turn === 0 ? initial : [{ type: "custom_tool_call_output", call_id: `call_${turn-1}`, output: `test result ${turn-1}` }];
+   const response = await handleResponses(request({ model: "gpt-5.4", stream: false, input, ...(turn ? { previous_response_id: `resp_guidance_${turn}` } : {}), client_metadata: { thread_id: "guidance-reference-fixture" }, tools: [{ type: "function", name: "spawn_agent", parameters: { type: "object", properties: {} } }] }), cfg, {});
+   expect(response.status).toBe(200); await response.text();
+   expect(sent).toHaveLength(turn + 1);
+   expect(sent[turn].input.filter((item: any) => item.role === "developer" && JSON.stringify(item.content).includes("<multi_agent_mode>")).length).toBe(1);
+   expect(sent[turn].input[1].role).toBe("developer");
+   expect(sent[turn].input[1].content[0].text).toContain("<multi_agent_mode>");
+   expect(sent[turn].input.at(-1)).toEqual(input.at(-1));
+   if (turn) expect(sent[turn].input.slice(0, sent[turn - 1].input.length)).toEqual(sent[turn - 1].input);
+   if (turn === 0) { await flushResponseState(); clearResponseStateMemoryForTests(); }
+  }
+ } finally {
+  if (oldState === undefined) delete process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  else process.env.CCX_APP_SERVER_CATALOG_STATE_OVERRIDE = oldState;
+ }
+});

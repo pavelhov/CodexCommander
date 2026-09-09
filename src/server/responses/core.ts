@@ -20,6 +20,7 @@ import {
   expandPreviousResponseInput,
   previousResponseProviderState,
   previousResponseReplayFailure,
+  previousResponseReplayPrefixLength,
   rememberResponseState,
 } from "../../responses/state";
 import { comboRouteDecisionTrace, NoEligiblePolicyCandidateError, routeModel, type RouteResult } from "../../router";
@@ -881,6 +882,7 @@ async function resolveResponsesCodexAuth(
 /**
  * Apply every route-dependent request mutation against the final selected route.
  * Must run only after subagent fallback has settled the model/provider.
+ * Return guidance for insertion after native continuation policy settles the history.
  */
 async function applyFinalRouteRequestNormalization(args: {
   parsed: CodexCommanderParsedRequest;
@@ -890,8 +892,9 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx: RequestLogContext;
   inboundWire: InboundWire;
   inboundTransport?: "websocket";
-}): Promise<void> {
+}): Promise<string | null> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
+  let guidance: string | null = null;
 
   // Apply the routed model id upstream: routing may strip a "<provider>/" namespace.
   if (route.modelId !== parsed.modelId) {
@@ -958,7 +961,7 @@ async function applyFinalRouteRequestNormalization(args: {
   {
     const encryptedCodexTasks = isCanonicalOpenAiForwardProvider(route.provider)
       && parsed._v2PlaintextCollaborationAlias !== true;
-    const guidance = await multiAgentGuidanceText(parsed, {
+    guidance = await multiAgentGuidanceText(parsed, {
       multiAgentGuidanceEnabled: config.multiAgentGuidanceEnabled,
       encryptedCodexTasks,
       codexAccountNamespace: route.codexAccountNamespace,
@@ -995,12 +998,7 @@ async function applyFinalRouteRequestNormalization(args: {
         },
       }
       : undefined);
-    if (guidance) {
-      injectDeveloperMessage(parsed, guidance, isNativeResponsesProvider(route.provider) ? "initial" : "tail");
-      if (isInjectionDebugEnabled()) {
-        injectionDebugLog(`[codexcommander] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, guidanceEnabled=${multiAgentGuidanceEnabled(config)}, ${guidance.length} chars)`);
-      }
-    } else if (isInjectionDebugEnabled() && collabSurface(parsed) !== null) {
+    if (!guidance && isInjectionDebugEnabled() && collabSurface(parsed) !== null) {
       injectionDebugLog(`[codexcommander] ${route.modelId}: collab surface=${collabSurface(parsed)}, guidance silent (effort=${parsed.options.reasoning ?? "unset"}, injectionModel=${config.injectionModel ?? "unset"})`);
     }
   }
@@ -1038,6 +1036,7 @@ async function applyFinalRouteRequestNormalization(args: {
     route.modelId,
     logCtx.requestedServiceTier ?? logCtx.configuredServiceTier,
   );
+  return guidance;
 }
 
 
@@ -1637,7 +1636,7 @@ async function handleResponsesInner(
   // upstream for reliability (#875); the answer must then be reframed to SSE
   // for streaming clients.
   const clientRequestedStream = parsed.stream;
-  await applyFinalRouteRequestNormalization({
+  const guidance = await applyFinalRouteRequestNormalization({
     parsed,
     route,
     config,
@@ -1675,10 +1674,20 @@ async function handleResponsesInner(
       completeLocalReplay: parsed._previousResponseInputExpanded === true });
     selectedForwardHeaders = policy.headers;
     parsed._rawBody = policy.body;
-    if (policy.replayed) parsed._previousResponseInputExpanded = true;
+    if (policy.replayed) {
+      parsed._previousResponseInputExpanded = true;
+      parsed._replayPrefixLen = previousResponseReplayPrefixLength(policy.body) || parsed._replayPrefixLen;
+    }
     if (policy.unavailable) {
       releaseCodexAuthContextProbeLease(authCtx);
       return formatErrorResponse(409, "native_continuation_unavailable", "Native continuation history is unavailable; resend the complete conversation without previous_response_id.");
+    }
+  }
+
+  if (guidance) {
+    injectDeveloperMessage(parsed, guidance, isNativeResponsesProvider(route.provider) ? "initial" : "tail");
+    if (isInjectionDebugEnabled()) {
+      injectionDebugLog(`[codexcommander] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, guidanceEnabled=${multiAgentGuidanceEnabled(config)}, ${guidance.length} chars)`);
     }
   }
 
