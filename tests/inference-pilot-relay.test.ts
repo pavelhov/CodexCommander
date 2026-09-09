@@ -27,9 +27,9 @@ test('relay preserves bytes, owns six sends across both arms, and blocks seventh
     }
 });
 test('redirect and missing usage stop without a second upstream send', async () => {
-    for (const fault of ['redirect', 'usage']) {
+    for (const fault of ['redirect', 'usage', 'unsupported-model']) {
         let sends = 0;
-        const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() { sends++; return fault === 'redirect' ? new Response(null, { status: 307, headers: { location: '/again' } }) : new Response(sse(false), { headers: { 'content-type': 'text/event-stream' } }); } });
+        const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch() { sends++; return fault === 'unsupported-model' ? new Response('{}', { status: 400 }) : fault === 'redirect' ? new Response(null, { status: 307, headers: { location: '/again' } }) : new Response(sse(false), { headers: { 'content-type': 'text/event-stream' } }); } });
         const m = manifest(), relay = createPilotRelay(m, m.identity, { url: `http://127.0.0.1:${upstream.port}/responses`, authorization: 'Bearer fixture', clientAuthorization: 'Bearer fixture-client', allowLoopback: true });
         try {
             relay.begin('direct');
@@ -37,6 +37,7 @@ test('redirect and missing usage stop without a second upstream send', async () 
             expect(r.status).toBe(409);
             expect(sends).toBe(1);
             expect(relay.snapshot().stopped).toBe(true);
+            expect(relay.snapshot().upstreamStatus).toBe(fault === 'redirect' ? 307 : fault === 'unsupported-model' ? 400 : 200);
         }
         finally {
             relay.close();
@@ -162,4 +163,46 @@ test('unauthenticated callers cannot spend or stop the reserved generation', asy
         expect(sends).toBe(1);
         relay.end();
     } finally { relay.close();upstream.stop(true); }
+});
+
+test('current client additional_tools preserves client schemas and rejects hosted tools', async () => {
+    for (const hosted of [false, true]) {
+        let sends = 0;
+        const input = { type: 'additional_tools', id: 'fixture-tools', role: 'developer', tools: [{ type: 'namespace', name: 'functions', tools: [{ type: hosted ? 'web_search' : 'function', name: 'fixture', parameters: {} }] }] };
+        const payload = JSON.stringify({ ...JSON.parse(body), input: [input, ...JSON.parse(body).input] });
+        const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(r) { sends++; expect(await r.text()).toBe(payload); return new Response(sse(), { headers: { 'content-type': 'text/event-stream' } }); } });
+        const m = manifest(), relay = createPilotRelay(m, m.identity, { url: `http://127.0.0.1:${upstream.port}/responses`, authorization: 'Bearer fixture', clientAuthorization: 'Bearer fixture-client', allowLoopback: true });
+        try {
+            relay.begin('direct');
+            const response = await fetch(relay.url, { method: 'POST', headers: { authorization: 'Bearer fixture-client' }, body: payload });
+            expect(response.status).toBe(hosted ? 409 : 200);
+            expect(sends).toBe(hosted ? 0 : 1);
+        } finally { relay.close(); upstream.stop(true); }
+    }
+});
+
+test('valid SSE without Content-Type completes, invalid bytes still stop', async () => {
+    for (const valid of [true, false]) {
+        const original = globalThis.fetch;
+        const target = 'http://127.0.0.1:1/responses';
+        globalThis.fetch = ((input: any, init: any) => {
+            if (String(input) !== target) return original(input, init);
+            const response = new Response(new TextEncoder().encode(valid ? sse() : '{}'));
+            response.headers.delete('content-type');
+            return Promise.resolve(response);
+        }) as typeof fetch;
+        const m = manifest(), relay = createPilotRelay(m, m.identity, { url: target, authorization: 'Bearer fixture', clientAuthorization: 'Bearer fixture-client', allowLoopback: true });
+        try {
+            relay.begin('direct');
+            const response = await fetch(relay.url, { method: 'POST', headers: { authorization: 'Bearer fixture-client' }, body });
+            expect(response.status).toBe(valid ? 200 : 409);
+            if (valid) {
+                relay.end(); relay.begin('commander');
+                const refused = await fetch(relay.url, { method: 'POST', headers: { authorization: 'Bearer fixture-client' }, body: '{}' });
+                expect(refused.status).toBe(409);
+                expect(relay.snapshot().upstreamStatus).toBeUndefined();
+                expect(relay.snapshot().upstreamFailure).toBeUndefined();
+            }
+        } finally { relay.close(); globalThis.fetch = original; }
+    }
 });

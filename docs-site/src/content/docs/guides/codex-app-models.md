@@ -84,7 +84,9 @@ Credit reservations are estimates; an in-flight request can exceed its estimated
 
 The separate developer command `bun scripts/inference-pilot-launcher.ts --offline` runs the
 installed macOS Codex client six times against local fixtures: three direct runs and three through
-the full Commander HTTP ingress. Both arms use the same forwarding relay and bundled model catalog.
+the full Commander HTTP ingress. Both arms use GPT-5.6 Luna with low reasoning effort, the same
+forwarding relay and bundled model catalog. The backend must still accept that model for the account;
+a rejected response stops the pilot and reports its HTTP status without retrying.
 The launcher uses disposable profiles and an operating-system network restriction; it does not
 activate the Mac app or modify an existing Codex profile. Unsupported hosts report `UNAVAILABLE`.
 

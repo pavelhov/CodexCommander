@@ -61,7 +61,10 @@ async function terminalResponse(response: Response, signal: AbortSignal): Promis
     cachedInputTokens: number | null;
     reasoningOutputTokens: number | null;
 }> {
-    if (!response.ok || !response.body || !response.headers.get("content-type")?.includes("text/event-stream")) {
+    const contentType = response.headers.get("content-type");
+    // The live Codex backend can omit this header. The bounded terminal parser
+    // still requires valid SSE and complete usage before delivering any bytes.
+    if (!response.ok || !response.body || (contentType !== null && !contentType.toLowerCase().includes("text/event-stream"))) {
         await response.body?.cancel();
         throw new Error("pilot_response_rejected");
     }
@@ -141,6 +144,8 @@ export function createPilotRelay(manifest: PilotManifest, observed: PilotIdentit
     let generation: ReturnType<PilotBudget["beginGeneration"]> | undefined;
     let claimed = false;
     let refusal: string | undefined;
+    let upstreamStatus: number | undefined;
+    let upstreamFailure: string | undefined;
     const usage: PilotTokenObservation[] = [];
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
             if (request.headers.get("authorization") !== target.clientAuthorization) return new Response(null, { status: 401 });
@@ -163,7 +168,9 @@ export function createPilotRelay(manifest: PilotManifest, observed: PilotIdentit
                 if (body.tools !== undefined && (!Array.isArray(body.tools) || !body.tools.every((tool: any) => clientTool(tool))))
                     throw new Error("pilot_tools_rejected");
                 if (body.stream !== true || body.previous_response_id || !Array.isArray(body.input)
-                    || body.input.some((item: any) => ![undefined, "message"].includes(item.type)
+                    || body.input.some((item: any) => item?.type === "additional_tools"
+                        ? item.role !== "developer" || !Array.isArray(item.tools) || !item.tools.every((tool: any) => clientTool(tool))
+                        : ![undefined, "message"].includes(item?.type)
                         || !["user", "developer", "system"].includes(item.role)
                         || !(typeof item.content === "string" || (Array.isArray(item.content)
                             && item.content.every((part: any) => part?.type === "input_text" && typeof part.text === "string")))))
@@ -181,7 +188,12 @@ export function createPilotRelay(manifest: PilotManifest, observed: PilotIdentit
                 let cachedInputTokens: number | null = null, reasoningOutputTokens: number | null = null;
                 const result = await budget.dispatch(current, "initial", await target.observeIdentity?.() ?? observed, async (signal) => {
                     const response = await fetch(target.url, { method: "POST", headers, body: bytes, signal, redirect: "manual", proxy: null } as RequestInit);
-                    const terminal = await terminalResponse(response, signal);
+                    upstreamStatus = response.status;
+                    const terminal = await terminalResponse(response, signal).catch(error => {
+                        const code = (error as Error).message;
+                        upstreamFailure = ["pilot_response_rejected", "pilot_terminal_missing", "pilot_response_size", "pilot_output_rejected", "pilot_terminal_failed", "pilot_usage_rejected"].includes(code) ? code : "pilot_response_unreadable";
+                        throw error;
+                    });
                     output = terminal.bytes;
                     cachedInputTokens = terminal.cachedInputTokens;
                     reasoningOutputTokens = terminal.reasoningOutputTokens;
@@ -201,10 +213,10 @@ export function createPilotRelay(manifest: PilotManifest, observed: PilotIdentit
         } });
     return {
         url: `http://127.0.0.1:${server.port}/responses`, signal: budget.signal,
-        begin(arm: PilotArm) { generation = budget.beginGeneration(arm, observed); claimed = false; },
+        begin(arm: PilotArm) { upstreamStatus = undefined; upstreamFailure = undefined; generation = budget.beginGeneration(arm, observed); claimed = false; },
         end() { if (!generation)
             throw new Error("pilot_no_generation"); budget.endGeneration(generation); generation = undefined; },
-        snapshot() { return { ...budget.snapshot(), refusal, usage: structuredClone(usage) }; },
+        snapshot() { return { ...budget.snapshot(), refusal, upstreamStatus, upstreamFailure, usage: structuredClone(usage) }; },
         close() { budget.close(); server.stop(true); },
     };
 }
