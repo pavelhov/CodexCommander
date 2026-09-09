@@ -344,3 +344,9 @@ triggers remain the final input item. Guidance content, eligibility, roster owne
 not change. Live Responses-lite qualification reproduced flat cache reads with tail guidance and
 restored growing cache reuse with initial-block placement. This is not a guarantee of upstream cache
 availability, cross-account cache reuse, or a quota-percent conversion.
+
+Native guidance is computed during final-route normalization but inserted only after native
+compatibility policy has settled the raw history. When that policy materializes a local reference,
+carry its proxy-private replay-prefix length into guidance deduplication. Do not infer trusted
+history from client fields or reorder old stored guidance. Native reference passthrough remains
+reference passthrough; guidance insertion must not trigger history expansion itself.

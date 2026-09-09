@@ -129,6 +129,10 @@ roster and provider selections are unchanged. Other provider routes retain their
 placement. Cache reuse is still determined by the upstream service; a cold cache or a changed
 model, instruction set, or roster can increase uncached input.
 
+When Commander restores a native `previous_response_id` from its local conversation state, it
+checks for existing guidance after restoring that history. Matching guidance is reused, avoiding
+another copy on each tool result. Existing stored guidance keeps its original position.
+
 ### Per-model roster guidance
 
 The featured roster is persisted as ordered objects with `model` and optional `guidance` fields.
