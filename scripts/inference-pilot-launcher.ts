@@ -12,7 +12,7 @@ import type { PilotManifest } from "./inference-pilot-budget";
 const BINARY = "/Applications/ChatGPT.app/Contents/Resources/codex";
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const disabled = ["shell_tool", "unified_exec", "shell_snapshot", "code_mode_host", "apps", "browser_use", "browser_use_external", "computer_use", "hooks", "image_generation", "in_app_browser", "in_app_chat", "in_app_local_automation", "plugins", "remote_plugin", "multi_agent", "multi_agent_v2", "skill_mcp_dependency_install", "skill_search", "sleep_tool", "view_image", "workspace_dependencies"];
-const config = { model: "gpt-5.4", effort: "low", tier: "default", prompt: "Reply with exactly OK. Do not call tools.", disabled,
+const config = { model: "gpt-5.6-luna", effort: "low", tier: "default", prompt: "Reply with exactly OK. Do not call tools.", disabled,
     provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" },
     buffering: "terminal-bounded-sse", transport: "custom-provider-http", order: ["direct", "commander", "commander", "direct", "direct", "commander"] } as const;
 interface RuntimeIdentity {
@@ -37,6 +37,8 @@ export interface PilotResult {
     debitParity: "UNAVAILABLE";
     commanderCanonicalSends?: number;
     reason?: string;
+    upstreamStatus?: number;
+    upstreamFailure?: string;
     usage?: PilotTokenObservation[];
 }
 const unavailable = (reason: string): PilotResult => ({ schemaVersion: 1, verdict: "UNAVAILABLE", evidence: "installed-client-loopback",
@@ -215,7 +217,7 @@ async function execute(root: string, home: string, manifest: PilotManifest, targ
     catch {
         const snapshot = relay.snapshot();
         return { schemaVersion: 1, verdict: "STOPPED", evidence, identity,
-            dispatches: snapshot.dispatches, arms: snapshot.arms, usage: snapshot.usage, clientExitCodes: codes, containmentVerified: contained, liveAdmission: evidence === "live-http" && snapshot.dispatches > 0 ? "EXECUTED" : "UNAVAILABLE", debitParity: "UNAVAILABLE", reason: snapshot.refusal ?? snapshot.reason ?? "pilot_child_incomplete" };
+            dispatches: snapshot.dispatches, arms: snapshot.arms, usage: snapshot.usage, clientExitCodes: codes, containmentVerified: contained, liveAdmission: evidence === "live-http" && snapshot.dispatches > 0 ? "EXECUTED" : "UNAVAILABLE", debitParity: "UNAVAILABLE", upstreamStatus: snapshot.upstreamStatus, upstreamFailure: snapshot.upstreamFailure, reason: snapshot.refusal ?? snapshot.reason ?? "pilot_child_incomplete" };
     }
     finally {
         relay.close();

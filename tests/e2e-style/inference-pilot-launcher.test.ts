@@ -37,7 +37,7 @@ test("live admission binds private evidence and reaches exactly six intercepted 
         const qualification = await runOfflinePilot(process.cwd());
         expect(qualification.verdict).toBe("PASS");
         const qualificationText = JSON.stringify(qualification);
-        const rates = { unit: "subscription-credits", inputPerMillion: 1, outputPerMillion: 1, model: "gpt-5.4", tier: "default", verifiedAt: Date.now() };
+        const rates = { unit: "subscription-credits", inputPerMillion: 1, outputPerMillion: 1, model: "gpt-5.6-luna", tier: "default", verifiedAt: Date.now() };
         const rateText = JSON.stringify(rates);
         const accountId = "fixture-pilot-live";
         const accessToken = fakeChatGptJwt({ chatgpt_account_id: accountId });
@@ -45,7 +45,7 @@ test("live admission binds private evidence and reaches exactly six intercepted 
         claims["https://api.openai.com/auth"] = { chatgpt_account_id: accountId };
         claims.exp = Math.floor(Date.now() / 1000) + 3600;
         const credential = `${accessToken.split(".")[0]}.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.${accessToken.split(".")[2]}`;
-        const manifest = { schemaVersion: 1, identity: { ...qualification.identity, qualificationSha256: sha(qualificationText), accountAlias: "isolated", accountGeneration: sha(JSON.stringify([credential, accountId])), model: "gpt-5.4", effort: "low", tier: "default", transport: "http" }, qualification: { verdict: "PASS", actualClientFullIngress: true, requiredScenariosComplete: true, dispatchComplete: true }, bounds: { generationStarts: 6, dispatches: 6, wallTimeMs: 120000, inputTokensPerSend: 100000, outputTokensPerSend: 1000, estimatedCredits: 1 }, rates: { ...rates, sourceSha256: sha(rateText) } };
+        const manifest = { schemaVersion: 1, identity: { ...qualification.identity, qualificationSha256: sha(qualificationText), accountAlias: "isolated", accountGeneration: sha(JSON.stringify([credential, accountId])), model: "gpt-5.6-luna", effort: "low", tier: "default", transport: "http" }, qualification: { verdict: "PASS", actualClientFullIngress: true, requiredScenariosComplete: true, dispatchComplete: true }, bounds: { generationStarts: 6, dispatches: 6, wallTimeMs: 120000, inputTokensPerSend: 100000, outputTokensPerSend: 1000, estimatedCredits: 1 }, rates: { ...rates, sourceSha256: sha(rateText) } };
         const files = { manifest: join(home, "manifest.json"), qualification: join(home, "qualification.json"), credentials: join(home, "credentials.json"), rateSource: join(home, "rates.json") };
         await Bun.write(files.manifest, JSON.stringify(manifest));
         await Bun.write(files.qualification, qualificationText);
