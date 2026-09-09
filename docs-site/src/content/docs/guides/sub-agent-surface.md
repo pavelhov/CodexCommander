@@ -120,6 +120,15 @@ inherits the parent model and rejects model or effort overrides. Guidance theref
 use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
 `reasoning_effort`, and to make the task message self-contained.
 
+### Native continuation and caching
+
+For full-input conversations on native OpenAI Responses routes, CodexCommander places its
+delegation guidance in the initial instruction block, before conversation history. The same guidance stays at the same position as
+new tool results arrive, so the growing history remains available for prompt-cache reuse. The
+roster and provider selections are unchanged. Other provider routes retain their existing guidance
+placement. Cache reuse is still determined by the upstream service; a cold cache or a changed
+model, instruction set, or roster can increase uncached input.
+
 ### Per-model roster guidance
 
 The featured roster is persisted as ordered objects with `model` and optional `guidance` fields.

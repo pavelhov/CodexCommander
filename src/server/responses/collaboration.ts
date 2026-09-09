@@ -479,7 +479,7 @@ function isGeneratedDeveloperItem(item: unknown, text: string): boolean {
   return isRecord(part) && part.type === "input_text" && part.text === text;
 }
 
-export function injectDeveloperMessage(parsed: CodexCommanderParsedRequest, text: string): void {
+export function injectDeveloperMessage(parsed: CodexCommanderParsedRequest, text: string, placement: "tail" | "initial" = "tail"): void {
   const raw = parsed._rawBody as { input?: unknown } | undefined;
   const devItem = { type: "message", role: "developer", content: [{ type: "input_text", text }] };
   if (raw && Array.isArray(raw.input)) {
@@ -489,7 +489,20 @@ export function injectDeveloperMessage(parsed: CodexCommanderParsedRequest, text
     }
   }
 
-  parsed.context.messages.push({ role: "developer", content: text, timestamp: Date.now() });
+  const message = { role: "developer" as const, content: text, timestamp: Date.now() };
+  if (placement === "initial") {
+    // Responses-lite must see the same initial instruction block on every full-input
+    // continuation. A late developer item can leave only the startup prefix cacheable.
+    const index = parsed.context.messages.findIndex(item => item.role !== "developer");
+    parsed.context.messages.splice(index < 0 ? parsed.context.messages.length : index, 0, message);
+    if (raw && Array.isArray(raw.input)) {
+      const index = raw.input.findIndex(item => !isRecord(item)
+        || (item.type !== "additional_tools" && item.role !== "developer" && item.role !== "system"));
+      raw.input.splice(index < 0 ? raw.input.length : index, 0, devItem);
+    }
+    return;
+  }
+  parsed.context.messages.push(message);
   if (raw && Array.isArray(raw.input)) {
     // compaction_trigger must remain the final input item (codex-rs + ChatGPT backend both
     // validate this). Insert the developer message BEFORE the trigger when present.

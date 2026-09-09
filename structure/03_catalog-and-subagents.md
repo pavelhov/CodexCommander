@@ -333,3 +333,14 @@ native passthrough is enabled; `modelMap` claims and `nativePassthrough:false` r
 guard avoids creating oversized skill messages before the proxy can intervene; inbound elision remains
 the fallback if a client still sends a blocked bundle. An explicit empty list disables both routed-model
 behaviors.
+
+## Native guidance placement and cache continuity
+
+Native Responses full-input requests insert Commander guidance after the leading developer/system/additional-tools
+items and before the first conversation item. This keeps full-input tool continuations append-only
+relative to the already-injected request. Routed provider guidance retains its tail placement.
+Existing exact-guidance deduplication within a trusted local replay prefix still applies; compaction
+triggers remain the final input item. Guidance content, eligibility, roster ownership and routing do
+not change. Live Responses-lite qualification reproduced flat cache reads with tail guidance and
+restored growing cache reuse with initial-block placement. This is not a guarantee of upstream cache
+availability, cross-account cache reuse, or a quota-percent conversion.

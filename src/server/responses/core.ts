@@ -996,7 +996,7 @@ async function applyFinalRouteRequestNormalization(args: {
       }
       : undefined);
     if (guidance) {
-      injectDeveloperMessage(parsed, guidance);
+      injectDeveloperMessage(parsed, guidance, isNativeResponsesProvider(route.provider) ? "initial" : "tail");
       if (isInjectionDebugEnabled()) {
         injectionDebugLog(`[codexcommander] ${route.modelId}: multi-agent guidance injected (surface=${collabSurface(parsed)}, guidanceEnabled=${multiAgentGuidanceEnabled(config)}, ${guidance.length} chars)`);
       }
