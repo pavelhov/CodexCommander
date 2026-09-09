@@ -1104,6 +1104,36 @@ describe("injectDeveloperMessage", () => {
     });
   });
 
+  test("initial guidance preserves the complete request prefix across full-input tool continuations", () => {
+    const initial = [
+      { type: "additional_tools", role: "developer", tools: [] },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "Client instructions" }] },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Build the game" }] },
+    ];
+    const first = parsedFixture({ reasoning: "medium", rawInput: structuredClone(initial) });
+    injectDeveloperMessage(first, guidance, "initial");
+    const firstInput = (first._rawBody as { input: unknown[] }).input;
+    expect(firstInput[2]).toEqual(generatedItem());
+    expect(firstInput.at(-1)).toEqual(initial.at(-1));
+    const output = { type: "custom_tool_call_output", call_id: "call_fixture", output: "Fixed test results" };
+    const next = parsedFixture({ reasoning: "medium", rawInput: [...structuredClone(initial), output] });
+    injectDeveloperMessage(next, guidance, "initial");
+    const nextInput = (next._rawBody as { input: unknown[] }).input;
+    expect(nextInput.slice(0, firstInput.length)).toEqual(firstInput);
+    expect(nextInput.at(-1)).toEqual(output);
+    expect(next.context.messages.findIndex(message => message.role === "developer" && message.content === guidance))
+      .toBeLessThan(next.context.messages.findIndex(message => message.role === "user"));
+  });
+
+  test("initial guidance keeps compaction last and deduplicates locally replayed guidance", () => {
+    const parsed = parsedFixture({ reasoning: "medium", rawInput: [generatedItem(), { type: "message", role: "user", content: "history" }, { type: "compaction_trigger" }] });
+    parsed._replayPrefixLen = 2;
+    injectDeveloperMessage(parsed, guidance, "initial");
+    const input = (parsed._rawBody as { input: unknown[] }).input;
+    expect(countExact(input)).toBe(1);
+    expect(input.at(-1)).toEqual({ type: "compaction_trigger" });
+  });
+
   test("string raw input is left alone", () => {
     const parsed = parsedFixture({ reasoning: "max", rawInput: "plain" });
     injectDeveloperMessage(parsed, "note");
