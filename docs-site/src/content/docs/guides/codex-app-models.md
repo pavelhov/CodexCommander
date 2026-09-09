@@ -52,7 +52,11 @@ for the command, disable-key semantics, and safety constraints.
 
 ## Integration path
 
-`ccx start` and `ccx sync` wire the shared Codex config and catalog into the proxy. `ccx init` can do
+In the Mac app, use the dashboard's account setup and **Subagents → Apply to Codex** controls.
+The app bundles its runtime; normal Commander setup does not require a separate Bun or Commander CLI installation.
+Provider-specific dependencies still apply, such as Kiro's CLI and a running service for local models.
+
+For terminal users, `ccx start` and `ccx sync` wire the shared Codex config and catalog into the proxy. `ccx init` can do
 so only through an already-running, protected-runtime-proven proxy; otherwise Codex stays native until
 explicit Start. See [Codex Integration](/guides/codex-integration/) for config injection, catalog
 sync, shims, WebSocket fallback, and restore mechanics.
@@ -77,6 +81,27 @@ pilot and reports live admission as unavailable: its manifest identity is suppli
 not an attestation of the running client. A real pilot needs verified current subscription-credit
 rates, a fixed account and build, and enforcement around every physical send in both arms.
 Credit reservations are estimates; an in-flight request can exceed its estimated token allowance.
+
+The separate developer command `bun scripts/inference-pilot-launcher.ts --offline` runs the
+installed macOS Codex client six times against local fixtures: three direct runs and three through
+the full Commander HTTP ingress. Both arms use the same forwarding relay and bundled model catalog.
+The launcher uses disposable profiles and an operating-system network restriction; it does not
+activate the Mac app or modify an existing Codex profile. Unsupported hosts report `UNAVAILABLE`.
+
+The relay allows at most six physical requests, one at a time. It rejects redirects, retries,
+hosted tools, returned tool calls, incomplete responses, and missing token usage. It buffers a
+bounded SSE response until completion, so this is a text-only HTTP instrumentation test, not a
+streaming-latency or Desktop-default-transport comparison. The paired test order is direct/Commander,
+Commander/direct, then direct/Commander;
+six requests are too few to establish general spending parity.
+
+Live execution is a separate, explicit `--execute-live` invocation with `--manifest`,
+`--qualification`, `--credentials`, and `--rate-source` files. It checks the current client,
+runtime, configuration and catalog against the offline receipt, and rechecks credential generation
+and source identity before sending. Credentials must be in a private file owned by the current user;
+the launcher never discovers credentials from an active account profile. Rate evidence is supplied
+by the operator and is not independently authenticated as OpenAI billing data. No live execution
+is performed by the offline command or normal Mac app startup.
 
 ## Why routed models show up
 
