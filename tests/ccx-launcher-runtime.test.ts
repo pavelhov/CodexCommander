@@ -210,6 +210,24 @@ async function effectiveRuntime(override: string): Promise<string> {
   try {
     port = await freePort();
     const launcherEnv = isolatedLauncherEnv(root, override);
+    // Explicit start persists routing intent, so its isolated home needs an
+    // installed config. Use static models to keep discovery out of this test.
+    writeFileSync(join(launcherEnv.CODEXCOMMANDER_HOME!, "config.json"), JSON.stringify({
+      port,
+      hostname: "127.0.0.1",
+      multiAgentGuidanceEnabled: true,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-chat",
+          baseUrl: "http://127.0.0.1:9/v1",
+          allowPrivateNetwork: true,
+          liveModels: false,
+          models: ["test-model"],
+          defaultModel: "test-model",
+        },
+      },
+    }), { mode: 0o600 });
     let startupStderr = "";
     launcher = spawn("node", [BIN_CCX, "start", "--port", String(port)], {
       stdio: ["ignore", "ignore", "pipe"],
