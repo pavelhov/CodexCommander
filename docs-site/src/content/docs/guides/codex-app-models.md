@@ -34,6 +34,20 @@ openai-apikey/gpt-5.6-sol           # API key
 
 Fresh installs and configs with no saved mode default to Pool.
 
+## Continuing after a model change
+
+When you switch from a routed model back to OpenAI, the next request uses the newly selected
+model and reasoning effort. For requests with `store: false`, Commander removes lookup IDs
+from unencrypted reasoning summaries carried over in the conversation. This prevents OpenAI
+from trying to retrieve a reasoning item that it never stored. The summaries, messages, and
+tool-call results remain in the replayed history. Proxy-created reasoning envelopes receive
+the same ID repair after their provider-specific payload is removed.
+
+Native OpenAI encrypted history stays unchanged, including across account switches. This repair
+does not guarantee that every backend accepts every prior model's encrypted history, and it does
+not turn storage on or retry a rejected request. It applies to normal Responses requests,
+the WebSocket-to-HTTP bridge, and native compaction.
+
 ## Desktop remote-allowlist limitation
 
 If `codex debug models` and app-server `model/list` contain a routed model but Desktop does not show
