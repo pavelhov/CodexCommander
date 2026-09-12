@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSafeBundledSymlinks, assertSafePackageFile, assertSafePackageTree } from "../scripts/package-tree-safety";
@@ -77,7 +77,7 @@ describe("package source-tree safety", () => {
     symlinkSync(externalDir, join(dist, "assets"));
     expect(() => assertSafePackageTree(dist, "gui/dist", root)).toThrow("symbolic link");
     expect(lstatSync(normal).mode).toBe(normalMode);
-    rmSync(join(dist, "assets"));
+    unlinkSync(join(dist, "assets"));
 
     const external = join(outside, "shared.txt");
     writeFileSync(external, "do-not-modify");

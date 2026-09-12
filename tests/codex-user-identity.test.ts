@@ -126,7 +126,8 @@ test("real processes resolve one identity and coordinator path across every home
   });
 
   try {
-    const probes = await Promise.all(environmentRoots.map(({ paths }, index) => {
+    // A failed probe must not let finally remove a sibling's active cwd/TEMP.
+    const outcomes = await Promise.allSettled(environmentRoots.map(({ paths }, index) => {
       const accountEnvironment = process.platform === "win32"
         ? {
             USERNAME: `fake-username-${index}`,
@@ -157,6 +158,11 @@ test("real processes resolve one identity and coordinator path across every home
         ...accountEnvironment,
       }, paths.workingDirectory);
     }));
+    const probes: IdentityProbeResult[] = [];
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") throw outcome.reason;
+      probes.push(outcome.value);
+    }
 
     const osIdentity = resolveEffectiveUserIdentity();
     const osDatabasePath = resolveCodexCoordinatorDatabasePath(osIdentity, canonicalHome);

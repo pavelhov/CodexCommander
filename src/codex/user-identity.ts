@@ -62,7 +62,16 @@ function powershellValue(expression: string): string {
   } catch (cause) {
     refuse("Windows effective-account lookup could not start.", cause);
   }
-  if (result.exitCode !== 0) refuse("Windows effective-account lookup failed.");
+  if (result.exitCode !== 0) {
+    // Only this fixed diagnostic grammar may cross the subprocess boundary.
+    // Compiler messages and native errors can contain paths or account details.
+    const diagnostic = new TextDecoder().decode(result.stderr).match(
+      /^CCX_IDENTITY_FAILURE:(compile|known-folder):([A-Za-z0-9_.]{1,80}):([0-9A-F]{8})\r?$/m,
+    );
+    refuse(diagnostic
+      ? `Windows effective-account lookup failed (${diagnostic[1]}, ${diagnostic[2]}, HRESULT 0x${diagnostic[3]}).`
+      : "Windows effective-account lookup failed.");
+  }
   const value = new TextDecoder().decode(result.stdout).trim();
   if (!value) refuse("Windows effective-account lookup returned an empty value.");
   return value;
@@ -151,6 +160,8 @@ function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "
   // Pass the effective token explicitly so every launcher uses the OS account's
   // registered (possibly redirected) LocalAppData, including under isolated HOME.
   const localAppData = powershellValue(`
+$stage = 'compile'
+try {
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -174,7 +185,13 @@ public static class CodexCommanderKnownFolders {
   }
 }
 '@
+$stage = 'known-folder'
 [CodexCommanderKnownFolders]::LocalAppData('${identity.sid}')
+} catch {
+  $failure = $_.Exception.GetBaseException()
+  [Console]::Error.WriteLine('CCX_IDENTITY_FAILURE:' + $stage + ':' + $failure.GetType().FullName + ':' + $failure.HResult.ToString('X8'))
+  exit 1
+}
 `);
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
 

@@ -61,6 +61,10 @@ jobs:
         working-directory: gui
         run: bun run test
 
+      - name: Verify Windows account coordination
+        if: matrix.platform == 'windows'
+        run: bun run test:parallel tests/codex-user-identity.test.ts
+
       - name: Test suite
         run: bun run test:parallel
 
