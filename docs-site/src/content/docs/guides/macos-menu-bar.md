@@ -29,6 +29,8 @@ v0.1.6 shipped before the in-app updater. Once the first updater-enabled release
 install that release manually once using the steps above. The behavior below describes that upcoming
 release; it is not available in v0.1.6.
 
+![Upcoming macOS menu with Check for Updates, automatic checks, and the installation pause disclosure](/macos-updates.png)
+
 Choose **Check for Updates…** to check for a compatible stable release and review its version and
 release notes. Checking, including a failed or offline check, leaves the proxy running. You can opt in
 to **Automatically check for updates**; this enables checks only. Downloads and installation always
