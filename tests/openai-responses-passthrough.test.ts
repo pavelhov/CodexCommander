@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction,
+  normalizeNativeResponsesHistory,
 } from "../src/adapters/openai-responses";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
@@ -16,6 +17,34 @@ const provider = {
   baseUrl: "https://chatgpt.example/backend-api/codex",
   authMode: "forward" as const,
 };
+
+describe("native reasoning history compatibility", () => {
+  test("stored reasoning, id-only references, and opaque ciphertext retain their identity", () => {
+    const readable = { type: "reasoning", id: "rs_stored", summary: [{ type: "summary_text", text: "Previous work" }] };
+    for (const store of [true, undefined]) {
+      const body = { store, input: [readable] };
+      expect(normalizeNativeResponsesHistory(body)).toBe(body);
+    }
+    const body = { store: false, input: [
+      { type: "item_reference", id: "rs_reference" },
+      { type: "reasoning", id: "rs_reference_only" },
+      { ...readable, encrypted_content: "opaque-native-ciphertext" },
+    ] };
+    expect(normalizeNativeResponsesHistory(body)).toBe(body);
+  });
+
+  test("proxy envelopes lose their lookup id and unstored raw reasoning becomes summary replay", () => {
+    const summary = [{ type: "summary_text", text: "Previous work" }];
+    const content = [{ type: "reasoning_text", text: "Routed thinking" }];
+    for (const store of [false, true, undefined]) {
+      const body = { store, input: [{ type: "reasoning", id: "rs_proxy", summary, content, encrypted_content: "ccxr1:fixture" }] };
+      expect(normalizeNativeResponsesHistory(body)).toEqual({ store, input: [{ type: "reasoning", summary, content: [] }] });
+      expect(body.input[0].id).toBe("rs_proxy");
+    }
+    expect(normalizeNativeResponsesHistory({ store: false, input: [{ type: "reasoning", id: "rs_raw", summary, content }] }))
+      .toEqual({ store: false, input: [{ type: "reasoning", summary, content: [] }] });
+  });
+});
 
 test("passthrough serialized-body observation releases after the request settles", () => {
   const budget = createTranslatorBudget();

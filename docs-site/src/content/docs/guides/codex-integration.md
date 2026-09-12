@@ -147,6 +147,10 @@ $CODEX_HOME/codexcommander-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
+On Windows, processes using the same Codex home coordinate writes through the effective Windows
+account's LocalAppData directory. Overriding `HOME`, `USERPROFILE`, or `LOCALAPPDATA` in a launcher
+does not move that coordination state; `CODEX_HOME` still selects the Codex files to manage.
+
 On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex/config.toml` is absent, CodexCommander also
 checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.toml`. When exactly
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share

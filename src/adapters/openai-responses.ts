@@ -168,16 +168,28 @@ function scrubCodexCommanderCompactionItems(body: unknown): unknown {
   return changed ? { ...body, input } : body;
 }
 
-/** Repair only proxy-created items; native encrypted and readable siblings stay identical. */
+/** Repair proxy envelopes and unstored readable reasoning; native ciphertext stays identical. */
 export function normalizeNativeResponsesHistory(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   let changed = false;
   const input = body.input.map(item => {
-    if (!isPlainObject(item) || typeof item.encrypted_content !== "string"
-      || !/^(?:ccx1:|ccxr1:)/.test(item.encrypted_content)) return item;
-    const repaired = sanitizeReasoningInputContent(scrubCodexCommanderCompactionItems({ input: [item] })) as { input: unknown[] };
-    if (repaired.input[0] !== item) changed = true;
-    return repaired.input[0];
+    if (!isPlainObject(item)) return item;
+    const proxyEnvelope = typeof item.encrypted_content === "string"
+      && /^(?:ccx1:|ccxr1:)/.test(item.encrypted_content);
+    // A routed model can emit summary-only reasoning with a proxy-minted rs_ id.
+    // With storage disabled OpenAI cannot resolve that id. Replay the supplied
+    // summary instead, without altering opaque native history or id-only references.
+    const unstoredReasoning = body.store === false && item.type === "reasoning"
+      && !item.encrypted_content && (Array.isArray(item.summary) || Array.isArray(item.content));
+    if (!proxyEnvelope && !unstoredReasoning) return item;
+    const repaired = sanitizeReasoningInputContent(scrubCodexCommanderCompactionItems({ input: [item] })) as { input: Record<string, unknown>[] };
+    let next = repaired.input[0]!;
+    if (next.type === "reasoning" && "id" in next) {
+      next = { ...next };
+      delete next.id;
+    }
+    if (next !== item) changed = true;
+    return next;
   });
   return changed ? { ...body, input } : body;
 }

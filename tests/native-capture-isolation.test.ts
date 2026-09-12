@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { assertDeclaredLoopback, guardedFetch, isolatedEnvironment, nativeCaptureCapability } from "./helpers/inference-recorder";
 
@@ -22,7 +23,7 @@ test("redirect escape is disabled even with inherited fetch options", async () =
 test("child environment never copies provider, proxy, tools or native user configuration", () => {
   const env = isolatedEnvironment("/fixture/disposable");
   for (const key of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HTTP_PROXY", "HTTPS_PROXY", "PATH", "BUN_OPTIONS", "NODE_OPTIONS", "CODEX_CONFIG", "MCP_CONFIG"]) expect(env[key]).toBeUndefined();
-  expect(env.CODEX_HOME).toBe("/fixture/disposable/codex");
+  expect(env.CODEX_HOME).toBe(join("/fixture/disposable", "codex"));
 });
 test("native evidence stays unavailable without verified containment and supported transport", () => {
   for (const args of [[false, false], [true, false], [true, true]]) {

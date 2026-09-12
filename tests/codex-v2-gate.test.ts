@@ -868,6 +868,7 @@ describe("management API logical v1/v2 switching", () => {
     }
   });
 
+  // This scenario performs multiple real process/ACL operations on Windows.
   test("mode-only switches translate the limit across the root-slot boundary in both directions", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\nmax_depth = 2\n");
     const oldCodexHome = process.env.CODEX_HOME;
@@ -935,7 +936,7 @@ describe("management API logical v1/v2 switching", () => {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
       if (oldCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME; else process.env.CODEXCOMMANDER_HOME = oldCodexCommanderHome;
     }
-  });
+  }, process.platform === "win32" ? 30_000 : 5_000);
 
   test("contradictory mode and flag are rejected before config writes", async () => {
     const path = fixtureConfig("[agents]\nmax_threads = 100\n");

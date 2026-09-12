@@ -91,6 +91,35 @@ test("proxy envelopes receive narrow repair without changing native siblings", a
  const response = await handleResponses(request({ model: "openai/gpt-5.4", stream: false, input: [nativeItem, { type: "reasoning", encrypted_content: "ccxr1:fixture", content: [{ type: "reasoning_text", text: "translated" }] }, { role: "user", content: "continue" }] }), cfg, {}); expect(response.status).toBe(200); await response.text(); expect(wire.input[0]).toEqual(nativeItem); expect(wire.input[1].encrypted_content).toBeUndefined();
 });
 
+for (const surface of ["responses", "compact", "websocket", "api"]) test(`native ${surface} continues routed reasoning without looking up an unstored item`, async () => {
+ const cfg = config();
+ if (surface === "api") cfg.providers["openai-apikey"] = { adapter: "openai-responses", authMode: "key", apiKey: "fixture-api-key", baseUrl: "https://api.openai.com/v1" };
+ const summary = [{ type: "summary_text", text: "The previous model inspected the project." }];
+ const reasoning = { type: "reasoning", id: "rs_routed_unstored", summary, content: null };
+ const call = { type: "function_call", call_id: "call_inspect", name: "inspect", arguments: "{}" };
+ const result = { type: "function_call_output", call_id: "call_inspect", output: "Project inspected." };
+ const native = { type: "reasoning", id: "rs_native_keep", encrypted_content: "opaque-native", summary: [] };
+ const input = [reasoning, call, result, native, { role: "user", content: "continue" }];
+ const sent: any[] = [];
+ globalThis.fetch = (async (_url: unknown, init: RequestInit) => {
+  const body = JSON.parse(String(init.body)); sent.push(body);
+  if (body.input.some((item: any) => item.id === reasoning.id)) {
+   return Response.json({ error: { message: "Item with id 'rs_routed_unstored' not found. Items are not persisted when `store` is set to false." } }, { status: 404 });
+  }
+  return Response.json({ id: "resp_continued", status: "completed", output: [] });
+ }) as typeof fetch;
+ const body = { model: `${surface === "api" ? "openai-apikey" : "openai"}/gpt-5.4`, stream: false, store: false, reasoning: { effort: "medium" }, input };
+ const response = surface === "compact"
+  ? await handleResponsesCompact(request(body), cfg, {})
+  : await handleResponses(request(body), cfg, {}, surface === "websocket" ? { inboundTransport: "websocket" } : undefined);
+ expect(response.status).toBe(200); await response.text();
+ expect(sent).toHaveLength(1);
+ expect(sent[0].input[0]).toEqual({ type: "reasoning", summary, content: null });
+ expect(sent[0].input.slice(1)).toEqual(input.slice(1));
+ if (surface !== "compact") expect(sent[0].reasoning).toEqual({ effort: "medium" });
+ expect(reasoning.id).toBe("rs_routed_unstored");
+});
+
 for (const compact of [false, true]) test(`native ${compact ? "compact" : "responses"} preserves model-only routing hint when service tier is absent`, async () => {
  const cfg = config(); let sends = 0;
  globalThis.fetch = (async (_url: unknown, init: RequestInit) => { sends++; expect(new Headers(init.headers).get("x-codex-routing-hint")).toBe("model=gpt-5.4"); expect(JSON.parse(String(init.body)).service_tier).toBeUndefined(); return Response.json({ id: "resp_hint_only", status: "completed", output: [] }); }) as typeof fetch;

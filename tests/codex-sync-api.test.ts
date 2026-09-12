@@ -337,6 +337,8 @@ describe("GUI/CLI Codex sync backend", () => {
         '(async () => {',
         '  const snapshot = loadConfig(); // admitted BEFORE the flip: reads as ON',
         '  const result = await syncModelsToCodex(12345, snapshot, null, {',
+        // This case owns the post-admission OFF race; service-manager proof is covered separately.
+        '    admitCodexWrite: () => ({ kind: "admitted" }),',
         '    prepareCodexTransitionState: () => ({ kind: "ready", state: { nativeGeneration: 0, currentTxId: null } }),',
         '    refreshCodexModelCatalog: async () => {',
         '      // The provider-discovery window: a second real process persists OFF.',

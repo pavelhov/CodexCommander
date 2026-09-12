@@ -98,7 +98,7 @@ describe("durable OpenCode integration", () => {
     expect(applied).toContain("keep this user's MCP and theme settings");
     expect(applied).toContain('"other": {');
     expect(applied).toContain('"npm": "example"');
-    expect(applied).toContain(`{file:${p.tokenPath}}`);
+    expect(applied).toContain(JSON.stringify(`{file:${p.tokenPath}}`));
     expect(applied).not.toContain(TOKEN);
     expect(journal).not.toContain(TOKEN);
     expect(JSON.parse(journal)).toMatchObject({ exactRestoreEligible: true });
@@ -292,7 +292,7 @@ describe("durable OpenCode integration", () => {
     applyOpencodeIntegration(providerBlock(), TOKEN, { paths: p, config: config("0.0.0.0") });
     const applied = readFileSync(p.configJsonPath, "utf8");
     expect(applied).toContain('"x-codexcommander-api-key"');
-    expect(applied).toContain(`{file:${p.tokenPath}}`);
+    expect(applied).toContain(JSON.stringify(`{file:${p.tokenPath}}`));
     expect(applied).not.toContain('"apiKey"');
   });
 });

@@ -57,7 +57,7 @@ function manifest(root: string): Record<string, string> {
   return entries;
 }
 
-async function waitFor<T>(read: () => T | null | Promise<T | null>, label: string, timeoutMs = 10_000): Promise<T> {
+async function waitFor<T>(read: () => T | null | Promise<T | null>, label: string, timeoutMs = process.platform === "win32" ? 30_000 : 10_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const value = await read();
@@ -78,6 +78,8 @@ class Fixture {
   readonly userprofileA = join(this.root, "userprofile-a");
   readonly userprofileB = join(this.root, "userprofile-b");
   readonly runtime = join(this.root, "runtime");
+  readonly appdata = join(this.root, "appdata");
+  readonly localAppdata = join(this.root, "local-appdata");
   readonly provider = join(this.root, "fixture");
   readonly dataToken = "composed-data-token";
   readonly managementToken = "composed-admin-token";
@@ -87,7 +89,7 @@ class Fixture {
   readonly children: Array<ReturnType<typeof Bun.spawn>> = [];
 
   constructor() {
-    for (const path of [this.codex, this.ccx, this.homeA, this.homeB, this.userprofileA, this.userprofileB, this.runtime, this.provider]) {
+    for (const path of [this.codex, this.ccx, this.homeA, this.homeB, this.userprofileA, this.userprofileB, this.runtime, this.provider, this.appdata, this.localAppdata]) {
       mkdirSync(path, { recursive: true, mode: 0o700 });
     }
     this.lockPath = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(this.codex));
@@ -100,11 +102,22 @@ class Fixture {
   }
 
   env(home = this.homeA, userprofile = this.userprofileA): Record<string, string> {
-    // Do not inherit ambient homes or proxy configuration.  `process.execPath`
-    // is absolute, so a PATH is intentionally unnecessary for CLI children.
+    // Windows identity/ACL probes launch OS utilities. Preserve their lookup
+    // environment: ACL account names and PowerShell module/execution settings
+    // used by Add-Type. Every application home remains explicitly isolated.
+    const windowsEnv = process.platform === "win32"
+      ? Object.fromEntries(Object.entries(process.env).filter(([key, value]) =>
+        /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|USERNAME|USERDOMAIN|PSModulePath|PSExecutionPolicyPreference)$/i.test(key) && value !== undefined))
+      : {};
     return {
+      ...windowsEnv,
       HOME: home,
       USERPROFILE: userprofile,
+      // PowerShell/.NET tools need a complete profile environment even when
+      // application homes differ. Both directories remain fixture-owned.
+      APPDATA: this.appdata,
+      LOCALAPPDATA: this.localAppdata,
+      GROK_HOME: join(this.homeA, ".grok"),
       CODEX_HOME: this.codex,
       CODEXCOMMANDER_HOME: this.ccx,
       XDG_RUNTIME_DIR: this.runtime,
@@ -154,14 +167,20 @@ class Fixture {
     return child;
   }
 
-  async runCli(argv: string[], home = this.homeA, userprofile = this.userprofileA, timeoutMs = 15_000): Promise<CliResult> {
+  async runCli(argv: string[], home = this.homeA, userprofile = this.userprofileA, timeoutMs = process.platform === "win32" ? 60_000 : 15_000): Promise<CliResult> {
     const child = this.spawnCli(argv, home, userprofile);
-    const completed = await Promise.race([
-      Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`CLI watchdog: ccx ${argv.join(" ")}`)), timeoutMs)),
-    ]);
-    const [stdout, stderr, exitCode] = completed;
-    return { exitCode, stdout, stderr };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const [stdout, stderr, exitCode] = await Promise.race([
+        Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`CLI watchdog: ccx ${argv.join(" ")}`)), timeoutMs);
+        }),
+      ]);
+      return { exitCode, stdout, stderr };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async initializeCoordinator(): Promise<void> {
@@ -211,6 +230,10 @@ class Fixture {
       }
     }, "child /healthz");
     expect(health).toMatchObject({ pid: child.pid, port: runtime.port });
+    await waitFor(async () => {
+      const ready = await this.request(runtime, "/readyz");
+      return ready.body.status === "ready" || ready.body.status === "failed" ? true : null;
+    }, "terminal startup readiness");
     return { process: child, runtime };
   }
 
@@ -220,7 +243,10 @@ class Fixture {
       server.process.exited,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("server shutdown watchdog")), 10_000)),
     ]);
-    expect(exitCode).toBe(0);
+    // Bun uses TerminateProcess for SIGTERM on Windows; this is fixture teardown,
+    // not a test of the POSIX graceful signal handler. Await exit before cleanup.
+    if (process.platform === "win32") expect([0, 143]).toContain(exitCode);
+    else expect(exitCode).toBe(0);
   }
 
   async request(runtime: RuntimeRecord, path: string, init: RequestInit = {}): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -231,7 +257,10 @@ class Fixture {
         ...(init.body ? { "content-type": "application/json" } : {}),
         ...(init.headers ?? {}),
       },
-      signal: AbortSignal.timeout(10_000),
+      // Native restore can perform several bounded Windows ACL/identity probes.
+      signal: AbortSignal.timeout(process.platform === "win32" ? 45_000 : 10_000),
+    }).catch(error => {
+      throw new Error(`fixture HTTP ${init.method ?? "GET"} ${path} failed (${error instanceof Error ? error.name : "unknown"})`);
     });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   }
@@ -268,6 +297,7 @@ afterEach(async () => {
 });
 
 describe("WP13 composed toggle acceptance", () => {
+
   /** RED: remove `shouldSyncCodexOnStart` or the under-lock desired-state read; an OFF row writes native bytes. */
   test("A-reduced: real CLI and HTTP entry points preserve an OFF Codex home", async () => {
     const fx = fixture();
@@ -280,7 +310,16 @@ describe("WP13 composed toggle acceptance", () => {
       expect(manifest(fx.codex)).toEqual(before);
       for (const argv of [["ensure"], ["sync"], ["restore"], ["sync-cache"]]) {
         const result = await fx.runCli(argv);
-        expect(result.exitCode).toBe(0);
+        const output = `${result.stdout}\n${result.stderr}`;
+        // Emit classifications only: CLI output can contain homes/account names.
+        expect(result.exitCode, JSON.stringify({
+          command: argv[0],
+          ownershipRefused: /ownership|Windows definition chain/i.test(output),
+          livenessFailed: /liveness|live proxy|not running|could not verify/i.test(output),
+          readinessFailed: /readiness|catalog|synchron/i.test(output),
+          lockFailed: /lock|namespace|coordinator/i.test(output),
+          serviceFailed: /service|scheduler/i.test(output),
+        })).toBe(0);
         expect(manifest(fx.codex)).toEqual(before);
       }
       const sync = await fx.request(server.runtime, "/api/sync", { method: "POST" });
@@ -300,14 +339,22 @@ describe("WP13 composed toggle acceptance", () => {
       // The fixture records itself as the active service install, so the
       // production ownership preflight admits this home and P08 completes the
       // enable transition through the real CLI.
-      expect(back.exitCode).toBe(0);
+      if (process.platform === "win32") {
+        // Windows cannot yet prove the installed service definition chain.
+        // Enabling must refuse without changing the previously OFF native home.
+        expect(back.exitCode).toBe(1);
+        expect(`${back.stdout}\n${back.stderr}`).toMatch(/ownership|Windows definition chain/i);
+        expect(manifest(fx.codex)).toEqual(before);
+      } else {
+        expect(back.exitCode).toBe(0);
+      }
       expect((await fx.request(server.runtime, "/api/native-integrations/codex", {
         method: "PUT", body: JSON.stringify({ enabled: false }),
       })).body).toMatchObject({ desiredEnabled: false });
     } finally {
       await fx.stop(server);
     }
-  }, 45_000);
+  }, process.platform === "win32" ? 180_000 : 45_000);
 
   /** RED: release E/S around provider gather; a later OFF can interleave with the in-flight sync. */
   test("B-reduced: a held sync linearizes before a later OFF, which restores native last", async () => {
@@ -346,6 +393,22 @@ describe("WP13 composed toggle acceptance", () => {
             ? ready.body
             : null;
         }, "terminal startup readiness");
+        if (process.platform === "win32") {
+          const before = manifest(fx.codex);
+          const refused = await fx.request(server.runtime, "/api/sync", { method: "POST" });
+          expect(refused.status).toBe(409);
+          expect(refused.body).toMatchObject({ status: "refused", authority: "service-home", ok: false });
+          expect(String(refused.body.message)).toContain("Windows definition chain");
+          expect(manifest(fx.codex)).toEqual(before);
+          expect(fx.lockAllowlist.some(existsSync)).toBe(false);
+          const off = await fx.request(server.runtime, "/api/native-integrations/codex", {
+            method: "PUT", body: JSON.stringify({ enabled: false }),
+          });
+          expect(off.status).toBe(200);
+          expect(off.body).toMatchObject({ desiredEnabled: false, state: "absent" });
+          expect(manifest(fx.codex)).toEqual(before);
+          return;
+        }
         writeFileSync(join(fx.codex, "codexcommander-catalog.json"), JSON.stringify({ models: [] }));
         fx.writeConfig({ providers: { fixture: {
           adapter: "openai-chat", baseUrl: `http://127.0.0.1:${provider.port}/v1`, apiKey: "fixture-key",
@@ -391,7 +454,7 @@ describe("WP13 composed toggle acceptance", () => {
     } finally {
       provider.stop(true);
     }
-  }, 45_000);
+  }, process.platform === "win32" ? 180_000 : 45_000);
 
   /** RED: omit `admitCodexWrite` ownership refusal; start/ensure/P19 create a coordinator or native artifact. */
   test("D-reduced: foreign service-home evidence refuses real CLI and HTTP writers before artifacts", async () => {
@@ -425,7 +488,7 @@ describe("WP13 composed toggle acceptance", () => {
       unlinkSync(join(fx.ccx, "service-state.json"));
       await fx.stop(server);
     }
-  }, 45_000);
+  }, process.platform === "win32" ? 180_000 : 45_000);
 
   /** RED: key N by HOME/USERPROFILE instead of effective uid plus canonical CODEX_HOME; both children acquire. */
   test("E: separate fake homes share the effective-user Codex lock", async () => {
@@ -442,7 +505,26 @@ describe("WP13 composed toggle acceptance", () => {
       stdout: "pipe", stderr: "pipe",
     });
     fx.children.push(holder);
-    await waitFor(() => existsSync(held) ? true : null, "held coordinator lock");
+    const holderOutput = new Response(holder.stdout).text();
+    const holderError = new Response(holder.stderr).text();
+    await Promise.race([
+      waitFor(() => existsSync(held) ? true : null, "held coordinator lock"),
+      holder.exited.then(async exitCode => {
+        const output = await holderOutput;
+        const stderr = await holderError;
+        let outcome: Record<string, unknown> = {};
+        try { outcome = JSON.parse(output); } catch { /* Diagnostics remain fixed fields. */ }
+        throw new Error(JSON.stringify({
+          stage: "holder-exited-before-marker", exitCode,
+          status: ["acquired", "busy", "refused"].includes(String(outcome.status)) ? outcome.status : "unknown",
+          reason: typeof outcome.reason === "string" && /^[a-z_]{1,50}$/.test(outcome.reason) ? outcome.reason : "unknown",
+          ...(typeof outcome.namespaceFailure === "string"
+            && /^(?:lookup-start|lookup-failed|lookup-empty|folder-relative|namespace-create|lock-directory-create|unknown|exit-(?:unknown|-?\d{1,10})|(?:compile|token-environment|registered-folder):[A-Za-z0-9_.]{1,80}:[0-9A-F]{8})$/.test(outcome.namespaceFailure)
+            ? { namespaceFailure: outcome.namespaceFailure } : {}),
+          stderrPresent: stderr.length > 0,
+        }));
+      }),
+    ]);
     const contender = Bun.spawn([process.execPath, lockChildPath], {
       cwd: repoRoot,
       env: { ...fx.env(fx.homeB, fx.userprofileB), CCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 0 }) },
@@ -461,7 +543,7 @@ describe("WP13 composed toggle acceptance", () => {
     expect(existsSync(join(fx.homeB, "native-write-locks"))).toBe(false);
     writeFileSync(release, "release");
     expect(await holder.exited).toBe(0);
-  }, 30_000);
+  }, process.platform === "win32" ? 90_000 : 30_000);
 
   /** RED: delete the durable Grok intent or bypass `shouldSyncGrokOnStart`; startup recreates the fence. */
   test("Grok E2E: route-disabled Grok stays absent across a real startup", async () => {
@@ -488,6 +570,6 @@ describe("WP13 composed toggle acceptance", () => {
       await fx.stop(second);
     }
     expect(await secondOutput).not.toContain("Grok Build config updated");
-  }, 45_000);
+  }, process.platform === "win32" ? 180_000 : 45_000);
 
 });

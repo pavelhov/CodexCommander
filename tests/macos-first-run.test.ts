@@ -148,7 +148,9 @@ describe("macOS first-run preparation (production filesystem paths)", () => {
     expect(snapshot.codexEntries).toEqual(["config.toml"]);
   });
 
-  test("an ENOTDIR Codex home is present-or-unreadable, not missing", () => {
+  // This macOS policy probe relies on POSIX ENOTDIR; Windows reports ENOENT
+  // when lstat traverses a regular file instead of a directory.
+  test.skipIf(process.platform === "win32")("an ENOTDIR Codex home is present-or-unreadable, not missing", () => {
     const codexSentinel = "codex-home-file-sentinel";
     const snapshot = runProductionScenario({ codexHomeFileRaw: codexSentinel });
     expect(snapshot.result).toEqual({ ok: true, changed: true, enableCodexRouting: true });

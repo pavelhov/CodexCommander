@@ -170,7 +170,7 @@ describe("the default hardener is actually reached from a claim", () => {
    * separately in tests/windows-secret-acl.test.ts, where the ACL runner can be
    * observed.
    */
-  test("a shared claim narrows a permissive claim database to 0600", async () => {
+  test.skipIf(process.platform === "win32")("a shared claim narrows a permissive claim database to 0600", async () => {
     const context = fixture();
     const path = nativeMainClaimPath(context);
     mkdirSync(join(context.codexHome), { recursive: true });

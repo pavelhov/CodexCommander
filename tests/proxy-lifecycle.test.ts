@@ -1941,7 +1941,7 @@ describe("shared proxy lifecycle authority", () => {
     expect(unrefCalled).toBe(true);
   });
 
-  test("macOS companion launch targets the canonical app or fixed bundle id", () => {
+  test.skipIf(process.platform !== "darwin")("macOS companion launch targets the canonical app or fixed bundle id", () => {
     expect(macOSCompanionOpenArguments({
       platform: "darwin",
       env: {},

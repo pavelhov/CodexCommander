@@ -1,4 +1,7 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { setDefaultTimeout, describe, expect, test, beforeEach, afterEach } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -978,6 +981,10 @@ describe("codex routing", () => {
   });
 
   test("thread affinity LRU cap evicts the oldest mapping", () => {
+    // Exercise the in-memory LRU without thousands of unrelated durable ACL writes.
+    // A directory makes the optional provenance cache unavailable; restart tests cover persistence.
+    rmSync(join(TEST_DIR, "native-ownership.json"), { force: true });
+    mkdirSync(join(TEST_DIR, "native-ownership.json"));
     const config = makeConfig();
     updateAccountQuota("a", 10);
     updateAccountQuota("b", 10);
@@ -993,6 +1000,10 @@ describe("codex routing", () => {
   });
 
   test("thread affinity LRU cap includes unscoped and native quota scopes", () => {
+    // Exercise the in-memory LRU without thousands of unrelated durable ACL writes.
+    // A directory makes the optional provenance cache unavailable; restart tests cover persistence.
+    rmSync(join(TEST_DIR, "native-ownership.json"), { force: true });
+    mkdirSync(join(TEST_DIR, "native-ownership.json"));
     const config = makeConfig();
     const now = 1_800_000_000_000;
     const threads = Math.floor(CODEX_THREAD_AFFINITY_MAX_ENTRIES / 3) + 1;

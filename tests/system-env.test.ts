@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
+import { basename } from "node:path";
 import type { CodexCommanderConfig } from "../src/types";
 import {
   cleanStaleSystemEnv,
@@ -103,7 +104,7 @@ describe("system environment injection", () => {
     // may add owned ccx-*.md writes — implementation contract; count is no longer fixed).
     const writePaths = writeSpy.mock.calls.map(call => String(call[0]));
     expect(writePaths.some(p => p.includes("claude-env.sh"))).toBe(true);
-    expect(writePaths.some(p => p.endsWith("/.zshrc"))).toBe(true);
+    expect(writePaths.some(p => basename(p) === ".zshrc")).toBe(true);
     expect(writePaths.some(p => p.includes("system-env-port"))).toBe(true);
     const persisted = JSON.parse(trackingFile!);
     expect(persisted).toMatchObject({ schemaVersion: 1, pid: process.pid, port: 4567 });
@@ -143,7 +144,7 @@ describe("system environment injection", () => {
       ...baseConfig,
       claudeCode: { systemEnv: false },
     })).toEqual({ injected: false, reason: "systemEnv disabled" });
-    expect(writeSpy.mock.calls.some(call => String(call[0]).endsWith("/.zshrc"))).toBe(false);
+    expect(writeSpy.mock.calls.some(call => basename(String(call[0])) === ".zshrc")).toBe(false);
   });
 
   test("injectSystemEnv preserves a custom ANTHROPIC_BASE_URL", async () => {

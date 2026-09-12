@@ -83,7 +83,8 @@ export function writePrivateServiceFile(path: string, content: string | Uint8Arr
     writeFileSync(temp, content, { encoding, mode, flag: "wx" });
     // Best effort on filesystems that do not support fsync; failure is surfaced
     // rather than silently declaring an on-disk credential durable.
-    const fd = openSync(temp, "r");
+    // Windows requires a writable handle for FlushFileBuffers (fsync).
+    const fd = openSync(temp, "r+");
     try { fsyncSync(fd); } finally { closeSync(fd); }
     if (existing) {
       const now = assertPrivateServiceFile(path);
