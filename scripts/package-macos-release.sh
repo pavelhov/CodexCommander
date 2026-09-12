@@ -34,6 +34,12 @@ if [[ "$universal" != "0" && "$universal" != "1" ]]; then
   exit 1
 fi
 
+if [[ "$universal" != "1" ]]; then
+  echo "Authenticated macOS updater releases must be universal." >&2
+  exit 1
+fi
+bun "$script_dir/macos-update-packaging.ts" release
+
 if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
   echo "package:macos requires a clean git working tree (no uncommitted or untracked files)." >&2
   echo "Commit your changes, or use bun run build:macos for a local development build." >&2
@@ -121,11 +127,14 @@ else
   architecture_label="${architectures// /-}"
 fi
 
-archive_name="CodexCommander-${package_version}-macos-${architecture_label}.zip"
+archive_name="CodexCommander-${package_version}-${MACOS_BUILD_NUMBER}-macos-${architecture_label}.zip"
 checksum_name="${archive_name}.sha256"
 archive_path="$output_dir/$archive_name"
 checksum_path="$output_dir/$checksum_name"
-rm -f "$archive_path" "$checksum_path"
+if [[ -e "$archive_path" || -e "$checksum_path" ]]; then
+  echo "Refusing to overwrite immutable release assets; allocate a new build number." >&2
+  exit 1
+fi
 
 # ditto rather than zip: it preserves extended attributes and symlinks, so the unpacked
 # bundle stays launchable. Plain zip corrupts the code signature.
@@ -150,6 +159,17 @@ for required_entry in \
     exit 1
   fi
 done
+
+# Verify the actual archive after extraction, including nested framework links and
+# executable permissions. Source-bundle validation alone cannot prove ZIP integrity.
+verification_root="$build_root/archive-verification"
+mkdir -p "$verification_root"
+ditto -x -k "$archive_path" "$verification_root"
+verified_app="$verification_root/CodexCommander.app"
+bun "$script_dir/macos-update-packaging.ts" framework "$verified_app/Contents/Frameworks/Sparkle.framework"
+codesign --verify --deep --strict "$verified_app"
+lipo "$verified_app/Contents/MacOS/CodexCommanderMenuBar" -verify_arch arm64 x86_64
+lipo "$verified_app/Contents/Resources/runtime/node_modules/bun/bin/bun.exe" -verify_arch arm64 x86_64
 
 (
   cd "$output_dir"

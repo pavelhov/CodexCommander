@@ -18,6 +18,12 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
+# Fail configuration mistakes before starting a costly universal build.
+if [[ -n "${MACOS_UPDATE_PUBLIC_KEY_FILE:-}" ]]; then
+  bun "$script_dir/macos-update-packaging.ts" build
+  public_update_key="$(bun "$script_dir/macos-update-packaging.ts" key "$MACOS_UPDATE_PUBLIC_KEY_FILE")"
+fi
+
 die_unsafe_source() {
   echo "Refusing unsafe packaging source ($2): $1" >&2
   exit 1
@@ -234,7 +240,7 @@ esac
 
 mkdir -p "$output_root"
 
-swift_args=(--package-path "$package_dir" -c "$configuration" --product CodexCommanderMenuBar)
+swift_args=(--disable-automatic-resolution -Xlinker -rpath -Xlinker @executable_path/../Frameworks --package-path "$package_dir" -c "$configuration" --product CodexCommanderMenuBar)
 
 if [[ "${UNIVERSAL:-0}" == "1" ]]; then
   developer_dir="$(xcode-select -p 2>/dev/null || true)"
@@ -269,6 +275,47 @@ copy_verified_file "$executable" "$staged_app/Contents/MacOS/CodexCommanderMenuB
   "Swift menu-bar executable" "$bin_dir" "$staging_root"
 copy_verified_file "$package_dir/Info.plist" "$staged_app/Contents/Info.plist" \
   "app/Info.plist" "$repo_root" "$staging_root"
+
+# SwiftPM verifies the pinned binary archive; keep the complete versioned framework.
+framework_source="$package_dir/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+bun "$script_dir/macos-update-packaging.ts" framework "$framework_source"
+mkdir -p "$staged_app/Contents/Frameworks"
+cp -RP "$framework_source" "$staged_app/Contents/Frameworks/"
+framework="$staged_app/Contents/Frameworks/Sparkle.framework"
+bun "$script_dir/macos-update-packaging.ts" framework "$framework"
+for payload in "$framework/Versions/B/Sparkle" "$framework/Versions/B/Autoupdate" \
+  "$framework/Versions/B/Updater.app/Contents/MacOS/Updater" \
+  "$framework/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
+  "$framework/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"; do
+  lipo "$payload" -verify_arch arm64 x86_64
+done
+if [[ -n "${MACOS_PREVIOUS_BUILD_NUMBER:-}" ]]; then
+  # Verify the release ordering with the actual pinned updater comparator as well
+  # as the integer preflight. No alternative comparator governs installation.
+  cat > "$staging_root/compare-build.m" <<'OBJC'
+#import <Foundation/Foundation.h>
+#import <Sparkle/Sparkle.h>
+int main(int argc, const char **argv) {
+  @autoreleasepool {
+    if (argc != 3) return 2;
+    return [[SUStandardVersionComparator defaultComparator]
+      compareVersion:@(argv[1]) toVersion:@(argv[2])] == NSOrderedDescending ? 0 : 1;
+  }
+}
+OBJC
+  xcrun clang -fobjc-arc -framework Foundation -F "$staged_app/Contents/Frameworks" \
+    -framework Sparkle -Wl,-rpath,"$staged_app/Contents/Frameworks" \
+    "$staging_root/compare-build.m" -o "$staging_root/compare-build"
+  if ! "$staging_root/compare-build" "$MACOS_BUILD_NUMBER" "$MACOS_PREVIOUS_BUILD_NUMBER"; then
+    echo "Pinned Sparkle comparator rejected non-increasing release build." >&2
+    exit 1
+  fi
+fi
+if ! otool -l "$executable" | grep -F '@executable_path/../Frameworks' >/dev/null; then
+  echo "Menu executable is missing the bundled framework runtime search path." >&2
+  exit 1
+fi
+
 
 # A release app owns the proxy runtime. Keep the package-shaped layout intact so Bun
 # can resolve the existing TypeScript entrypoints, workers, and dependency graph without
@@ -429,7 +476,7 @@ if [[ ! "$version_core" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 if [[ -n "${MACOS_BUILD_NUMBER:-}" ]]; then
-  if [[ ! "$MACOS_BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+  if [[ ! "$MACOS_BUILD_NUMBER" =~ ^[1-9][0-9]{0,14}$ ]]; then
     echo "MACOS_BUILD_NUMBER must be a positive integer, got '$MACOS_BUILD_NUMBER'" >&2
     exit 1
   fi
@@ -440,6 +487,14 @@ fi
 if [[ ! "$build_version" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
   echo "CFBundleVersion must be one to three integers, got '$build_version'" >&2
   exit 1
+fi
+
+# A development build without a trust anchor cannot initialize Sparkle.
+if [[ -n "${MACOS_UPDATE_PUBLIC_KEY_FILE:-}" ]]; then
+  plutil -insert SUPublicEDKey -string "$public_update_key" "$staged_app/Contents/Info.plist"
+  plutil -replace CodexCommanderUpdaterEnabled -bool YES "$staged_app/Contents/Info.plist"
+else
+  echo "==> Updater disabled: MACOS_UPDATE_PUBLIC_KEY_FILE is not configured (development build)." >&2
 fi
 
 plutil -replace CFBundleShortVersionString -string "$version_core" "$staged_app/Contents/Info.plist"
@@ -502,6 +557,11 @@ iconutil -c icns "$iconset" -o "$staged_app/Contents/Resources/CodexCommander.ic
 # ships and the docs must carry the right-click-Open path rather than pretend
 # otherwise.
 nested_code=(
+  "$framework/Versions/B/Autoupdate"
+  "$framework/Versions/B/Updater.app"
+  "$framework/Versions/B/XPCServices/Downloader.xpc"
+  "$framework/Versions/B/XPCServices/Installer.xpc"
+  "$framework"
   "$runtime_bun"
   "$runtime_root/node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node"
   "$runtime_root/node_modules/@napi-rs/keyring-darwin-x64/keyring.darwin-x64.node"
@@ -510,20 +570,30 @@ nested_code=(
 
 if [[ -n "${MACOS_SIGN_IDENTITY:-}" ]]; then
   for code_path in "${nested_code[@]}"; do
-    codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$code_path"
+    if [[ "$code_path" == "$framework" || "$code_path" == "$framework/"* ]]; then
+      codesign --force --preserve-metadata=entitlements --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$code_path"
+    else
+      codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$code_path"
+    fi
     codesign --verify --strict --verbose=2 "$code_path"
   done
   codesign --force --options runtime --timestamp --sign "$MACOS_SIGN_IDENTITY" "$staged_app"
   echo "==> Signed with $MACOS_SIGN_IDENTITY (hardened runtime)"
 else
   for code_path in "${nested_code[@]}"; do
-    codesign --force --sign - --timestamp=none "$code_path"
+    if [[ "$code_path" == "$framework" || "$code_path" == "$framework/"* ]]; then
+      codesign --force --preserve-metadata=entitlements --sign - --timestamp=none "$code_path"
+    else
+      codesign --force --sign - --timestamp=none "$code_path"
+    fi
     codesign --verify --strict --verbose=2 "$code_path"
   done
   codesign --force --sign - --timestamp=none "$staged_app"
   echo "==> Ad-hoc signed (no MACOS_SIGN_IDENTITY): Gatekeeper will require the" >&2
   echo "    right-click-Open path on first launch." >&2
 fi
+
+codesign --verify --deep --strict "$staged_app"
 
 if [[ -L "$app_bundle" ]]; then
   echo "Refusing to replace '$app_bundle': it is a symlink." >&2

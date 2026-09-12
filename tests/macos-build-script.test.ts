@@ -255,6 +255,13 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(stderr).not.toContain("Refusing to build into");
       const resources = join(inside, "CodexCommander.app", "Contents", "Resources");
       const runtime = join(resources, "runtime");
+      const framework = join(inside, "CodexCommander.app", "Contents", "Frameworks", "Sparkle.framework");
+      expect(existsSync(join(framework, "Versions", "B", "Autoupdate"))).toBe(true);
+      expect(existsSync(join(framework, "XPCServices", "Installer.xpc", "Contents", "MacOS", "Installer"))).toBe(true);
+      expect(Bun.spawnSync(["codesign", "--verify", "--deep", "--strict", join(inside, "CodexCommander.app")]).exitCode).toBe(0);
+      const loads = Bun.spawnSync(["otool", "-l", join(inside, "CodexCommander.app", "Contents", "MacOS", "CodexCommanderMenuBar")]);
+      expect(loads.stdout.toString()).toContain("@executable_path/../Frameworks");
+
       expect(existsSync(join(resources, "CodexCommander.png"))).toBe(true);
       expect(existsSync(join(resources, "LICENSE.txt"))).toBe(true);
       expect(existsSync(join(resources, "THIRD_PARTY_NOTICES.md"))).toBe(true);
@@ -294,6 +301,9 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(versionOutput).toMatch(/codexcommander/i);
       const info = readFileSync(join(inside, "CodexCommander.app", "Contents", "Info.plist"), "utf8");
       expect(info).toContain("<key>CodexCommanderSourceRevision</key>");
+      expect(info).toContain("<key>SURequireSignedFeed</key>");
+      expect(info).toContain("<key>SUVerifyUpdateBeforeExtraction</key>");
+      expect(info).toContain("<key>SUSignedFeedFailureExpirationInterval</key>");
       expect(info).toMatch(/[0-9a-f]{40}(?:-dirty)?/);
     } finally {
       rmSync(untracked, { force: true });
