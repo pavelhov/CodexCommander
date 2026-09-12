@@ -9,6 +9,7 @@ import { createCodexRuntimeFixture } from "./helpers/codex-runtime-fixture";
 import { CCX_SECTION_MARKER } from "../src/codex/injected-marker";
 import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../src/codex/subagent-defaults";
 import { buildGrokManagedBlock } from "../src/grok/inject";
+import { redactSecretString } from "../src/lib/redact";
 
 setDefaultTimeout(30_000);
 
@@ -155,10 +156,16 @@ describe("ccx restore back", () => {
         CI: "1",
       };
 
+      let startupStderr = "";
+      const stderrLimit = 16_384;
       proxy = spawn(process.execPath, ["run", "src/cli/index.ts", "start", "--port", String(port)], {
         cwd: repoRoot,
         env: { ...env, CCX_SERVICE: "1" },
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      proxy.stderr?.setEncoding("utf8");
+      proxy.stderr?.on("data", (chunk: string) => {
+        startupStderr += chunk.slice(0, Math.max(0, stderrLimit - startupStderr.length));
       });
       const originalPidReady = await waitUntil(async () => (await runtimeProxyPid(ccxHome, port)) !== null);
       expect(originalPidReady).toBe(true);
@@ -175,7 +182,27 @@ describe("ccx restore back", () => {
         && existsSync(cachePath)
         && readFileSync(configPath, "utf8").includes(CCX_SECTION_MARKER)
       ));
-      expect(injected).toBe(true);
+      let injectionFailure: string | undefined;
+      if (!injected) {
+        let stderr = startupStderr.length === stderrLimit
+          ? startupStderr.slice(0, Math.max(0, startupStderr.lastIndexOf("\n")))
+          : startupStderr;
+        for (const [name, value] of Object.entries(env)) {
+          if (value && /token|secret|password|credential|api_?key/i.test(name)) {
+            stderr = stderr.replaceAll(value, "[REDACTED]");
+          }
+        }
+        const artifacts = {
+          journal: existsSync(journalPath),
+          profile: existsSync(profilePath),
+          catalog: existsSync(catalogPath),
+          cache: existsSync(cachePath),
+          configMarker: readFileSync(configPath, "utf8").includes(CCX_SECTION_MARKER),
+        };
+        injectionFailure = `startup exit=${proxy.exitCode}, signal=${proxy.signalCode}; artifacts=${JSON.stringify(artifacts)}; `
+          + `stderr=${redactSecretString(stderr).replace(/\x1b\[[0-9;]*m/g, "")}`;
+      }
+      expect(injected, injectionFailure).toBe(true);
       expect(JSON.parse(readFileSync(journalPath, "utf8")).pid).toBe(originalPid);
 
       const restored = await runCliAsync(["restore"], env);
