@@ -5,7 +5,6 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { bundledBunPath } from "../src/lib/bun-runtime";
-import { killProxy } from "../src/lib/process-control";
 import { redactSecretString } from "../src/lib/redact";
 
 const BIN_CCX = join(import.meta.dir, "..", "bin", "ccx.mjs");
@@ -177,6 +176,22 @@ function inspectWindowsProcessIdentity(pid: number): WindowsProcessIdentity | nu
   throw lastError;
 }
 
+function stopOwnedWindowsProcessTree(identity: WindowsProcessIdentity): void {
+  const current = inspectWindowsProcessIdentity(identity.pid);
+  if (!current) return;
+  if (!sameProcess(current, identity)) throw new Error("owned test process identity changed before cleanup");
+  // This is a test-owned Node launcher (or its proven Bun child), not the
+  // current home's proxy. Production killProxy correctly refuses that target.
+  const result = spawnSync("taskkill.exe", ["/PID", String(identity.pid), "/T", "/F"], {
+    stdio: "ignore",
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (result.status !== 0 && sameProcess(inspectWindowsProcessIdentity(identity.pid), identity)) {
+    throw new Error(`owned test process tree did not stop (taskkill exit=${result.status})`);
+  }
+}
+
 function removeTree(path: string): void {
   // Windows can retain the copied executable's image handle briefly after
   // taskkill returns. Retry only transient fixture-cleanup errors, with a cap.
@@ -275,16 +290,20 @@ async function effectiveRuntime(override: string): Promise<string> {
   if (ownedLauncher) {
     try {
       if (sameProcess(inspectWindowsProcessIdentity(ownedLauncher.pid), ownedLauncher)) {
-        killProxy(ownedLauncher.pid);
+        stopOwnedWindowsProcessTree(ownedLauncher);
         launcherTreeStopped = true;
       }
     } catch (error) {
       cleanupErrors.push(`launcher cleanup failed: ${String(error)}`);
     }
   }
-  if (!launcherTreeStopped && launcher && launcherPid && launcher.exitCode === null && launcher.signalCode === null) {
+  if (!ownedLauncher && !launcherTreeStopped && launcher && launcherPid && launcher.exitCode === null && launcher.signalCode === null) {
     try {
-      killProxy(launcherPid);
+      const identity = captureWindowsProcessIdentity(launcherPid);
+      if (launcher.exitCode !== null || launcher.signalCode !== null) {
+        throw new Error("test launcher exited before fallback cleanup identity was captured");
+      }
+      stopOwnedWindowsProcessTree(identity);
       launcherTreeStopped = true;
     } catch (error) {
       cleanupErrors.push(`launcher tree fallback failed: ${String(error)}`);
@@ -296,7 +315,7 @@ async function effectiveRuntime(override: string): Promise<string> {
   if (ownedProxy) {
     try {
       if (sameProcess(inspectWindowsProcessIdentity(ownedProxy.pid), ownedProxy)) {
-        killProxy(ownedProxy.pid);
+        stopOwnedWindowsProcessTree(ownedProxy);
       }
     } catch (error) {
       cleanupErrors.push(`proxy cleanup failed: ${String(error)}`);
