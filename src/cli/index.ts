@@ -49,7 +49,7 @@ if (command === undefined || command === "help" || command === "--help" || comma
   process.exit(0);
 }
 
-if (command !== undefined && command !== "help" && hasHelpFlag(args.slice(1))) {
+if (command !== undefined && command !== "help" && command !== "__macos-update" && hasHelpFlag(args.slice(1))) {
   printSubcommandUsage(command);
   process.exit(0);
 }
@@ -71,7 +71,7 @@ if (command === "ready") {
   readyArgs = parsed.args;
 }
 
-if (command !== "__macos-lifecycle") maybeAutoRestoreCodexShim(command, args);
+if (command !== "__macos-lifecycle" && command !== "__macos-update") maybeAutoRestoreCodexShim(command, args);
 
 const lifecycleLogger: ProxyLifecycleLogger = {
   info: message => console.log(message),
@@ -449,6 +449,10 @@ switch (command) {
         process.exit(1);
     }
     break;
+  }
+  case "__macos-update": {
+    const { runMacOSUpdateHelper } = await import("./macos-update");
+    process.exit(await runMacOSUpdateHelper(args.slice(1)));
   }
   case "__macos-lifecycle": {
     const { runMacOSLifecycleHelper } = await import("./macos-lifecycle");

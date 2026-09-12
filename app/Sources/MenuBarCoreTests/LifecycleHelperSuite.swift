@@ -4,6 +4,23 @@ import MenuBarCore
 
 enum LifecycleHelperSuite {
     static func run(_ t: TestRunner) {
+        t.test("update helper: fixed command and strict finite response") {
+            let id = "c94b8309-5c96-41f1-8dd1-fd57aeab8913"
+            let command = MacOSUpdateCommand(.prepare, transactionId: id, targetBuild: "101", updateAnyway: true)
+            t.equal(try command.arguments(), ["prepare", id, "101", "update-anyway"])
+            let data = Data("{\"schemaVersion\":1,\"action\":\"prepare\",\"status\":\"confirmation-required\",\"transactionId\":\"\(id)\",\"targetBuild\":\"101\",\"active\":2,\"errorCode\":null,\"message\":\"Update lifecycle state verified.\"}".utf8)
+            t.equal(try MacOSUpdateResult.decode(data, command: command, exitCode: 0).active, 2)
+            var rejected = false
+            do { _ = try MacOSUpdateResult.decode(data, command: command, exitCode: 1) } catch { rejected = true }
+            t.expect(rejected, "contradictory exit status must fail")
+            rejected = false
+            do { _ = try MacOSUpdateCommand(.prepare, transactionId: id, targetBuild: "/tmp/app").arguments() } catch { rejected = true }
+            t.expect(rejected, "paths must not become update arguments")
+            rejected = false
+            let extra = Data(String(decoding: data, as: UTF8.self).replacingOccurrences(of: "{", with: "{\"secret\":\"unexpected\",").utf8)
+            do { _ = try MacOSUpdateResult.decode(extra, command: command, exitCode: 0) } catch { rejected = true }
+            t.expect(rejected, "unknown fields must fail")
+        }
         t.test("lifecycle result: setup requirement is optional and preserves unknown strings") {
             let absent = try JSONDecoder().decode(
                 LifecycleCommandResult.self,

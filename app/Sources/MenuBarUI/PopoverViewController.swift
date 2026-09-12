@@ -19,6 +19,9 @@ public final class PopoverViewController: NSViewController {
     private let restoreNativeButton = NSButton()
     private let routeThroughProxyButton = NSButton()
     private let stopAndQuitButton = NSButton()
+    private let updateButton = NSButton()
+    private let updateMessage = NSTextField(wrappingLabelWithString: "")
+    private var updateBlocksLifecycle = false
     private let startupMode = StartupModeView()
     private let headerSeparator = makeSeparator()
     private let operationStatus = OperationStatusView()
@@ -53,6 +56,7 @@ public final class PopoverViewController: NSViewController {
     public var onRouteCodexThroughProxy: (() -> Void)?
     public var onApplyCodexCatalog: (() -> Void)?
     public var onOpenStartupOptions: (() -> Void)?
+    public var onCheckForUpdates: (() -> Void)?
     public var onStopAndQuit: (() -> Void)?
     public var onLaunchAtLoginChange: ((Bool) -> Void)?
     public var onLaunchAtLoginRemediation: ((LaunchAtLoginRemediation) -> Void)?
@@ -141,7 +145,7 @@ public final class PopoverViewController: NSViewController {
         exitActions.alignment = .centerY
 
         footerActions.setViews(
-            [navigationActions, lifecycleActions, codexRouteActions, exitActions],
+            [navigationActions, lifecycleActions, codexRouteActions, updateButton, updateMessage, exitActions],
             in: .top
         )
         footerActions.orientation = .vertical
@@ -191,6 +195,15 @@ public final class PopoverViewController: NSViewController {
     }
 
     private func configureControls() {
+        styleFooterButton(updateButton, title: "Check for Updates…", symbol: "arrow.down.circle")
+        updateButton.target = self
+        updateButton.action = #selector(updateTapped)
+        updateButton.keyEquivalent = "u"
+        updateButton.keyEquivalentModifierMask = [.command, .shift]
+        updateMessage.font = Theme.caption
+        updateMessage.textColor = Theme.muted
+        updateMessage.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2
+        updateMessage.isHidden = true
         styleFooterButton(dashboardButton, title: "Dashboard", symbol: "square.grid.2x2")
         styleFooterButton(logsButton, title: "Logs", symbol: "list.bullet.rectangle")
         styleFooterButton(refreshButton, title: "Refresh", symbol: "arrow.clockwise")
@@ -357,7 +370,7 @@ public final class PopoverViewController: NSViewController {
     }
 
     public func setRestartEnabled(_ enabled: Bool) {
-        restartButton.isEnabled = lifecycleControlsAllowed && enabled
+        restartButton.isEnabled = lifecycleControlsAllowed && enabled && !updateBlocksLifecycle
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
     }
 
@@ -389,11 +402,46 @@ public final class PopoverViewController: NSViewController {
         restoreNativeButton.alphaValue = restoreNativeButton.isEnabled ? 1 : 0.45
         routeThroughProxyButton.alphaValue = routeThroughProxyButton.isEnabled ? 1 : 0.45
         stopAndQuitButton.alphaValue = stopAndQuitButton.isEnabled ? 1 : 0.45
+        applyUpdateLifecycleGuard()
     }
+
+    public func applyUpdatePresentation(title: String, enabled: Bool, blocked: Bool, message: String) {
+        _ = view
+        updateButton.title = title
+        updateButton.setAccessibilityLabel(title)
+        updateButton.isEnabled = enabled
+        updateMessage.stringValue = message
+        updateMessage.isHidden = message.isEmpty
+        updateBlocksLifecycle = blocked
+        if let snapshot { applyGuidance(snapshot) }
+        setLifecycleControlsEnabled(lifecycleControlsAllowed)
+        refreshSize()
+    }
+
+    package var updateActionTitleForTesting: String { updateButton.title }
+    package var updateActionEnabledForTesting: Bool { updateButton.isEnabled }
+    package func clickUpdateForTesting() { updateButton.performClick(nil) }
+
+    private func applyUpdateLifecycleGuard() {
+        guard updateBlocksLifecycle else { return }
+        if snapshot?.state.isRunning != true { lifecycleButton.isEnabled = false }
+        restartButton.isEnabled = false
+        routeThroughProxyButton.isEnabled = false
+        restartButton.alphaValue = 0.45
+        routeThroughProxyButton.alphaValue = 0.45
+    }
+
+    @objc private func updateTapped() { onCheckForUpdates?() }
 
     public func refreshSize() { resize() }
 
     private func applyGuidance(_ snapshot: ProxySnapshot) {
+        guard !updateBlocksLifecycle else {
+            guidanceLabel.isHidden = true
+            commandField.isHidden = true
+            startupOptionsButton.isHidden = true
+            return
+        }
         var guidance: String?
         var command: String?
         var showStartupOptions = false
@@ -450,6 +498,7 @@ public final class PopoverViewController: NSViewController {
             controlsAllowed: lifecycleControlsAllowed
         )
         stopAndQuitButton.alphaValue = stopAndQuitButton.isEnabled ? 1 : 0.45
+        applyUpdateLifecycleGuard()
     }
 
     private func resize() {

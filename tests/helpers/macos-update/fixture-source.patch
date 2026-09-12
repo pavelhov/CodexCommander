@@ -1,0 +1,130 @@
+diff --git a/app/Sources/MenuBarApp/main.swift b/app/Sources/MenuBarApp/main.swift
+index 0229311cb..fe5fcfe01 100644
+--- a/app/Sources/MenuBarApp/main.swift
++++ b/app/Sources/MenuBarApp/main.swift
+@@ -3,45 +3,51 @@ import Darwin
+ import MenuBarCore
+ import MenuBarUI
+
+-func activateExistingMenuApp() {
+-    guard let bundleIdentifier = Bundle.main.bundleIdentifier else { return }
+-    let running = NSRunningApplication.runningApplications(
+-        withBundleIdentifier: bundleIdentifier
+-    )
+-    let currentPID = getpid()
+-    if let existingPID = MenuAppInstancePolicy.existingProcess(
+-        currentPID: currentPID,
+-        runningPIDs: running.map(\.processIdentifier)
+-    ), let existing = running.first(where: { $0.processIdentifier == existingPID }) {
+-        existing.activate(options: [.activateIgnoringOtherApps])
+-    }
++guard let root = Bundle.main.object(forInfoDictionaryKey: "QualificationRoot") as? String,
++      let bundleID = Bundle.main.bundleIdentifier, bundleID.hasPrefix("org.ccx.u6."),
++      root.hasPrefix("/"), URL(fileURLWithPath: root).resolvingSymlinksInPath().path == root,
++      Bundle.main.bundleURL.resolvingSymlinksInPath().path == root + "/installed/CodexCommander.app",
++      let identity = try? String(contentsOfFile: Bundle.main.bundlePath + "/Contents/Resources/runtime/src/identity.mjs"),
++      identity.contains("\"" + bundleID + ".proxy\""), !identity.contains("\"com.codexcommander.proxy\"")
++else { fputs("Refusing non-isolated updater qualification fixture\n", stderr); exit(64) }
++for (key, value) in ["HOME": root + "/home", "CODEX_HOME": root + "/codex", "CODEXCOMMANDER_HOME": root + "/state", "TMPDIR": root + "/tmp", "CCX_DISABLE_COMPANION": "1"] { setenv(key, value, 1) }
++func trace(_ text: String) {
++    let line = "\(Date().timeIntervalSince1970) pid=\(getpid()) build=\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion")!) \(text)\n"
++    let url = URL(fileURLWithPath: root + "/driver.log")
++    if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
++    if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+ }
+-
+ let appInstanceLock: MenuAppInstanceLock?
+-switch MenuAppInstanceLock.acquire() {
+-case .acquired(let lock):
+-    appInstanceLock = lock
+-case .contended:
+-    activateExistingMenuApp()
+-    exit(EXIT_SUCCESS)
+-case .unavailable:
+-    // A protected temp directory should always support the lock. Keep the
+-    // LaunchServices-level duplicate check as a safe fallback if it does not.
+-    activateExistingMenuApp()
+-    let bundleIdentifier = Bundle.main.bundleIdentifier
+-    let hasExisting = bundleIdentifier.map {
+-        NSRunningApplication.runningApplications(withBundleIdentifier: $0)
+-            .contains { $0.processIdentifier != getpid() }
+-    } ?? false
+-    if hasExisting { exit(EXIT_SUCCESS) }
+-    appInstanceLock = nil
+-}
+-
++switch MenuAppInstanceLock.acquire(at: URL(fileURLWithPath: root + "/tmp/fixture.instance.lock")) { case .acquired(let lock): appInstanceLock = lock; case .contended: trace("lock-contended"); exit(2); case .unavailable: trace("lock-unavailable"); exit(3) }
+ let app = NSApplication.shared
+-// .accessory keeps it out of the Dock; LSUIElement in Info.plist does the same for the
+-// packaged bundle, and this covers `swift run` during development.
+ app.setActivationPolicy(.accessory)
+-
+ let delegate = MainActor.assumeIsolated { AppDelegate() }
+ app.delegate = delegate
++func buttons(_ view: NSView) -> [NSButton] { (view as? NSButton).map { [$0] } ?? view.subviews.flatMap { buttons($0) } }
++var lastSnapshot = ""
++let timer = Timer(timeInterval: 0.25, repeats: true) { _ in
++    MainActor.assumeIsolated {
++        let all = app.windows.filter { $0.isVisible }.flatMap { $0.contentView.map { buttons($0) } ?? [] }
++        let snapshot = app.windows.map { "\($0.title):" + ($0.contentView.map { buttons($0).map(\.title).joined(separator: ",") } ?? "") }.joined(separator: "|")
++        if snapshot != lastSnapshot { trace("windows " + snapshot); lastSnapshot = snapshot }
++        let path = root + "/command"
++        guard let command = try? String(contentsOfFile: path).trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty else { return }
++        if command == "check" { try? FileManager.default.removeItem(atPath: path); trace("action check"); delegate.perform(NSSelectorFromString("checkForUpdates:"), with: nil) }
++        else if command == "show" { try? FileManager.default.removeItem(atPath: path); trace("action show"); delegate.perform(NSSelectorFromString("togglePopover")) }
++        else if command.hasPrefix("click:") {
++            let name = String(command.dropFirst(6))
++            if let button = all.first(where: { $0.title == name && $0.isEnabled }) {
++                try? FileManager.default.removeItem(atPath: path); trace("action click " + name); button.performClick(nil)
++            }
++        }
++    }
++}
++RunLoop.main.add(timer, forMode: .common)
++#if arch(arm64)
++trace("launch cpu=arm64")
++#elseif arch(x86_64)
++trace("launch cpu=x86_64")
++#else
++#error("Unsupported qualification architecture")
++#endif
+ app.run()
+diff --git a/app/Sources/MenuBarUI/UpdateSession.swift b/app/Sources/MenuBarUI/UpdateSession.swift
+index 185553fba..1b3a474bc 100644
+--- a/app/Sources/MenuBarUI/UpdateSession.swift
++++ b/app/Sources/MenuBarUI/UpdateSession.swift
+@@ -193,16 +193,24 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
+         changed?()
+     }
+
++    private func qualificationTrace(_ event: String) {
++        guard let root = bundle.object(forInfoDictionaryKey: "QualificationRoot") as? String else { return }
++        let url = URL(fileURLWithPath: root + "/driver.log")
++        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(("callback " + event + "\n").utf8)); try? h.close() }
++    }
++
+     package func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
+                  untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
+         authorizedTermination = driver?.coordinator.phase == .armed && session.blocksLifecycle
++        qualificationTrace("shouldPostponeRelaunch target=\(item.versionString) authorized=\(authorizedTermination)")
+         return !authorizedTermination
+     }
+
+     package func updaterShouldPromptForPermissionToCheck(forUpdates updater: SPUUpdater) -> Bool { false }
+
+     package func bestValidUpdate(in appcast: SUAppcast, for updater: SPUUpdater) -> SUAppcastItem? {
+-        bestValidUpdate(in: appcast.items)
++        qualificationTrace("bestValidUpdate target=\(session.targetBuild ?? "none")")
++        return bestValidUpdate(in: appcast.items)
+     }
+
+     package func bestValidUpdate(in items: [SUAppcastItem]) -> SUAppcastItem? {
+@@ -213,6 +221,7 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
+     }
+
+     package func updaterShouldRelaunchApplication(_ updater: SPUUpdater) -> Bool {
+-        driver?.coordinator.phase == .armed && session.blocksLifecycle
++        qualificationTrace("shouldRelaunch armed=\(driver?.coordinator.phase == .armed) blocked=\(session.blocksLifecycle)")
++        return driver?.coordinator.phase == .armed && session.blocksLifecycle
+     }
+ }

@@ -58,6 +58,8 @@ export function lineNumber(text: string, index: number): number {
 }
 
 function isAllowedEmail(file: string, email: string): boolean {
+  // Public upstream copyright attribution must remain intact in the shipped license.
+  if (file === "THIRD_PARTY_NOTICES.md" && email === ["orsonpeters", "gmail.com"].join("@")) return true;
   if (file === "scripts/privacy-scan.ts" && email === "a@b.com") return true;
   const domain = email.split("@").at(1)?.toLowerCase() ?? "";
   if (domain === "example.test" || domain === "example.com" || domain === "test.com" || domain.endsWith(".test")) {

@@ -42,6 +42,6 @@ let app = NSApplication.shared
 // packaged bundle, and this covers `swift run` during development.
 app.setActivationPolicy(.accessory)
 
-let delegate = AppDelegate()
+let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate
 app.run()

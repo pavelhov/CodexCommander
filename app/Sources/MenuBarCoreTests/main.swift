@@ -14,5 +14,6 @@ PollingSuite.run(runner)
 ActionSuite.run(runner)
 LifecycleHelperSuite.run(runner)
 LaunchAtLoginSuite.run(runner)
+UpdateSuite.run(runner)
 
 exit(runner.summarize())

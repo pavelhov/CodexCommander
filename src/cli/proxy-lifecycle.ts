@@ -1,3 +1,4 @@
+import { assertMacosUpdateAllowsMutation, assertMacosUpdateAllowsRuntimeStart, MacosUpdateTransactionStore, currentMacosUpdateRecoveryId } from "../server/macos-update-transaction";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -33,6 +34,7 @@ import {
 } from "../lib/process-control";
 import {
   diagnoseService,
+  assertMacosUpdateAllowsServiceStart,
   isServiceOwnershipError,
   serviceStartableFromTray,
   startServiceIfInstalled,
@@ -167,6 +169,7 @@ export interface EnsureProxyLifecycleIo extends ExplicitProxyStartIo {
   findLive?: () => Promise<LiveProxy | null>;
   loadConfig?: () => CodexCommanderConfig;
   diagnoseService?: typeof diagnoseService;
+  updateServiceStartDisposition?: typeof assertMacosUpdateAllowsServiceStart;
   startService?: () => boolean;
   armServiceStartDelegation?: (ensureToken: string) => ProxyServiceStartDelegation;
   clearServiceStartDelegation?: (delegation: ProxyServiceStartDelegation) => void;
@@ -215,6 +218,8 @@ export interface StopProxyLifecycleOptions {
 }
 
 export interface StopProxyLifecycleIo {
+  /** Update seal runs only after native routing and supervisor shutdown are verified. */
+  beforeProcessStop?: () => Promise<void>;
   diagnoseService?: typeof diagnoseService;
   stopService?: typeof stopServiceIfInstalled;
   restoreNative?: typeof restoreNativeCodexRoutingForStop;
@@ -292,7 +297,9 @@ async function failExplicitProxyStartWithoutLive(
     >;
   },
 ): Promise<ProxyLifecycleResult> {
-  if (action === "ensure" && !io.rollbackNativeOnFailure) {
+  let sharedMutationAllowed = true;
+  try { assertMacosUpdateAllowsMutation(); } catch { sharedMutationAllowed = false; }
+  if (!sharedMutationAllowed || (action === "ensure" && !io.rollbackNativeOnFailure)) {
     return lifecycleResult(action, failure.state, {
       ok: failure.errorCode === "AUTOSTART_DISABLED",
       changed: preparedChanged,
@@ -911,22 +918,29 @@ export async function ensureProxyLifecycle(
   } finally {
     authority.releaseAll();
   }
-  if (result.state === "running" && options.ensureCompanion !== false) {
+  if (result.state === "running" && options.ensureCompanion !== false && !new MacosUpdateTransactionStore().read()) {
     await (io.ensureCompanion ?? ensureMacOSCompanionApp)().catch(() => false);
   }
   return result;
 }
 
 /** Caller holds proxy-ensure.lock across preparation, spawn, readiness and sync. */
-async function ensureProxyLifecycleUnderLock(
+export async function ensureProxyLifecycleUnderLock(
   options: EnsureProxyLifecycleOptions = {},
   authority: ProxyLifecycleAuthority,
 ): Promise<ProxyLifecycleResult> {
+  let independentDuringUpdate = false;
+  try { independentDuringUpdate = assertMacosUpdateAllowsRuntimeStart() === "independent"; } catch (error) {
+    return lifecycleResult(options.action ?? "ensure", "blocked", { ok: false, message: String(error instanceof Error ? error.message : error), errorCode: "START_FAILED" });
+  }
   const action = options.action ?? "ensure";
   const logger = options.logger ?? quietLogger;
   let io = options.io ?? {};
   const findLive = io.findLive ?? findLiveProxy;
-  const startPreparation: ProxyStartPreparation = action === "start"
+  if (independentDuringUpdate) options = { ...options, replaceStaleRuntime: false };
+  const startPreparation: ProxyStartPreparation = independentDuringUpdate
+    ? { ok: true, changed: false, enableCodexRouting: false }
+    : action === "start"
     ? io.prepareStart?.() ?? { ok: true, changed: false, enableCodexRouting: true }
     : { ok: true, changed: false, enableCodexRouting: action === "restart" };
   if (!startPreparation.ok) {
@@ -1026,7 +1040,7 @@ async function ensureProxyLifecycleUnderLock(
   // Automatic ensure must preserve an intentional native/OFF state, including its
   // inert stale journal. Explicit Start has just cleaned that residue and enabled
   // integration, so it may reconcile even when the pre-mutation snapshot was OFF.
-  if (action !== "start" && codexIntegrationEnabled(config)) {
+  if (!independentDuringUpdate && action !== "start" && codexIntegrationEnabled(config)) {
     try {
       if (io.reconcile) io.reconcile();
       else if (!currentExternalCodexModelProvider()) reconcileJournal();
@@ -1137,6 +1151,7 @@ async function ensureProxyLifecycleUnderLock(
       }
       try {
         if (service?.installed) {
+          (io.updateServiceStartDisposition ?? assertMacosUpdateAllowsServiceStart)();
           await authority.acquireStart();
           serviceStartDelegation = (
             io.armServiceStartDelegation ?? armProxyServiceStartDelegation
@@ -1145,6 +1160,11 @@ async function ensureProxyLifecycleUnderLock(
           const started = (io.startService ?? startServiceIfInstalled)();
           if (!started) throw new Error("Installed service could not be started");
         } else {
+          if (currentMacosUpdateRecoveryId()) {
+            await authority.acquireStart();
+            serviceStartDelegation = (io.armServiceStartDelegation ?? armProxyServiceStartDelegation)(authority.ensure.token);
+            authority.releaseStart();
+          }
           const configuredPort = config.port;
           const port = typeof configuredPort === "number" && configuredPort > 0
             ? configuredPort
@@ -1229,10 +1249,16 @@ async function ensureProxyLifecycleUnderLock(
           errorCode: "START_FAILED",
         });
       }
+      if (readiness !== "ready" && independentDuringUpdate) {
+        return lifecycleResult(action, "failed", { ok: false, changed: startedHere, live, message: "Independent proxy did not become ready; shared routing was preserved.", errorCode: "START_FAILED" });
+      }
       if (readiness !== "ready") {
         logger.warn(`Startup catalog readiness was ${readiness}; retrying through the live proxy.`);
       }
     }
+  if (independentDuringUpdate) {
+    return lifecycleResult(action, "running", { ok: true, changed: startedHere, live, message: "Independent proxy is running; shared routing remains unchanged during the update." });
+  }
   try {
     await authority.acquireStart();
   } catch {
@@ -1502,6 +1528,10 @@ export async function stopProxyLifecycle(
     });
   }
   try {
+    try { new MacosUpdateTransactionStore().recordOff(authority); } catch (error) {
+      const restored = restoreManagedClientState(options.logger ?? quietLogger, io);
+      return lifecycleResult(action, "blocked", { ok: false, changed: restored.changed, message: `Update state could not be recorded. ${restored.ok ? "Native routing was restored." : "Native routing could not be restored."} Open the app for update recovery.`, errorCode: "STOP_FAILED" });
+    }
     return await stopProxyLifecycleUnderAuthority(options, authority);
   } finally {
     authority.releaseAll();
@@ -1605,6 +1635,9 @@ export async function stopProxyLifecycleUnderAuthority(
     }
   };
 
+  try { await io.beforeProcessStop?.(); } catch {
+    return lifecycleResult(action, "blocked", { ok: false, changed, message: "Native routing was restored, but update admission could not be sealed safely.", errorCode: "STOP_FAILED" });
+  }
   const pid = (io.readPid ?? readPid)();
   if (pid) {
     let expectedAttestedTarget: AttestedLiveManagementProxy | undefined;
@@ -1733,6 +1766,12 @@ export async function restoreNativeRoutingLifecycle(
     });
   }
   try {
+    let pending;
+    try { pending = new MacosUpdateTransactionStore().recordNative(authority); } catch {
+      const restored = await restoreNativeRoutingLifecycleUnderLocks(io);
+      return { ...restored, ok: false, message: "Native escape was attempted, but unreadable update state requires recovery in the app.", errorCode: "STOP_FAILED" };
+    }
+    if (pending) return lifecycleResult("restore-native", "blocked", { ok: true, changed: true, message: "Native routing intent saved. Finish Update will preserve this choice." });
     return await restoreNativeRoutingLifecycleUnderLocks(io);
   } finally {
     authority.releaseAll();
@@ -1789,6 +1828,7 @@ export async function restoreBackRoutingLifecycle(
     });
   }
   try {
+    try { assertMacosUpdateAllowsMutation(); } catch (error) { return lifecycleResult("restore-back", "blocked", { ok: false, message: (error as Error).message, errorCode: "START_FAILED" }); }
     return await restoreBackRoutingLifecycleUnderLock(io, authority);
   } finally {
     authority.releaseAll();
@@ -1905,6 +1945,7 @@ export async function restartProxyLifecycle(
     });
   }
   try {
+    try { assertMacosUpdateAllowsMutation(); } catch (error) { return lifecycleResult("restart", "blocked", { ok: false, message: (error as Error).message, errorCode: "START_FAILED" }); }
     const stopped = await stopProxyLifecycleUnderAuthority({
       action: "restart",
       logger: options.logger,

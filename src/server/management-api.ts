@@ -1,3 +1,5 @@
+import { handleMacosUpdateAdmission } from "./macos-update-admission";
+import { assertMacosUpdateAllowsMutation, MacosUpdateTransactionStore } from "./macos-update-transaction";
 import { readFileSync } from "node:fs";
 import type { CodexCommanderConfig } from "../types";
 import { OAuthMutationBusyError } from "../oauth/store";
@@ -87,6 +89,13 @@ export async function handleManagementAPI(
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
     return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
+  }
+  const updateAdmission = handleMacosUpdateAdmission(req, url, config);
+  if (updateAdmission) return updateAdmission;
+  if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && url.pathname !== "/api/stop") {
+    try { assertMacosUpdateAllowsMutation(); } catch (error) {
+      return jsonResponse({ error: (error as Error).message }, 409, req, config);
+    }
   }
   // Management bodies are small JSON (provider names, key ids, settings). Reject oversized
   // payloads before any handler buffers them — the data plane has its own decompression cap.
@@ -235,6 +244,7 @@ export async function handleManagementAPI(
     }
     let prepared: Awaited<ReturnType<NonNullable<typeof lifecycle.prepareShutdown>>>;
     try {
+      if (ownedAuthority) new MacosUpdateTransactionStore().recordOff(ownedAuthority);
       const prepareShutdown = lifecycle.prepareShutdown
         ?? (await import("../cli/proxy-lifecycle")).prepareExplicitProxyShutdown;
       prepared = prepareShutdown({

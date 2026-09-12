@@ -53,3 +53,11 @@ describe("privacy scan coverage", () => {
     }
   });
 });
+
+
+test("allows only the exact public Sparkle copyright attribution in third-party notices", () => {
+  const publicAddress = ["orsonpeters", "gmail.com"].join("@");
+  expect(scanFile("THIRD_PARTY_NOTICES.md", `Copyright (c) 2015 Orson Peters <${publicAddress}>`)).toEqual([]);
+  expect(scanFile("src/anything.ts", publicAddress)).toHaveLength(1);
+  expect(scanFile("THIRD_PARTY_NOTICES.md", ["someone-else", "gmail.com"].join("@"))).toHaveLength(1);
+});
