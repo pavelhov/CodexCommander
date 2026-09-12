@@ -217,3 +217,53 @@ test("a runtime with only one executable dependency inside the bundle is never i
   expect(inspectMacosRuntimeBundleProvenance(external, module).kind).toBe("mixed");
   expect(inspectMacosRuntimeBundleProvenance(external, external).kind).toBe("independent");
 });
+
+test("pre-stop supersession is durable and does not mistake partial stop writes for newer intent",async()=>{
+  for(const changed of [false,true]) for(const retryEdit of [false,true]) {
+    const f=await fixture();let fingerprint=changed?"user-edit":"original";let attempts=0;
+    const io={
+      capture:async()=>({...f.snapshot,routing:"owned" as const,intentFingerprint:"original"}),
+      preparationFingerprint:()=>fingerprint,
+      fence:async()=>({active:0,release(){}}),
+      stop:async()=>{
+        expect(new MacosUpdateTransactionStore(f.store.path).read()?.preparationIntent).toBe(changed || (attempts>0 && retryEdit)?"superseded":"unchanged");
+        fingerprint="stop-write";
+        if(++attempts===1)throw Error("partial stop");
+      },verify:async()=>true,
+    };
+    expect((await prepareMacosUpdate(f.store,f.authority,f.request,io)).status).toBe("blocked");
+    if(retryEdit)fingerprint="edit-before-retry";
+    f.store.resumeInstallationPreparation(f.authority,f.request.transactionId);
+    expect((await prepareMacosUpdate(f.store,f.authority,f.request,io)).status).toBe("prepared");
+    expect(f.store.read()?.preparationIntent).toBe(changed || retryEdit?"superseded":"unchanged");
+    expect(f.store.read()?.postPreparationFingerprint).toBe("stop-write");
+    f.authority.releaseAll();
+  }
+});
+
+test("schema v1 accepts legacy records and strictly validates optional preparation and cancellation markers",async()=>{
+  const f=await fixture();
+  const legacy=f.store.begin(f.authority,f.request,f.snapshot);
+  expect(f.store.read()).toEqual(legacy);
+  for(const extra of [{preparationIntent:"other"},{preparationIntent:null},{confirmationCancelled:false},{confirmationCancelled:true},{unexpected:true}]) {
+    writeFileSync(f.store.path,JSON.stringify({...legacy,...extra}),{mode:0o600});
+    expect(()=>f.store.read()).toThrow();
+  }
+  writeFileSync(f.store.path,JSON.stringify(legacy),{mode:0o600});
+  f.store.transition(f.authority,f.request.transactionId,"prepared","stop-write");
+  f.store.resumeInstallationPreparation(f.authority,f.request.transactionId);
+  expect(f.store.recordPreparationIntent(f.authority,f.request.transactionId,"new-baseline").preparationIntent).toBe("superseded");
+  f.authority.releaseAll();
+});
+
+test("a crash without a post-stop baseline conservatively supersedes restoration on retry",async()=>{
+  const f=await fixture();
+  f.store.begin(f.authority,f.request,{...f.snapshot,intentFingerprint:"original"});
+  f.store.recordPreparationIntent(f.authority,f.request.transactionId,"original");
+  const result=await prepareMacosUpdate(f.store,f.authority,f.request,{
+    capture:async()=>{throw Error("must retain original");},preparationFingerprint:()=>"possibly-stop-write",
+    fence:async()=>({active:0,release(){}}),stop:async()=>{},verify:async()=>true,
+  });
+  expect(result.status).toBe("prepared");expect(result.transaction.preparationIntent).toBe("superseded");
+  f.authority.releaseAll();
+});

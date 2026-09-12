@@ -170,7 +170,7 @@ export function productionMacOSUpdatePreparation(source: TrustedMacOSUpdateSourc
 export function macOSUpdateResumeIntent(transaction: MacosUpdateTransaction, currentFingerprint: string): {running:boolean;restoreOwned:boolean;supervised:boolean} {
   return {
     running:transaction.original.running && transaction.latestIntent?.running !== false,
-    restoreOwned:transaction.original.routing === "owned" && transaction.latestIntent?.routing !== "native" && transaction.postPreparationFingerprint !== null && transaction.postPreparationFingerprint === currentFingerprint,
+    restoreOwned:transaction.preparationIntent !== "superseded" && transaction.original.routing === "owned" && transaction.latestIntent?.routing !== "native" && transaction.postPreparationFingerprint !== null && transaction.postPreparationFingerprint === currentFingerprint,
     supervised:transaction.original.supervision === "launchd",
   };
 }
@@ -180,6 +180,7 @@ export interface MacOSUpdateHelperIo {
   authority?: typeof acquireProxyLifecycleAuthority;
   preparation?: (source:TrustedMacOSUpdateSource, authority:ProxyLifecycleAuthority) => MacosUpdatePreparationIo;
   intentFingerprint?: () => string;
+  restoreNative?: typeof restoreNativeCodexRoutingForStop;
   resume?: (transaction:MacosUpdateTransaction, authority:ProxyLifecycleAuthority, restoreOwned:boolean) => Promise<boolean>;
 }
 export async function resumeProduction(transaction:MacosUpdateTransaction, authority:ProxyLifecycleAuthority, restoreOwned:boolean, io: {
@@ -234,14 +235,24 @@ export async function performMacOSUpdateCommand(command:MacOSUpdateCommand, io:M
     const intentFingerprint = io.intentFingerprint ?? macOSUpdateIntentFingerprint;
     let transaction = store.read();
     if (command.action === "record-off") { transaction = store.recordOff(authority); return result(command.action,transaction ? "finish-required" : "idle",transaction); }
-    if (command.action === "status") return result(command.action,transaction ? transaction.phase === "prepared" ? "prepared" : transaction.phase === "armed" ? "armed" : "finish-required" : "idle",transaction);
+    if (command.action === "status") {
+      let status: MacOSUpdateStatus = "idle";
+      if (transaction) {
+        switch (transaction.phase) {
+          case "prepared": status = "prepared"; break;
+          case "armed": status = "armed"; break;
+          default: status = "finish-required";
+        }
+      }
+      return result(command.action,status,transaction);
+    }
     if (command.action === "prepare") {
       if (transaction && (transaction.source.bundlePath !== source.bundlePath || transaction.source.build !== source.build || transaction.original.sourceFingerprint !== source.fingerprint)) return result(command.action,"finish-required",transaction);
       if (transaction && ["armed","uncertain"].includes(transaction.phase)) {
         if (transaction.transactionId !== command.transactionId || transaction.target.build !== command.targetBuild) throw new MacosUpdateBlockedError();
         transaction = store.resumeInstallationPreparation(authority,transaction.transactionId);
       }
-      const prepared = await prepareMacosUpdate(store,authority,{transactionId:command.transactionId!,source:{bundlePath:source.bundlePath,build:source.build},target:{bundlePath:source.bundlePath,build:command.targetBuild!},updateAnyway:command.updateAnyway},preparation);
+      const prepared = await prepareMacosUpdate(store,authority,{transactionId:command.transactionId!,source:{bundlePath:source.bundlePath,build:source.build},target:{bundlePath:source.bundlePath,build:command.targetBuild!},updateAnyway:command.updateAnyway},{...preparation,preparationFingerprint:preparation.preparationFingerprint ?? intentFingerprint});
       if (prepared.status === "prepared" && prepared.transaction.postPreparationFingerprint === null) store.recordPreparationFingerprint(authority,prepared.transaction.transactionId,intentFingerprint());
       return result(command.action,prepared.status,prepared.transaction,prepared.active);
     }
@@ -254,11 +265,9 @@ export async function performMacOSUpdateCommand(command:MacOSUpdateCommand, io:M
     }
     if (command.action === "cancel") {
       if (transaction.installerMayBeArmed || source.bundlePath !== transaction.source.bundlePath || source.build !== transaction.source.build || source.fingerprint !== transaction.original.sourceFingerprint) return result(command.action,"finish-required",transaction);
-      // Confirmation has made no physical changes and releasing admission does not interrupt turns.
-      if (transaction.phase === "confirmation-required") {
-        store.cancelBeforeArm(authority,transaction.transactionId);
-        store.completeRecovery(authority,transaction.transactionId);
-        return result(command.action,"recovered");
+      // Initial confirmation has made no physical changes; a retry after stop still needs verification.
+      if (transaction.phase === "confirmation-required" && transaction.preparationIntent === undefined && transaction.postPreparationFingerprint === null) {
+        transaction = store.cancelBeforeArm(authority,transaction.transactionId);
       }
       if (transaction.phase !== "recovering") {
         if (!await preparation.verify(transaction)) return result(command.action,"blocked",transaction);
@@ -268,6 +277,16 @@ export async function performMacOSUpdateCommand(command:MacOSUpdateCommand, io:M
       const cancelledRecovery = transaction.phase === "recovering" && !transaction.installerMayBeArmed && source.bundlePath === transaction.source.bundlePath && source.build === transaction.source.build && source.fingerprint === transaction.original.sourceFingerprint;
       if (!cancelledRecovery && (!transaction.original.sourceFingerprint || recoveryDisposition({...transaction.source,fingerprint:transaction.original.sourceFingerprint},transaction.target.build,source) !== "replacement-completed")) return result(command.action,"finish-required",transaction);
       if (transaction.phase !== "recovering") transaction = store.beginVerifiedRecovery(authority,transaction.transactionId,"replacement-completed");
+    }
+    if (transaction.confirmationCancelled) {
+      const published = withMacosUpdateRecovery(authority,transaction.transactionId,() => {
+        if (transaction!.latestIntent?.routing !== "native") return true;
+        try { return (io.restoreNative ?? restoreNativeCodexRoutingForStop)().success; }
+        catch { return false; }
+      },store);
+      if (!published) return result(command.action,"blocked",transaction);
+      store.completeRecovery(authority,transaction.transactionId);
+      return result(command.action,"recovered");
     }
     const {restoreOwned} = macOSUpdateResumeIntent(transaction,intentFingerprint());
     const resumed = await withMacosUpdateRecovery(authority,transaction.transactionId,() => (io.resume ?? resumeProduction)(transaction!,authority,restoreOwned),store);

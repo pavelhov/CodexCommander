@@ -31,7 +31,12 @@ export interface MacosUpdateRequest {
 }
 export interface MacosUpdateTransaction {
   schemaVersion: 1;
+  /** Settings after a completed or failed stop; compared before retries and semantic recovery. */
   postPreparationFingerprint: string | null;
+  /** Recorded before the first stop, whose own config writes must not count as user edits. */
+  preparationIntent?: "unchanged" | "superseded";
+  /** Later cancelled confirmation before any lifecycle changes; retry routing publication only. */
+  confirmationCancelled?: true;
   transactionId: string;
   source: MacosUpdateBundleIdentity;
   target: MacosUpdateBundleIdentity;
@@ -67,7 +72,10 @@ function snapshot(value: unknown): value is MacosUpdateSemanticSnapshot {
     && (value.supervisorFingerprint === null || bounded(value.supervisorFingerprint));
 }
 function parse(value: unknown): MacosUpdateTransaction {
-  if (!exact(value, ["schemaVersion", "postPreparationFingerprint", "transactionId", "source", "target", "phase", "generation", "installerMayBeArmed", "interruptionAuthorized", "original", "latestIntent"])
+  if (!value || typeof value !== "object") throw new MacosUpdateBlockedError();
+  if (!exact(value, ["schemaVersion", "postPreparationFingerprint", "transactionId", "source", "target", "phase", "generation", "installerMayBeArmed", "interruptionAuthorized", "original", "latestIntent", ...("preparationIntent" in value ? ["preparationIntent"] : []), ...("confirmationCancelled" in value ? ["confirmationCancelled"] : [])])
+    || ("preparationIntent" in value && value.preparationIntent !== "unchanged" && value.preparationIntent !== "superseded")
+    || ("confirmationCancelled" in value && (value.confirmationCancelled !== true || value.phase !== "recovering" || value.installerMayBeArmed !== false || "preparationIntent" in value || value.postPreparationFingerprint !== null))
     || !(value.postPreparationFingerprint === null || bounded(value.postPreparationFingerprint)) || value.schemaVersion !== 1 || !bounded(value.transactionId) || !identity(value.source) || !identity(value.target)
     || value.source.bundlePath !== value.target.bundlePath || BigInt(value.target.build) <= BigInt(value.source.build)
     || typeof value.interruptionAuthorized !== "boolean" || typeof value.installerMayBeArmed !== "boolean" || !phases.includes(value.phase as MacosUpdatePhase) || !integer(value.generation) || !snapshot(value.original)
@@ -168,7 +176,7 @@ export class MacosUpdateTransactionStore {
     if ((phase === "recovering" && prior.installerMayBeArmed) || !allowed[prior.phase].includes(phase))
       throw new MacosUpdateBlockedError();
     return this.write(authority, {
-      ...prior, phase, postPreparationFingerprint: phase === "prepared" && preparationFingerprint !== undefined && prior.postPreparationFingerprint === null ? preparationFingerprint : prior.postPreparationFingerprint, installerMayBeArmed: prior.installerMayBeArmed || phase === "armed", generation: prior.generation + 1
+      ...prior, phase, postPreparationFingerprint: (phase === "prepared" || phase === "uncertain") && preparationFingerprint !== undefined ? preparationFingerprint : prior.postPreparationFingerprint, installerMayBeArmed: prior.installerMayBeArmed || phase === "armed", generation: prior.generation + 1
     });
   }
   require(id: string): MacosUpdateTransaction {
@@ -184,6 +192,17 @@ export class MacosUpdateTransactionStore {
     return this.write(authority, {
       ...prior, interruptionAuthorized: true, generation: prior.generation + 1
     });
+  }
+  recordPreparationIntent(authority: ProxyLifecycleAuthority, id: string, fingerprint?: string): MacosUpdateTransaction {
+    const prior = this.require(id);
+    if (prior.phase !== "preparing" || (fingerprint !== undefined && !bounded(fingerprint))) throw new MacosUpdateBlockedError();
+    const baseline = prior.postPreparationFingerprint ?? prior.original.intentFingerprint;
+    // A crash during stop leaves no trustworthy post-stop baseline. Prefer preserving
+    // current settings to re-enabling the captured route in that uncertain case.
+    const incompleteStop = prior.preparationIntent !== undefined && prior.postPreparationFingerprint === null;
+    const superseded = prior.preparationIntent === "superseded" || incompleteStop
+      || (baseline !== undefined && fingerprint !== undefined && baseline !== fingerprint);
+    return this.write(authority, {...prior, preparationIntent: superseded ? "superseded" : "unchanged", generation: prior.generation + 1});
   }
   recordPreparationFingerprint(authority: ProxyLifecycleAuthority, id: string, fingerprint: string): MacosUpdateTransaction {
     const prior = this.require(id);
@@ -212,10 +231,10 @@ export class MacosUpdateTransactionStore {
   }
   /** Does not remove exclusion. Caller must restore semantic state before completing recovery. */
   cancelBeforeArm(authority: ProxyLifecycleAuthority, id: string): MacosUpdateTransaction {
-    if (this.require(id).installerMayBeArmed)
-      throw new MacosUpdateBlockedError();
     const prior = this.require(id);
-    return this.write(authority, {...prior, phase: "recovering", generation: prior.generation + 1});
+    if (prior.installerMayBeArmed)
+      throw new MacosUpdateBlockedError();
+    return this.write(authority, {...prior, ...(prior.phase === "confirmation-required" && prior.preparationIntent === undefined && prior.postPreparationFingerprint === null ? {confirmationCancelled: true as const} : {}), phase: "recovering", generation: prior.generation + 1});
   }
   /** U3 supplies installer proof; absence, age, helper exit and errors are never proof. */
   beginVerifiedRecovery(authority: ProxyLifecycleAuthority, id: string, proof: "replacement-completed" | "installer-disarmed"): MacosUpdateTransaction {
@@ -323,6 +342,7 @@ export async function prepareMacosUpdate(store: MacosUpdateTransactionStore, aut
   if (transaction.phase === "confirmation-required")
     transaction = store.transition(authority, transaction.transactionId, "preparing");
   let fence: Awaited<ReturnType<MacosUpdatePreparationIo["fence"]>> | undefined;
+  let stopAttempted = false;
   try {
     fence = await io.fence(transaction);
     if (!Number.isSafeInteger(fence.active) || fence.active < 0)
@@ -335,6 +355,8 @@ export async function prepareMacosUpdate(store: MacosUpdateTransactionStore, aut
     }
     if (request.updateAnyway === true)
       transaction = store.authorizeInterruption(authority, transaction.transactionId);
+    transaction = store.recordPreparationIntent(authority, transaction.transactionId, io.preparationFingerprint?.());
+    stopAttempted = true;
     await io.stop(transaction, authority);
     if (!await io.verify(transaction))
       throw new MacosUpdateBlockedError();
@@ -347,7 +369,9 @@ export async function prepareMacosUpdate(store: MacosUpdateTransactionStore, aut
   }
   catch {
     await authority.acquireStart();
-    transaction = store.transition(authority, transaction.transactionId, "uncertain");
+    let fingerprint: string | undefined;
+    try { if (stopAttempted) fingerprint = io.preparationFingerprint?.(); } catch { /* retain conservative recovery */ }
+    transaction = store.transition(authority, transaction.transactionId, "uncertain", fingerprint);
     return {
       status: "blocked", transaction, active: 0
     };

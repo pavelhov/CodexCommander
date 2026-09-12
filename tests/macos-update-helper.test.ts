@@ -18,7 +18,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, cpSync, copyFileSync, sy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performMacOSUpdateCommand, trustedMacOSUpdateSource, type MacOSUpdateHelperIo } from "../src/cli/macos-update";
-import { MacosUpdateTransactionStore, type MacosUpdateSemanticSnapshot } from "../src/server/macos-update-transaction";
+import { MacosUpdateTransactionStore, assertMacosUpdateAllowsMutation, type MacosUpdateSemanticSnapshot } from "../src/server/macos-update-transaction";
 import { acquireProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
 const temporary: string[] = [];
 afterEach(() => { for (const root of temporary.splice(0)) rmSync(root,{recursive:true,force:true}); });
@@ -149,7 +149,7 @@ test("deferred native routing applies before independent service/runtime returns
 });
 
 test("deferred native recovery publishes OFF and preserves a newer external route in an isolated home",async()=>{
-  for (const external of [false,true]) {
+  for (const external of [false,true]) for (const confirmation of [false,true]) {
     const root=mkdtempSync(join(tmpdir(),"ccx-update-native-recovery-"));temporary.push(root);
     for(const directory of ["home","codex","state","tmp"])mkdirSync(join(root,directory));
     const script=`
@@ -166,8 +166,8 @@ test("deferred native recovery publishes OFF and preserves a newer external rout
       const acquire=options=>acquireProxyLifecycleAuthority({...options,acquireEnsureLock:async()=>({token:'E',release(){}}),acquireStartLock:async()=>({token:'S',release(){}})});
       const a=await acquire({includeStart:true}),store=new MacosUpdateTransactionStore(),id=${JSON.stringify(id)};
       store.begin(a,{transactionId:id,source:{bundlePath:'/Applications/Test.app',build:'100'},target:{bundlePath:'/Applications/Test.app',build:'101'}},{running:false,routing:'owned',supervision:'none',process:null,supervisorFingerprint:null,sourceFingerprint:'old'});
-      store.transition(a,id,'prepared','prepared');store.transition(a,id,'armed');store.recordNative(a);a.releaseAll();
-      const result=await performMacOSUpdateCommand({action:'reconcile'},{store,source:()=>({bundlePath:'/Applications/Test.app',build:'101',fingerprint:'new'}),authority:acquire,intentFingerprint:()=>'prepared',resume:(t,a,r)=>resumeProduction(t,a,r,{service:()=>({kind:'absent',fingerprint:null,active:false}),live:async()=>({pid:424242,port:10100,source:'runtime'}),inspect:async()=>({pid:424242,bundlePath:null,fingerprint:'independent'}),stop:async()=>{throw Error('Independent runtime must not stop');}})});
+      if(${confirmation})store.transition(a,id,'confirmation-required');else {store.transition(a,id,'prepared','prepared');store.transition(a,id,'armed');}store.recordNative(a);a.releaseAll();
+      const result=await performMacOSUpdateCommand({action:${confirmation}?'cancel':'reconcile',transactionId:id},{store,source:()=>({bundlePath:'/Applications/Test.app',build:${confirmation}?'100':'101',fingerprint:${confirmation}?'old':'new'}),authority:acquire,intentFingerprint:()=>'prepared',resume:(t,a,r)=>resumeProduction(t,a,r,{service:()=>({kind:'absent',fingerprint:null,active:false}),live:async()=>({pid:424242,port:10100,source:'runtime'}),inspect:async()=>({pid:424242,bundlePath:null,fingerprint:'independent'}),stop:async()=>{throw Error('Independent runtime must not stop');}})});
       console.log(JSON.stringify({status:result.status,pending:store.read()!==null,on:JSON.parse(readFileSync(getConfigPath(),'utf8')).clientIntegrations?.codex!==false,route:readFileSync(CODEX_CONFIG_PATH,'utf8'),foreign}));
     `;
     const child=Bun.spawn([process.execPath,"--eval",script],{env:{...process.env,HOME:join(root,"home"),CODEX_HOME:join(root,"codex"),CODEXCOMMANDER_HOME:join(root,"state"),TMPDIR:join(root,"tmp")},stdout:"pipe",stderr:"pipe"});
@@ -177,3 +177,67 @@ test("deferred native recovery publishes OFF and preserves a newer external rout
     if(external)expect(output.route).toBe(output.foreign);else expect(output.route).not.toContain("openai_base_url");
   }
 },60000);
+
+test("Later publishes deferred native intent under authority and retries without stopping or resuming",async()=>{
+  for (const failure of ["none","false","throw"] as const) for (const retry of ["cancel","reconcile"] as const) {
+    const f=fixture();f.setActive(1);
+    expect((await performMacOSUpdateCommand(prepare,f.io)).status).toBe("confirmation-required");
+    const authority=await f.io.authority!({includeStart:true});f.store.recordNative(authority);authority.releaseAll();
+    let attempts=0;
+    f.io.restoreNative=()=>{
+      attempts++;
+      const record=f.store.read()!;
+      expect(record.phase).toBe("recovering");expect(record.confirmationCancelled).toBe(true);
+      expect(()=>assertMacosUpdateAllowsMutation(f.store)).not.toThrow();
+      if(attempts===1 && failure==="throw")throw Error("publication failed");
+      const success=attempts>1 || failure==="none";
+      return {success,changed:success,desiredChanged:success,configChanged:success,message:"fixture"};
+    };
+    expect((await performMacOSUpdateCommand({action:"cancel",transactionId:id},f.io)).status).toBe(failure==="none"?"recovered":"blocked");
+    if(failure!=="none") {
+      expect(f.store.read()?.latestIntent?.routing).toBe("native");
+      expect(()=>assertMacosUpdateAllowsMutation(f.store)).toThrow();
+      // Simulate a fresh helper reading the durable confirmation cancellation marker.
+      f.io.store=new MacosUpdateTransactionStore(f.store.path);
+      expect((await performMacOSUpdateCommand({action:retry,transactionId:id},f.io)).status).toBe("recovered");
+    }
+    expect(attempts).toBe(failure==="none"?1:2);
+    expect(f.stopped).toBe(0);expect(f.resumed).toEqual([]);expect(f.store.read()).toBeNull();
+  }
+});
+
+test("settings changed before the first stop supersede owned restoration on initial and confirmation preparation",async()=>{
+  for(const confirmation of [false,true]) for(const changed of [false,true]) {
+    const f=fixture();
+    if(confirmation) {
+      f.setActive(1);
+      expect((await performMacOSUpdateCommand(prepare,f.io)).status).toBe("confirmation-required");
+      if(changed)f.setIntent();
+    } else if(changed) {
+      const preparation=f.io.preparation!;
+      f.io.preparation=(source,authority)=>{
+        const io=preparation(source,authority);
+        return {...io,fence:async(transaction)=>{f.setIntent();return io.fence(transaction);}};
+      };
+    }
+    expect((await performMacOSUpdateCommand({...prepare,updateAnyway:confirmation},f.io)).status).toBe("prepared");
+    expect(f.store.read()?.preparationIntent).toBe(changed?"superseded":"unchanged");
+    expect(f.store.read()?.postPreparationFingerprint).toBe("after");
+    f.replace();
+    expect((await performMacOSUpdateCommand({action:"reconcile"},f.io)).status).toBe("recovered");
+    expect(f.resumed).toEqual([!changed]);
+  }
+});
+
+test("confirmation reached after a partial stop does not become a routing-only cancellation",async()=>{
+  const f=fixture();const preparation=f.io.preparation!;let first=true;
+  f.io.preparation=(source,authority)=>{
+    const io=preparation(source,authority);
+    return {...io,stop:async(transaction,held)=>{await io.stop(transaction,held);if(first){first=false;throw Error("partial stop");}}};
+  };
+  expect((await performMacOSUpdateCommand(prepare,f.io)).status).toBe("blocked");
+  f.setActive(1);
+  expect((await performMacOSUpdateCommand(prepare,f.io)).status).toBe("confirmation-required");
+  expect((await performMacOSUpdateCommand({action:"cancel",transactionId:id},f.io)).status).toBe("recovered");
+  expect(f.stopped).toBe(1);expect(f.resumed).toEqual([true]);expect(f.store.read()).toBeNull();
+});
