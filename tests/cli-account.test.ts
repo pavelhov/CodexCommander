@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { PassThrough, Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { cmdAccount, classifyAccount, formatAccountTable, type AccountDeps } from "../src/cli/account";
 import type { AccountStdin } from "../src/cli/account-api";
 import { printSubcommandUsage } from "../src/cli/help";
@@ -404,7 +405,7 @@ function stdinFrom(value: string, isTTY = false): AccountStdin {
 
 test("the login URL reaches piped stdout before the polling window (#1007)", async () => {
   const child = Bun.spawn({
-    cmd: [process.execPath, "run", new URL("./helpers/account-login-pipe-child.ts", import.meta.url).pathname],
+    cmd: [process.execPath, "run", fileURLToPath(new URL("./helpers/account-login-pipe-child.ts", import.meta.url))],
     stdout: "pipe",
     stderr: "pipe",
   });
