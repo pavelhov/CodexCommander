@@ -61,6 +61,17 @@ app can start. A user-managed external Codex provider is also preserved. For rel
 use the universal Intel + Apple silicon archive from [GitHub Releases](https://github.com/pavelhov/CodexCommander/releases),
 not a thin development `.app` from a source checkout.
 
+v0.1.6 predates in-app updates. When the first updater-enabled release is published, existing users
+will need to install it manually once. Its archive name will include both version and build:
+`CodexCommander-<version>-<build>-macos-universal.zip`, with a matching `.zip.sha256` file. The existing
+v0.1.6 archive remains `CodexCommander-0.1.6-macos-universal.zip`.
+
+After that bootstrap, **Check for Updates…** will offer compatible stable releases. Automatic checks
+are opt-in; installation requires an explicit choice and pauses the proxy before downloading through
+installation. See [App updates](/guides/macos-menu-bar/#app-updates-upcoming) for active-request
+choices and recovery. These previews are unnotarized; follow the
+[manual installation steps](/guides/macos-menu-bar/#install) for macOS first-launch prompts.
+
 ## Development mode
 
 Use separate proxy and dashboard processes while editing the UI:

@@ -85,7 +85,7 @@ Invariants:
 - The only user-facing command names are `codexcommander` and `ccx`.
 - The plain-Node launcher owns `CCX_BUN_PATH` selection before Bun can load project dotenv, and stamps
   the chosen source/path pair. Durable service/shim paths bake that already-selected executable.
-- Current installation docs require Bun and describe source-checkout execution only.
+- Source/headless installation requires Bun; the macOS guide also documents the universal preview app.
 
 ## Publishing
 
@@ -151,13 +151,15 @@ Maintainer configuration (no production update key is supplied by this repositor
   `macos-appcast.ts` pins SHA-256 hashes of `generate_appcast` and `sign_update`.
   A tool upgrade needs reviewed hash/dependency updates together.
 - `SPARKLE_PRIVATE_KEY_FILE`: mode 0600 (or stricter), physical, single-link
-  private key outside the repository. The generator reads it through stdin,
+  private key outside both the repository and the release asset directory. Keep it in durable
+  maintainer secret storage, never among files staged for upload. The generator reads it through stdin,
   never argv or logs; it does not import keys into Keychain. Ignored `.tmp`
   permits disposable qualification fixtures only, never a production anchor.
 
 Local builds without a public key explicitly set
 `CodexCommanderUpdaterEnabled=false`; the UI must not initialize Sparkle for
-these builds. Configured builds require an explicit integer build. Release
+these builds. Unkeyed development builds default to integer build `1` and still support normal
+Start. Configured builds require an explicit positive integer build. Release
 packaging requires the public key, build inventory baseline, a universal build,
 and the existing clean working tree gate. The embedded policy is
 `SURequireSignedFeed=true`, `SUVerifyUpdateBeforeExtraction=true`,
@@ -167,7 +169,8 @@ There is no expiry-based unsigned-feed fallback or unattended installation.
 Prepare a release locally with these variables set, then run
 `bun run package:macos`. Keep a dedicated physical asset directory containing
 all still-supported immutable ZIPs and the authenticated previous `appcast.xml`.
-Add the final new ZIP and optional same-stem Markdown release notes. Set
+The new archive is `CodexCommander-<version>-<build>-macos-universal.zip`, with a
+matching `.zip.sha256` checksum. Add the final new ZIP and optional same-stem Markdown release notes. Set
 `RELEASE_VERSION` to the stable display version and run:
 
 ```bash
@@ -198,3 +201,11 @@ inventory aids, not substitutes for Ed25519 signatures. End-to-end current/new
 installed-app tests and explicit distribution/key-handling security review in
 the PR remain release gates; local asset generation is not a claim of those
 qualifications.
+
+The first updater-enabled release remains pending. v0.1.6 has no updater, so users
+must manually install that first release once; its existing download keeps the
+old `CodexCommander-0.1.6-macos-universal.zip` name. At release cutover, update any
+pinned bootstrap links to the actual published version/build, and remove the
+upcoming qualifier from the public app-update guide only after qualification and
+publication. Do not advertise the fixed feed as available before the complete
+first release is published.
