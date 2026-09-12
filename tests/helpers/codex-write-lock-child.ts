@@ -61,9 +61,29 @@ const result = await withCodexWriteLock(
   },
 );
 
+// Return only fixed diagnostic codes; refusal messages may otherwise contain paths.
+function namespaceFailureCode(message: string): string {
+  const detail = message.match(/^Windows effective-account lookup failed \((compile|token-environment|registered-folder), ([A-Za-z0-9_.]{1,80}), HRESULT 0x([0-9A-F]{8})\)\.$/);
+  if (detail) return `${detail[1]}:${detail[2]}:${detail[3]}`;
+  const exit = message.match(/^Windows effective-account lookup failed \(exit (unknown|-?\d{1,10})\)\.$/);
+  if (exit) return `exit-${exit[1]}`;
+  const known: Record<string, string> = {
+    "Windows effective-account lookup could not start.": "lookup-start",
+    "Windows effective-account lookup failed.": "lookup-failed",
+    "Windows effective-account lookup returned an empty value.": "lookup-empty",
+    "Windows LocalAppData resolution returned a relative path.": "folder-relative",
+    "The Windows coordinator namespace cannot be created.": "namespace-create",
+    "The Windows coordinator lock directory cannot be created.": "lock-directory-create",
+  };
+  return known[message] ?? "unknown";
+}
+
 console.log(JSON.stringify({
   status: result.status,
   ...(result.status === "acquired" ? { value: result.value, lockId: result.lockId } : {}),
   ...(result.status === "busy" ? { reason: result.reason, lockId: result.lockId } : {}),
-  ...(result.status === "refused" ? { reason: result.reason } : {}),
+  ...(result.status === "refused" ? {
+    reason: result.reason,
+    ...(result.reason === "namespace_unsafe" ? { namespaceFailure: namespaceFailureCode(result.message) } : {}),
+  } : {}),
 }));

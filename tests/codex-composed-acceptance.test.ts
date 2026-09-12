@@ -101,10 +101,11 @@ class Fixture {
 
   env(home = this.homeA, userprofile = this.userprofileA): Record<string, string> {
     // Windows identity/ACL probes launch OS utilities. Preserve their lookup
-    // environment, while keeping every application home explicitly isolated.
+    // environment, including the account name used by windows-secret-acl,
+    // while keeping every application home explicitly isolated.
     const windowsEnv = process.platform === "win32"
       ? Object.fromEntries(Object.entries(process.env).filter(([key, value]) =>
-        /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP)$/i.test(key) && value !== undefined))
+        /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|USERNAME|USERDOMAIN)$/i.test(key) && value !== undefined))
       : {};
     return {
       ...windowsEnv,
@@ -510,6 +511,9 @@ describe("WP13 composed toggle acceptance", () => {
           stage: "holder-exited-before-marker", exitCode,
           status: ["acquired", "busy", "refused"].includes(String(outcome.status)) ? outcome.status : "unknown",
           reason: typeof outcome.reason === "string" && /^[a-z_]{1,50}$/.test(outcome.reason) ? outcome.reason : "unknown",
+          ...(typeof outcome.namespaceFailure === "string"
+            && /^(?:lookup-start|lookup-failed|lookup-empty|folder-relative|namespace-create|lock-directory-create|unknown|exit-(?:unknown|-?\d{1,10})|(?:compile|token-environment|registered-folder):[A-Za-z0-9_.]{1,80}:[0-9A-F]{8})$/.test(outcome.namespaceFailure)
+            ? { namespaceFailure: outcome.namespaceFailure } : {}),
           stderrPresent: stderr.length > 0,
         }));
       }),
