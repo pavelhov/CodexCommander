@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { proxyStillLiveAfterStop } from "../src/service";
+import { proxyStillLiveAfterStop, inspectMacosUpdateServiceProvenance, type ServiceDiagnostic, type ServiceInstallState } from "../src/service";
 
 /**
  * #764: `ccx service stop` reported success while the proxy kept running. Routing is now
@@ -125,5 +125,20 @@ describe("service stop verification (#764)", () => {
     } finally {
       Object.defineProperty(process, "platform", { value: original, configurable: true });
     }
+  });
+});
+
+
+describe("macOS update supervisor provenance", () => {
+  const diagnostic: ServiceDiagnostic = {supported:true,registrationState:"present",supervisorState:"active",installed:true,enabled:true,running:true,viable:true,startable:true,stale:false,conflict:false,backend:"launchd",summary:""};
+  const state: ServiceInstallState = {version:3,codexHome:"/isolated/codex",codexCommanderHome:"/isolated/ccx",bunPath:"/Applications/Test.app/Contents/Resources/runtime/bun",cliPath:"/Applications/Test.app/Contents/Resources/runtime/src/cli/index.ts",backend:"scheduler"};
+  const inspect = (selected: ServiceInstallState, matches = true) => inspectMacosUpdateServiceProvenance("/Applications/Test.app",{diagnose:()=>diagnostic,evidence:()=>[{kind:"valid",path:"/isolated/state",state:selected}],realpath:((path: string)=>path) as typeof import("node:fs").realpathSync,registrationMatches:()=>matches});
+  test("independent CLI service is identified without stopping or migrating it", () => {
+    expect(inspect({...state,bunPath:"/opt/bun",cliPath:"/opt/ccx/src/cli/index.ts"}).kind).toBe("independent");
+    expect(inspect(state).kind).toBe("bundle");
+  });
+  test("mixed bundle dependency and changed supervisor registration block replacement", () => {
+    expect(()=>inspect({...state,bunPath:"/opt/bun"})).toThrow("mixed");
+    expect(()=>inspect(state,false)).toThrow("registration");
   });
 });

@@ -1,3 +1,4 @@
+import { assertMacosUpdateAllowsMutation, MacosUpdateTransactionStore, withDelegatedMacosUpdateRecovery } from "../server/macos-update-transaction";
 import {
   loadConfig,
   readPid,
@@ -303,6 +304,7 @@ async function acquireForegroundStartAuthority(
 ): Promise<{
   authority?: ProxyLifecycleAuthority;
   mayMutateRouting: boolean;
+  recoveryId?: string;
   release(): void;
 }> {
   if (mode === "explicit") {
@@ -322,7 +324,7 @@ async function acquireForegroundStartAuthority(
         io.consumeServiceStartDelegation ?? consumeProxyServiceStartDelegation
       )();
       if (delegation) {
-        return { mayMutateRouting: false, release: () => delegatedStart.release() };
+        return { mayMutateRouting: false, recoveryId: new MacosUpdateTransactionStore().read()?.transactionId, release: () => delegatedStart.release() };
       }
     } catch (error) {
       delegatedStart.release();
@@ -337,7 +339,11 @@ async function acquireForegroundStartAuthority(
 
   // A parent-delegated foreground child is the deliberate S-only participant.
   const start = await (io.acquireServiceStartLock ?? acquireProxyStartLock)();
-  return { mayMutateRouting: false, release: () => start.release() };
+  try {
+    const pending = new MacosUpdateTransactionStore().read();
+    if (pending && !(io.consumeServiceStartDelegation ?? consumeProxyServiceStartDelegation)()) throw new Error("Update recovery start lacks delegated authority.");
+    return { mayMutateRouting: false, recoveryId: pending?.transactionId, release: () => start.release() };
+  } catch (error) { start.release(); throw error; }
 }
 
 export async function runForegroundProxyStart(
@@ -363,6 +369,7 @@ export async function runForegroundProxyStart(
   let lifecycle: Awaited<ReturnType<typeof acquireForegroundStartAuthority>>;
   try {
     lifecycle = await acquireForegroundStartAuthority(lifecycleMode, io);
+    try { if (lifecycle.recoveryId) withDelegatedMacosUpdateRecovery(lifecycle.recoveryId, () => assertMacosUpdateAllowsMutation()); else assertMacosUpdateAllowsMutation(); } catch (error) { lifecycle.release(); throw error; }
   } catch (error) {
     logger.error(
       `❌ Could not coordinate proxy ${parentDelegated ? "startup" : "lifecycle"}: ${
@@ -372,6 +379,7 @@ export async function runForegroundProxyStart(
     return 1;
   }
 
+  const continueStart = async (): Promise<number> => {
   let authorityReleased = false;
   const releaseAuthority = (): void => {
     if (authorityReleased) return;
@@ -714,4 +722,6 @@ export async function runForegroundProxyStart(
   }
   await initialization;
   return 0;
+  };
+  return lifecycle.recoveryId ? withDelegatedMacosUpdateRecovery(lifecycle.recoveryId, continueStart) : continueStart();
 }

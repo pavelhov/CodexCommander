@@ -1,3 +1,4 @@
+import { assertMacosUpdateAllowsMutation } from "./server/macos-update-transaction";
 /**
  * `ccx service` — run the proxy as a background service that auto-starts on login and
  * auto-restarts on crash. macOS → launchd; Windows → Task Scheduler; Linux → systemd user unit.
@@ -7,7 +8,7 @@
  */
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
-import { existsSync, linkSync, lstatSync, readFileSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
+import { existsSync, linkSync, lstatSync, realpathSync, readFileSync, unlinkSync, writeFileSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
@@ -18,7 +19,7 @@ import type { BunRuntimeSource } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
 import type { ProxyLifecycleLockLease } from "./server/proxy-lifecycle-protocol";
 import { serviceApiTokenFilePath } from "./lib/service-secrets";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ELEVATION_REQUEST_TIMEOUT_MS,
   CCX_ELEVATED_PROTOCOL_FAILED,
@@ -2064,6 +2065,7 @@ export function readWindowsSchedulerXmlState(
 
 // ── macOS (launchd) ──
 function installLaunchd(): void {
+  assertMacosUpdateAllowsMutation();
   recordOwnedConfigPath(getConfigDir(), serviceStatePath());
   ensurePrivateServiceDirectory(getConfigDir());
   writeServiceApiTokenFile();
@@ -2110,6 +2112,7 @@ export function startLaunchd(deps: {
   installedPort?: () => number;
   assertOwned?: (path: string) => void;
 } = {}): void {
+  assertMacosUpdateAllowsMutation();
   const entry = cliEntry();
   const run = deps.launchctl ?? runLaunchctl;
   const p = plistPath();
@@ -2283,6 +2286,7 @@ export interface RepairServiceDeps {
  * macOS/Linux: re-run the user-level install/reload path.
  */
 export async function repairService(deps: RepairServiceDeps = {}): Promise<void> {
+  assertMacosUpdateAllowsMutation();
   const diagnose = deps.diagnose ?? diagnoseService;
   const platform = deps.platform ?? process.platform;
   const diag = diagnose();
@@ -2919,6 +2923,7 @@ export async function stopTrackedProxyForServiceCommand(
  * fail closed instead of being bypassed by an unmanaged proxy.
  */
 export function startServiceIfInstalled(): boolean {
+  assertMacosUpdateAllowsMutation();
   assertServiceEnvironmentMatchesInstall();
   const diagnostic = diagnoseService();
   if (!diagnostic.installed) return false;
@@ -3344,4 +3349,42 @@ export async function serviceStatusReport(
     + `   Log:    ${serviceLogPath()}\n`
     + `   Repair: ${serviceRepairCommand()}\n`
     + "   Meanwhile: ccx start           (serves in the foreground)";
+}
+
+/** Bundle update provenance is stricter than sharing the same configuration home. */
+export function inspectMacosUpdateServiceProvenance(bundlePath: string, io: {
+  diagnose?: typeof diagnoseService;
+  evidence?: typeof inspectServiceStateEvidence;
+  realpath?: typeof realpathSync;
+  registrationMatches?: () => boolean;
+} = {}): { kind: "absent" | "bundle" | "independent"; fingerprint: string | null; active: boolean } {
+  const diagnostic = (io.diagnose ?? diagnoseService)();
+  if (diagnostic.registrationState === "indeterminate" || diagnostic.supervisorState === "indeterminate"
+    || diagnostic.stale || diagnostic.conflict) throw new Error("Service ownership is uncertain; repair the service before updating.");
+  const evidence = (io.evidence ?? inspectServiceStateEvidence)();
+  if (evidence.some(item => item.kind === "invalid" || item.kind === "unreadable")) throw new Error("Service provenance is unreadable.");
+  const states = evidence.flatMap(item => item.kind === "valid" ? [item.state] : []);
+  if (diagnostic.registrationState === "absent") {
+    // Leftover registration files may still name a bundled runtime and require repair.
+    if (states.length > 0) throw new Error("Stale service provenance requires repair before updating.");
+    return {kind:"absent",fingerprint:null,active:false};
+  }
+  if (states.length === 0 || states.some(state => JSON.stringify(state) !== JSON.stringify(states[0]))) throw new Error("Service provenance is missing or disagrees.");
+  const state = states[0]!;
+  const physical = io.realpath ?? realpathSync;
+  const bundle = String(physical(bundlePath));
+  const cli = String(physical(state.cliPath));
+  const bun = String(physical(state.bunPath));
+  const prefix = `${bundle}/Contents/Resources/`;
+  const bundledCli = cli.startsWith(prefix);
+  const bundledBun = bun.startsWith(prefix);
+  if (bundledCli !== bundledBun) throw new Error("Service uses mixed runtime provenance; repair before updating.");
+  if (!(io.registrationMatches ?? (() => {
+    assertServiceEnvironmentMatchesInstall();
+    assertOwnedLaunchdPlist();
+    const live = launchdJobMatchesPlist(buildLaunchdArguments(state.cliPath,installedServiceListenPort()));
+    return diagnostic.supervisorState === "inactive" ? !live.loaded : live.loaded && live.matchesPlist;
+  }))()) throw new Error("Service registration differs from its captured runtime.");
+  const fingerprint = createHash("sha256").update(JSON.stringify({cli,bun,backend:state.backend,codexHome:state.codexHome,codexCommanderHome:state.codexCommanderHome})).digest("hex");
+  return {kind:bundledCli ? "bundle" : "independent",fingerprint,active:diagnostic.supervisorState === "active"};
 }

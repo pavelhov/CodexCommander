@@ -1,3 +1,4 @@
+import { assertMacosUpdateAllowsMutation, MacosUpdateTransactionStore } from "../server/macos-update-transaction";
 import { existsSync, unlinkSync } from "node:fs";
 
 import {
@@ -315,6 +316,7 @@ async function prepareServiceManagerMutation(
     refusal(deps, `❌ service ${command} refused because start authority is unavailable.`);
     return null;
   }
+  try { assertMacosUpdateAllowsMutation(); } catch (error) { refusal(deps, (error as Error).message); return null; }
   const native = deps.prepareTermination();
   if (native.success) {
     try {
@@ -567,6 +569,8 @@ export async function runServiceLifecycleCommand(
     try { authority = await deps.acquireAuthority(true); }
     catch { refusal(deps, "❌ Service lifecycle coordination is unavailable."); return; }
     try {
+      new MacosUpdateTransactionStore().recordOff(authority);
+      if (action !== "stop") assertMacosUpdateAllowsMutation();
       const routing = await quiesceForLifecycleCommand(action, authority, deps);
       if (!routing) return;
       if (action === "stop") {
