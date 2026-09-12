@@ -89,7 +89,7 @@ public actor MacOSUpdateHelper: MacOSUpdateCommandRunning {
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 let pipe = Pipe()
-                let output = BoundedOutput(limit: 2048)
+                let output = BoundedOutput(limit: LifecycleHelper.maximumOutputBytes)
                 let timeoutState = TimeoutState()
                 process.executableURL = invocation.executable
                 process.arguments = invocation.prefixArguments + ["__macos-update"] + arguments
