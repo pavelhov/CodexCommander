@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, readdirSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readPublicKey, validateBuildNumber, validateSparkleFramework } from '../scripts/macos-update-packaging';
@@ -108,4 +108,29 @@ describe('authenticated macOS release assets', () => {
     symlinkSync('/etc/passwd', join(version, 'Resources/extra'));
     expect(() => validateSparkleFramework(framework)).toThrow('Unexpected');
   }));
+});
+
+function checkPrivateKeyCustody(root: string): void {
+  const assets = join(root, 'assets'); mkdirSync(assets);
+  const publicPath = join(root, 'public'); writeFileSync(publicPath, publicKey);
+  const alias = join(root, 'assets-alias'); symlinkSync(assets, alias);
+  for (const directory of [assets, join(assets, 'nested')]) {
+    mkdirSync(directory, { recursive: true });
+    const privatePath = join(directory, 'CodexCommander-0.1.7-103-macos-universal.txt');
+    writeFileSync(privatePath, 'disposable-custody-fixture'); chmodSync(privatePath, 0o600);
+    const result = Bun.spawnSync([process.execPath, join(import.meta.dir, '../scripts/macos-appcast.ts'), '--generate', alias], {
+      env: { ...process.env, MACOS_UPDATE_PUBLIC_KEY_FILE: publicPath, MACOS_BUILD_NUMBER: '103', MACOS_PREVIOUS_BUILD_NUMBER: '102', RELEASE_VERSION: '0.1.7', SPARKLE_PRIVATE_KEY_FILE: privatePath, SPARKLE_TOOLS_DIR: join(root, 'must-not-run') }, stdout: 'pipe', stderr: 'pipe',
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toContain('outside the release asset directory');
+    expect(result.stderr.toString()).not.toContain('disposable-custody-fixture');
+    expect(readdirSync(assets).some(name => name.startsWith('.appcast-stage-'))).toBe(false);
+  }
+}
+
+test.skipIf(process.platform !== 'darwin')('private signing key custody must be separate from release assets before tools run', () => {
+  fixture(checkPrivateKeyCustody);
+  const ignored = join(import.meta.dir, '../.tmp'); mkdirSync(ignored, { recursive: true });
+  const root = mkdtempSync(join(ignored, 'appcast-custody-'));
+  try { checkPrivateKeyCustody(root); } finally { rmSync(root, { recursive: true, force: true }); }
 });

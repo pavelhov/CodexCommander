@@ -132,13 +132,6 @@ function main(): void {
   if (!process.env.MACOS_PREVIOUS_BUILD_NUMBER) throw new Error('MACOS_PREVIOUS_BUILD_NUMBER is required');
   const version = process.env.RELEASE_VERSION;
   if (!version || !/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) throw new Error('RELEASE_VERSION must identify a stable release');
-  const toolDir = process.env.SPARKLE_TOOLS_DIR;
-  if (!toolDir) throw new Error('SPARKLE_TOOLS_DIR must contain official Sparkle 2.9.6 release tools');
-  for (const [tool, hash] of Object.entries(toolHashes)) {
-    const path = join(toolDir, tool);
-    assertSafePackageFile(path, 'pinned Sparkle tool', realpathSync(toolDir));
-    if (createHash('sha256').update(readFileSync(path)).digest('hex') !== hash) throw new Error('Sparkle 2.9.6 tool checksum mismatch');
-  }
   const privatePath = process.env.SPARKLE_PRIVATE_KEY_FILE;
   if (!privatePath) throw new Error('SPARKLE_PRIVATE_KEY_FILE is required; key material is never accepted in command arguments');
   const privateStat = lstatSync(privatePath);
@@ -146,7 +139,15 @@ function main(): void {
   // Forbid durable source custody. Ephemeral fixtures may live in ignored .tmp only.
   const repo = resolve(import.meta.dir, '..');
   const physicalKey = realpathSync(privatePath);
+  if (physicalKey === directory || physicalKey.startsWith(directory + '/')) throw new Error('Private signing key must remain outside the release asset directory');
   if (physicalKey.startsWith(repo + '/') && !physicalKey.startsWith(join(repo, '.tmp') + '/')) throw new Error('Private signing key must be outside the source tree');
+  const toolDir = process.env.SPARKLE_TOOLS_DIR;
+  if (!toolDir) throw new Error('SPARKLE_TOOLS_DIR must contain official Sparkle 2.9.6 release tools');
+  for (const [tool, hash] of Object.entries(toolHashes)) {
+    const path = join(toolDir, tool);
+    assertSafePackageFile(path, 'pinned Sparkle tool', realpathSync(toolDir));
+    if (createHash('sha256').update(readFileSync(path)).digest('hex') !== hash) throw new Error('Sparkle 2.9.6 tool checksum mismatch');
+  }
   assertSafePackageTree(directory, 'release assets', directory);
   const previous = join(directory, 'appcast.xml');
   let previousBuilds: string[] = [];
