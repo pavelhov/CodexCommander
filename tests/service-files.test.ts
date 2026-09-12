@@ -16,13 +16,13 @@ function fixture(): { dir: string; path: string; outside: string } {
 afterEach(() => { while (cleanup.length) rmSync(cleanup.pop()!, { recursive: true, force: true }); });
 
 describe("private service file mutations", () => {
-  test("fresh writes are 0600, durable, and regular", () => {
+  test("fresh writes are durable and regular, with private POSIX permissions", () => {
     const { path } = fixture();
     writePrivateServiceFile(path, "owned\n", { ownsExisting: () => true });
     expect(readFileSync(path, "utf8")).toBe("owned\n");
     expect(lstatSync(path).isFile()).toBeTrue();
     expect(lstatSync(path).nlink).toBe(1);
-    expect(lstatSync(path).mode & 0o077).toBe(0);
+    if (process.platform !== "win32") expect(lstatSync(path).mode & 0o077).toBe(0);
   });
 
   test("never writes through a dangling or live symlink", () => {
@@ -41,7 +41,8 @@ describe("private service file mutations", () => {
     expect(readFileSync(outside, "utf8")).toBe("outside\n");
   });
 
-  test("rejects permissive files and private directory violations", () => {
+  // Windows callers enforce ACLs; these bits are only the POSIX privacy contract.
+  test.skipIf(process.platform === "win32")("rejects permissive POSIX files and private directory violations", () => {
     const { dir, path } = fixture();
     writeFileSync(path, "owned\n", { mode: 0o644 });
     chmodSync(path, 0o644);

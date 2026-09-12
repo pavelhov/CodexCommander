@@ -118,7 +118,9 @@ function currentConfig(overrides: Record<string, unknown> = {}): Record<string, 
 }
 
 describe("ccx restore back", () => {
-  test("Restore Native leaves this home's live proxy running and direct Start routes Codex back without rebinding", async () => {
+  test(process.platform === "win32"
+    ? "Windows refuses unproven service routing while Restore Native preserves the live proxy"
+    : "Restore Native leaves this home's live proxy running and direct Start routes Codex back without rebinding", async () => {
     const codexHome = mkdtempSync(join(tmpdir(), "ccx-cli-live-start-codex-"));
     const ccxHome = mkdtempSync(join(tmpdir(), "ccx-cli-live-start-home-"));
     const port = await freePort();
@@ -175,6 +177,35 @@ describe("ccx restore back", () => {
       const profilePath = join(codexHome, "codexcommander.config.toml");
       const catalogPath = join(codexHome, "codexcommander-catalog.json");
       const cachePath = join(codexHome, "models_cache.json");
+      if (process.platform === "win32") {
+        // Windows service definition-chain inspection deliberately reports
+        // unknown. Wait for the settled refusal, not merely an early no-write.
+        const refused = await waitUntil(async () => {
+          const response = await fetch(`http://127.0.0.1:${port}/readyz`, {
+            signal: AbortSignal.timeout(800),
+          });
+          const readiness = await response.json() as { status?: string };
+          return response.status === 503 && readiness.status === "failed";
+        });
+        expect(refused).toBe(true);
+        const assertNativeUnchanged = () => {
+          expect(readFileSync(configPath, "utf8")).toBe('model = "gpt-5.5"\n');
+          for (const path of [journalPath, profilePath, catalogPath, cachePath]) {
+            expect(existsSync(path)).toBe(false);
+          }
+        };
+        assertNativeUnchanged();
+        const synced = await runCliAsync(["sync"], env);
+        expect(synced.status).toBe(1);
+        expect(synced.stderr).toContain("Codex sync did not complete");
+        assertNativeUnchanged();
+        const restored = await runCliAsync(["restore"], env);
+        expect(restored.status).toBe(0);
+        expect(JSON.parse(readFileSync(join(ccxHome, "config.json"), "utf8")).clientIntegrations.codex).toBe(false);
+        expect(await runtimeProxyPid(ccxHome, port)).toBe(originalPid);
+        assertNativeUnchanged();
+        return;
+      }
       const injected = await waitUntil(async () => (
         existsSync(journalPath)
         && existsSync(profilePath)

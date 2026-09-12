@@ -605,10 +605,14 @@ describe("codex-auth API", () => {
     const clearQuotaOwners = seedCodexAuthAdmissionForTests({ quotaFlights: 15 });
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const pending: Array<ReturnType<typeof handleCodexAuthAPI>> = [];
     let requestCount = 0;
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       if (String(input).includes("/wham/usage")) {
         requestCount += 1;
+        markStarted();
         await gate;
         return Response.json({ rate_limit: { primary_window: { used_percent: 1 } } });
       }
@@ -621,7 +625,11 @@ describe("codex-auth API", () => {
       };
       const first = request();
       const joiner = request();
-      for (let attempt = 0; attempt < 20 && requestCount === 0; attempt++) await Promise.resolve();
+      pending.push(first, joiner);
+      await Promise.race([
+        started,
+        Promise.all(pending).then(() => { throw new Error("quota requests settled without starting the probe"); }),
+      ]);
       expect(requestCount).toBe(1);
       release();
       const bodies = await Promise.all([first, joiner].map(async pending => {
@@ -632,6 +640,7 @@ describe("codex-auth API", () => {
       expect(bodies[1].accounts.find(account => account.id === "quota-a")?.quotaProbeSkipped).not.toBe(true);
     } finally {
       release();
+      await Promise.allSettled(pending);
       clearQuotaOwners();
     }
   });

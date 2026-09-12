@@ -48,12 +48,16 @@ function powershellValue(expression: string): string {
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
-      "-Command",
-      expression,
+      "-EncodedCommand",
+      Buffer.from(
+        "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;\n" + expression,
+        "utf16le",
+      ).toString("base64"),
     ], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      timeout: 10_000,
     });
   } catch (cause) {
     refuse("Windows effective-account lookup could not start.", cause);
@@ -143,12 +147,38 @@ function resolvePosixRuntimeRoot(uid: number): string {
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(
-    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-  );
+  // An implicit-current-user folder lookup expands the caller's USERPROFILE.
+  // Pass the effective token explicitly so every launcher uses the OS account's
+  // registered (possibly redirected) LocalAppData, including under isolated HOME.
+  const localAppData = powershellValue(`
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+public static class CodexCommanderKnownFolders {
+  [DllImport("shell32.dll", ExactSpelling = true)]
+  private static extern int SHGetKnownFolderPath(ref Guid folder, uint flags, IntPtr token, out IntPtr path);
+  public static string LocalAppData(string expectedSid) {
+    using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
+      if (!String.Equals(identity.User.Value, expectedSid, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException("Effective account changed during folder resolution.");
+      Guid folder = new Guid("F1B32785-6FBA-4FCF-9D55-7B8E7F157091");
+      IntPtr path = IntPtr.Zero;
+      try {
+        Marshal.ThrowExceptionForHR(SHGetKnownFolderPath(ref folder, 0, identity.Token, out path));
+        return Marshal.PtrToStringUni(path);
+      } finally {
+        if (path != IntPtr.Zero) Marshal.FreeCoTaskMem(path);
+      }
+    }
+  }
+}
+'@
+[CodexCommanderKnownFolders]::LocalAppData('${identity.sid}')
+`);
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
 
-  // The SID and known-folder values come from the effective token/.NET OS APIs,
+  // The SID and known-folder values come from the effective token/Windows APIs,
   // never USERPROFILE or LOCALAPPDATA. WP11 adds descriptor/reparse/ACL checks at
   // the stable-database open boundary where those checks can cover SQLite too.
   const root = resolve(localAppData, "CodexCommander", "Runtime", "v1", identity.sid.toUpperCase());

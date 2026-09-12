@@ -1088,7 +1088,7 @@ describe("hardenStableLockFile — the production call edge, not just the primit
    * by reopening it with creation mode 0600, so "no ACL command ran" was true of
    * both the working and the broken implementation.
    */
-  test("on posix it narrows an existing permissive file to 0600 and runs no ACL command", async () => {
+  test.skipIf(process.platform === "win32")("on posix it narrows an existing permissive file to 0600 and runs no ACL command", async () => {
     resetHardenedStateForTests();
     const lockPath = join(testDir, "coordinator-posix.sqlite");
     writeFileSync(lockPath, "x", "utf8");

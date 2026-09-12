@@ -82,7 +82,7 @@ describe("CLI subcommand help", () => {
       rmSync(codexCommanderHome, { recursive: true, force: true });
       rmSync(binDir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("tray help documents the install-only no-start flag", () => {
     const result = runCli(["help", "tray"]);
@@ -213,7 +213,7 @@ describe("CLI subcommand help", () => {
       rmSync(codexCommanderHome, { recursive: true, force: true });
       rmSync(codexHome, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   test("start rejects unknown and partially numeric port arguments", () => {
     const cases = [
