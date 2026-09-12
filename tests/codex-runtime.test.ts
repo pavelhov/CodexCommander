@@ -472,7 +472,7 @@ describe("resolveCodexRuntime", () => {
       version: "0.153.2",
       source: "configured",
     }, { configDir });
-    const bundled = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const bundled = join("/Applications/ChatGPT.app/Contents/Resources", "codex");
     const execFileSync = createBundledCatalogExec({
       versionByPath: {
         [configured]: "codex-cli 0.153.2",
@@ -500,7 +500,7 @@ describe("resolveCodexRuntime", () => {
   });
 
   test("discovers macOS app bundle codex before generic PATH entries", () => {
-    const bundled = "/Applications/ChatGPT.app/Contents/Resources/codex";
+    const bundled = join("/Applications/ChatGPT.app/Contents/Resources", "codex");
     const pathCodex = "/usr/local/bin/codex";
     const execFileSync = createBundledCatalogExec({
       versionByPath: {
@@ -574,7 +574,7 @@ describe("resolveCodexRuntime", () => {
   test("reports newerAvailable when an older runtime is selected", () => {
     const configDir = tempConfigDir();
     const oldBin = "/tmp/ccx-runtime-old/codex.exe";
-    const newBin = "/tmp/ccx-runtime-new/codex.exe";
+    const newBin = join("/tmp/ccx-runtime-new", "codex.exe");
     persistCodexRuntime({
       command: oldBin,
       version: "0.133.0",
@@ -907,8 +907,8 @@ describe("resolveCodexRuntime", () => {
     const newDir = join(home, "new");
     mkdirSync(oldDir, { recursive: true });
     mkdirSync(newDir, { recursive: true });
-    const oldBin = process.platform === "win32" ? join(oldDir, "codex.cmd") : join(oldDir, "codex");
-    const newBin = process.platform === "win32" ? join(newDir, "codex.cmd") : join(newDir, "codex");
+    const oldBin = process.platform === "win32" ? join(oldDir, "codex.exe") : join(oldDir, "codex");
+    const newBin = process.platform === "win32" ? join(newDir, "codex.exe") : join(newDir, "codex");
 
     const writeLauncher = (path: string, version: string, efforts: string[]) => {
       const catalog = JSON.stringify({

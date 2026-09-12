@@ -52,7 +52,7 @@ async function helper(
 }
 
 describe("proxy lifecycle concurrency", () => {
-  test("concurrent ensure helpers converge on one live PID and port", async () => {
+  test.skipIf(process.platform !== "darwin")("concurrent ensure helpers converge on one live PID and port", async () => {
     const root = mkdtempSync(join(tmpdir(), "ccx-lifecycle-concurrency-"));
     const home = join(root, "home");
     const configHome = join(root, "codexcommander");

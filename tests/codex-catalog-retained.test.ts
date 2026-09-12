@@ -107,7 +107,7 @@ describe("retained routed Codex catalog", () => {
     expect(result.rehydrated).toBe(0);
     const snapshotPath = retainedRoutedCatalogPath();
     expect(existsSync(snapshotPath)).toBe(true);
-    expect(statSync(snapshotPath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(snapshotPath).mode & 0o777).toBe(0o600);
     const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8")) as { models: Array<{ slug: string }> };
     expect(snapshot.models.map(model => model.slug)).toContain("vendor/alpha");
     const manifest = JSON.parse(readFileSync(join(codexCommanderHome, CONFIG_UNINSTALL_MANIFEST), "utf8")) as {

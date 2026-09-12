@@ -71,6 +71,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     rmSync(ccxHome, { recursive: true, force: true });
   });
 
+  // This scenario performs multiple real process/ACL operations on Windows.
   test("re-inject over a Design B config is idempotent", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
 
@@ -93,7 +94,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(profilePath, "utf8")).toBe(firstProfile);
     expect(lstatSync(configPath, { bigint: true }).mtimeNs).toBe(configMtime);
     expect(lstatSync(profilePath, { bigint: true }).mtimeNs).toBe(profileMtime);
-  });
+  }, process.platform === "win32" ? 30_000 : 5_000);
 
   test("expected config generation fences the post-catalog injection gap", () => {
     const configPath = join(codexHome, "config.toml");
@@ -263,6 +264,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(Bun.TOML.parse(config).features.fast_mode).toBe(false);
   });
 
+  // This scenario performs multiple real process/ACL operations on Windows.
   test("opt-in injects native subagent defaults, removes them when disabled, and restores the native config", () => {
     const original = [
       'model = "gpt-5.5"',
@@ -298,7 +300,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(runInject(codexHome, ccxHome, enabled).status).toBe(0);
     expect(runRestore(codexHome, ccxHome).status).toBe(0);
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(original);
-  });
+  }, process.platform === "win32" ? 30_000 : 5_000);
 
   test("opt-in preserves a user-owned native default pair and reports the conflict", () => {
     const original = [
@@ -636,6 +638,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).not.toContain("openai_base_url");
   });
 
+  // This scenario performs multiple real process/ACL operations on Windows.
   test("CRLF config (Windows-edited) stays uniformly CRLF after injection", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\r\n\r\n[features]\r\nfast_mode = true\r\n', "utf8");
 
@@ -650,7 +653,7 @@ describe("injectCodexConfig integration (Design B)", () => {
     // Idempotent re-inject keeps the CRLF form stable.
     expect(runInject(codexHome, ccxHome).status).toBe(0);
     expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toBe(config);
-  });
+  }, process.platform === "win32" ? 30_000 : 5_000);
 
   test("LF config gains no carriage returns from injection", () => {
     writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");

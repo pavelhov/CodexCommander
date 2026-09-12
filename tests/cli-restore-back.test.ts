@@ -181,11 +181,16 @@ describe("ccx restore back", () => {
         // Windows service definition-chain inspection deliberately reports
         // unknown. Wait for the settled refusal, not merely an early no-write.
         const refused = await waitUntil(async () => {
-          const response = await fetch(`http://127.0.0.1:${port}/readyz`, {
-            signal: AbortSignal.timeout(800),
-          });
-          const readiness = await response.json() as { status?: string };
-          return response.status === 503 && readiness.status === "failed";
+          try {
+            const response = await fetch(`http://127.0.0.1:${port}/readyz`, {
+              signal: AbortSignal.timeout(800),
+            });
+            const readiness = await response.json() as { status?: string };
+            return response.status === 503 && readiness.status === "failed";
+          } catch {
+            // A startup probe timing out is not a settled readiness result.
+            return false;
+          }
         });
         expect(refused).toBe(true);
         const assertNativeUnchanged = () => {

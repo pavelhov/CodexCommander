@@ -145,8 +145,10 @@ describe("config-only native routing escape", () => {
       "fast_mode = true",
       "",
     ].join("\n"));
-    expect(statSync(fixture.configPath).mode & 0o777).toBe(0o640);
-    expect(statSync(fixture.codexHome).mode & 0o777).toBe(0o755);
+    if (process.platform !== "win32") {
+      expect(statSync(fixture.configPath).mode & 0o777).toBe(0o640);
+      expect(statSync(fixture.codexHome).mode & 0o777).toBe(0o755);
+    }
     for (const [path, bytes] of untouched) expect(readFileSync(path)).toEqual(bytes);
   });
 
@@ -465,6 +467,7 @@ describe("config-only native routing escape", () => {
     for (const [path, bytes] of untouched) expect(readFileSync(path)).toEqual(bytes);
   });
 
+  // This scenario performs multiple real process/ACL operations on Windows.
   test("tray Start after Stop retires only the dead journal and reuses generated artifacts", () => {
     const fixture = incidentFixture();
     const generatedProfile = [
@@ -538,7 +541,7 @@ describe("config-only native routing escape", () => {
     } finally {
       database.close();
     }
-  });
+  }, process.platform === "win32" ? 30_000 : 5_000);
 
   test("Restore Back uses the same narrow incident cleanup before sync", () => {
     const fixture = incidentFixture();

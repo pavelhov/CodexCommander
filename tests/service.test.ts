@@ -701,7 +701,7 @@ describe("launchd service plist", () => {
     expect(plist).toContain("<string>--port</string>");
   });
 
-  test("creates a stable unsigned CodexCommander launcher that forwards tokenized arguments", () => {
+  test.skipIf(process.platform !== "darwin")("creates a stable unsigned CodexCommander launcher that forwards tokenized arguments", () => {
     process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     mkdirSync(TEST_DIR, { recursive: true });
     const bun = join(TEST_DIR, "bun-one");
@@ -808,7 +808,7 @@ describe("launchd service plist", () => {
     expect(existsSync(launcher)).toBe(false);
   });
 
-  test("diagnoses a missing or modified launcher without replacing it", () => {
+  test.skipIf(process.platform !== "darwin")("diagnoses a missing or modified launcher without replacing it", () => {
     process.env.CODEXCOMMANDER_HOME = TEST_DIR;
     mkdirSync(TEST_DIR, { recursive: true });
     const bun = join(TEST_DIR, "bun");

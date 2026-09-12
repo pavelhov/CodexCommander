@@ -321,13 +321,16 @@ describe("two real processes contend for one lock", () => {
     const holder = spawnChild({ holdMarker, releaseMarker, timeoutMs: 0 });
     await waitFor(holdMarker);
 
-    // The lock is genuinely held by another process right now.
-    const blocked = await withCodexWriteLock(options({ timeoutMs: 0 }), publishing("parent"));
-    expect(blocked.status).toBe("busy");
-    expect(blocked.status === "busy" && blocked.reason).toBe("deadline");
-
-    writeFileSync(releaseMarker, "go");
-    const held = await childResult(holder);
+    let held: Awaited<ReturnType<typeof childResult>>;
+    try {
+      // The lock is genuinely held by another process right now.
+      const blocked = await withCodexWriteLock(options({ timeoutMs: 0 }), publishing("parent"));
+      expect(blocked.status).toBe("busy");
+      expect(blocked.status === "busy" && blocked.reason).toBe("deadline");
+    } finally {
+      writeFileSync(releaseMarker, "go");
+      held = await childResult(holder);
+    }
     expect(held.status).toBe("acquired");
 
     // And once it is released the same call succeeds — proving the earlier busy
@@ -427,13 +430,16 @@ describe("two real processes contend for one lock", () => {
 
       // Fail-fast: if the two environments produced different lock files this
       // would acquire instead of reporting contention.
-      const contender = await childResult(
-        spawnChildWithEnv({ timeoutMs: 0 }, { ...b }),
-      );
-      expect(contender.status).toBe("busy");
-
-      writeFileSync(releaseMarker, "go");
-      const held = await childResult(holder);
+      let held: Awaited<ReturnType<typeof childResult>>;
+      try {
+        const contender = await childResult(
+          spawnChildWithEnv({ timeoutMs: 0 }, { ...b }),
+        );
+        expect(contender.status).toBe("busy");
+      } finally {
+        writeFileSync(releaseMarker, "go");
+        held = await childResult(holder);
+      }
       expect(held.status).toBe("acquired");
 
       // And the identity is literally the same value, not merely a shared outcome.

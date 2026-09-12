@@ -97,6 +97,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
+  if (existsSync(testRoot) && statSync(testRoot).isFile()) chmodSync(testRoot, 0o600);
   rmSync(testRoot, { recursive: true, force: true });
 });
 

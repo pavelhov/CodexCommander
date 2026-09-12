@@ -220,7 +220,10 @@ class Fixture {
       server.process.exited,
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("server shutdown watchdog")), 10_000)),
     ]);
-    expect(exitCode).toBe(0);
+    // Bun uses TerminateProcess for SIGTERM on Windows; this is fixture teardown,
+    // not a test of the POSIX graceful signal handler. Await exit before cleanup.
+    if (process.platform === "win32") expect([0, 143]).toContain(exitCode);
+    else expect(exitCode).toBe(0);
   }
 
   async request(runtime: RuntimeRecord, path: string, init: RequestInit = {}): Promise<{ status: number; body: Record<string, unknown> }> {

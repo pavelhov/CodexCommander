@@ -263,6 +263,7 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+// This scenario performs multiple real process/ACL operations on Windows.
 test("catalog apply and native restore preserve Codex projects, threads, and rollouts", () => {
   const nativeConfig = [
     'model = "gpt-5.6-sol"',
@@ -319,4 +320,4 @@ test("catalog apply and native restore preserve Codex projects, threads, and rol
   ]);
   state.close();
   expect(existsSync(join(codexHome, "codexcommander-journal.json"))).toBe(false);
-});
+}, process.platform === "win32" ? 30_000 : 5_000);

@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+// Real Windows credential/ACL subprocesses exceed Bun’s five-second default.
+if (process.platform === "win32") setDefaultTimeout(30_000);
+
 import type { ServerWebSocket } from "bun";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
