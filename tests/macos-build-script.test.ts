@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -73,8 +73,8 @@ describe("macOS build script bundle contract", () => {
   });
 });
 
-async function runScript(outputDir: string, cwd: string = repoRoot) {
-  const proc = Bun.spawn(["bash", script], {
+async function runScript(outputDir: string, cwd: string = repoRoot, scriptPath: string = script) {
+  const proc = Bun.spawn(["bash", scriptPath], {
     cwd,
     env: { ...process.env, OUTPUT_DIR: outputDir },
     stdout: "pipe",
@@ -101,44 +101,68 @@ async function withSandbox<T>(body: (sandbox: string) => Promise<T>): Promise<T>
   }
 }
 
+// Source mutation probes must never alter the shared checkout used by sibling
+// test workers. Git checks out physical files here; --no-hardlinks also keeps
+// the clone object store independent. Only the current owning script is overlaid.
+async function withSourceProbe(body: (checkout: string, sandbox: string) => Promise<void>): Promise<void> {
+  const canonical = join(repoRoot, "src", "identity.ts");
+  const original = readFileSync(canonical);
+  const originalStat = lstatSync(canonical);
+  await withSandbox(async sandbox => {
+    const checkout = join(sandbox, "checkout");
+    const revision = Bun.spawnSync(["git", "-C", repoRoot, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" });
+    expect(revision.exitCode).toBe(0);
+    for (const args of [
+      ["clone", "--quiet", "--no-hardlinks", "--no-checkout", repoRoot, checkout],
+      ["-C", checkout, "checkout", "--quiet", "--detach", revision.stdout.toString().trim()],
+    ]) {
+      const child = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+      const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      if (exitCode !== 0) throw new Error(`Isolated source fixture setup failed: ${stderr}`);
+    }
+    writeFileSync(join(checkout, "scripts", "build-macos-app.sh"), scriptSource);
+    const copied = lstatSync(join(checkout, "src", "identity.ts"));
+    expect(copied.nlink).toBe(1);
+    expect(copied.dev === originalStat.dev && copied.ino === originalStat.ino).toBe(false);
+    try { await body(checkout, sandbox); }
+    finally {
+      expect(readFileSync(canonical)).toEqual(original);
+      const after = lstatSync(canonical);
+      expect(after.ino).toBe(originalStat.ino);
+      expect(after.nlink).toBe(originalStat.nlink);
+      expect(after.isSymbolicLink()).toBe(false);
+    }
+  });
+}
+
 describe.skipIf(!isMacOS)("macOS build script containment", () => {
   test("fails closed on a tracked source path that became a symlink", async () => {
-    await withSandbox(async sandbox => {
-      const tracked = join(repoRoot, "src", "identity.ts");
-      const original = readFileSync(tracked);
+    await withSourceProbe(async (checkout, sandbox) => {
+      const tracked = join(checkout, "src", "identity.ts");
       const external = join(sandbox, "external.txt");
       writeFileSync(external, "external content must not be copied or chmodded");
       chmodSync(external, 0o600);
       rmSync(tracked);
       symlinkSync(external, tracked);
-      try {
-        const { stderr, exitCode } = await runScript(join(sandbox, "output"));
-        expect(exitCode).not.toBe(0);
-        expect(stderr).toContain("Refusing unsafe packaging source");
-        expect(stderr).toContain("symbolic link");
-        expect(readFileSync(external, "utf8")).toBe("external content must not be copied or chmodded");
-      } finally {
-        rmSync(tracked, { force: true });
-        writeFileSync(tracked, original);
-      }
+      const { stderr, exitCode } = await runScript(join(sandbox, "output"), checkout, join(checkout, "scripts", "build-macos-app.sh"));
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Refusing unsafe packaging source");
+      expect(stderr).toContain("symbolic link");
+      expect(readFileSync(external, "utf8")).toBe("external content must not be copied or chmodded");
     });
   }, 120_000);
 
   test("rejects a multiply-linked tracked source file without modifying the external inode", async () => {
-    await withSandbox(async sandbox => {
-      const tracked = join(repoRoot, "src", "identity.ts");
+    await withSourceProbe(async (checkout, sandbox) => {
+      const tracked = join(checkout, "src", "identity.ts");
       const original = readFileSync(tracked, "utf8");
       const extraLink = join(sandbox, "identity-hardlink.ts");
       linkSync(tracked, extraLink);
-      try {
-        const result = await runScript(join(sandbox, "hardlink-output"));
-        expect(result.exitCode).not.toBe(0);
-        expect(result.stderr).toContain("multiply linked");
-        expect(readFileSync(tracked, "utf8")).toBe(original);
-        expect(readFileSync(extraLink, "utf8")).toBe(original);
-      } finally {
-        rmSync(extraLink, { force: true });
-      }
+      const result = await runScript(join(sandbox, "hardlink-output"), checkout, join(checkout, "scripts", "build-macos-app.sh"));
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("multiply linked");
+      expect(readFileSync(tracked, "utf8")).toBe(original);
+      expect(readFileSync(extraLink, "utf8")).toBe(original);
     });
   }, 120_000);
 
