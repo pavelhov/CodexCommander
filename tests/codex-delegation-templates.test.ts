@@ -186,11 +186,32 @@ describe("Codex delegation templates", () => {
 
   test("managed skill treats featured models as suggestions, not an exhaustive spawn allowlist", () => {
     const skill = renderCodexDelegationBundle("balanced").skillText;
-    expect(skill).toContain("featured suggestions, not an exhaustive allowlist");
+    expect(skill).toContain("suggestions, not an exhaustive allowlist");
     expect(skill).toContain("known exact");
-    expect(skill).toContain("native");
+    expect(skill).toContain("Native validation remains authoritative");
     expect(skill).not.toContain("Use only model IDs and effort levels advertised live");
     expect(skill).not.toMatch(
+      /\b(?:gpt|claude|gemini|grok|deepseek|llama|mistral|qwen|kimi|xai|anthropic|openai)[-_/.:][a-z0-9]/i,
+    );
+  });
+
+  test("managed skill carries adaptive spawn-fit guidance without hardcoded roster ids", () => {
+    const bundle = renderCodexDelegationBundle("balanced");
+    const artifacts = `${bundle.skillText}\n${bundle.agentsBlockText}`;
+
+    expect(bundle.skillText).toContain("complexity, uncertainty, risk");
+    expect(bundle.skillText).toContain("how tightly you can check");
+    expect(bundle.skillText).toContain("do not default to the cheapest");
+    expect(bundle.skillText).toContain("capability mismatch");
+    expect(bundle.skillText).toContain("not on `wait_agent` timeout alone");
+    expect(bundle.skillText).toContain("as `model`");
+    expect(bundle.skillText).toContain("Omitting `model`");
+    expect(bundle.skillText).toContain("only when the target advertises supported values");
+    expect(bundle.skillText).toContain('fork_turns` to `"none"`');
+    expect(bundle.agentsBlockText).toContain("how tightly you can check the result");
+    expect(bundle.agentsBlockText).toContain("reassess on failed evidence, scope expansion, uncertainty, or capability mismatch");
+    expect(bundle.agentsBlockText).toContain("not on timeout alone");
+    expect(artifacts).not.toMatch(
       /\b(?:gpt|claude|gemini|grok|deepseek|llama|mistral|qwen|kimi|xai|anthropic|openai)[-_/.:][a-z0-9]/i,
     );
   });

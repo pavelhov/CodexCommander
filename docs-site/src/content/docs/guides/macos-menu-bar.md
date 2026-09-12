@@ -10,10 +10,10 @@ the CodexCommander instance running on the same Mac.
 ## Install
 
 Open [GitHub Releases](https://github.com/pavelhov/CodexCommander/releases) and download the current
-universal macOS preview for Intel and Apple silicon. Choose the
-`CodexCommander-0.1.6-macos-universal.zip` file and its matching `.sha256` checksum file
-for v0.1.6. Updater-enabled releases will use
-`CodexCommander-<version>-<build>-macos-universal.zip` and the matching `.zip.sha256` file.
+universal macOS preview for Intel and Apple silicon. Choose
+`CodexCommander-<version>-<build>-macos-universal.zip` and its matching `.zip.sha256` file.
+The original `CodexCommander-0.1.6-macos-universal.zip` archive predates the updater; use the
+newer numbered build instead.
 
 This preview is ad-hoc signed and not notarized. Unzip it, move `CodexCommander.app` to Applications,
 then follow macOS's first-launch prompts. Depending on your macOS version, you may need
@@ -23,13 +23,13 @@ Do not disable Gatekeeper.
 
 To build from source instead, follow [Build from source](#build-from-source) below.
 
-## App updates (upcoming)
+## App updates
 
-v0.1.6 shipped before the in-app updater. Once the first updater-enabled release is published,
-install that release manually once using the steps above. The behavior below describes that upcoming
-release; it is not available in v0.1.6.
+In-app updates are available starting with the numbered v0.1.6 build. If you installed the original
+v0.1.6 archive without a build number in its name, install the newer build or a later release manually
+once using the steps above.
 
-![Upcoming macOS menu with an update action](/macos-updates.png)
+![macOS menu with an update action](/macos-updates.png)
 
 The app checks for compatible stable releases quietly in the background. When it finds one,
 the menu shows **Update Available…**. Select it to review the version and release notes.

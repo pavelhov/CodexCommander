@@ -202,10 +202,8 @@ installed-app tests and explicit distribution/key-handling security review in
 the PR remain release gates; local asset generation is not a claim of those
 qualifications.
 
-The first updater-enabled release remains pending. v0.1.6 has no updater, so users
-must manually install that first release once; its existing download keeps the
-old `CodexCommander-0.1.6-macos-universal.zip` name. At release cutover, update any
-pinned bootstrap links to the actual published version/build, and remove the
-upcoming qualifier from the public app-update guide only after qualification and
-publication. Do not advertise the fixed feed as available before the complete
-first release is published.
+The original unnumbered v0.1.6 archive has no updater. A newer numbered v0.1.6 build
+provides the one-time manual bootstrap; later releases can update in app. Preserve the original
+`CodexCommander-0.1.6-macos-universal.zip` asset and use immutable version/build archive names for
+updater-enabled builds. The public app-update guide describes the numbered builds; do not publish
+that documentation ahead of the complete, qualified bootstrap release.
