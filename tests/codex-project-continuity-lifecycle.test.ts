@@ -251,9 +251,14 @@ beforeEach(() => {
     model_provider TEXT NOT NULL
   )`);
   const insert = state.prepare("INSERT INTO threads VALUES (?, ?, ?, 'app', ?, 'openai')");
-  insert.run("thread-sherpa", rolloutPaths[0]!, "/work/Sherpa", "Sherpa project");
-  insert.run("thread-website", rolloutPaths[1]!, "/work/pavelhov_website", "Website project");
-  state.close();
+  try {
+    insert.run("thread-sherpa", rolloutPaths[0]!, "/work/Sherpa", "Sherpa project");
+    insert.run("thread-website", rolloutPaths[1]!, "/work/pavelhov_website", "Website project");
+  } finally {
+    // Explicitly prepared statements survive close() until finalized on Windows.
+    insert.finalize();
+    state.close();
+  }
 
   stateBefore = readFileSync(statePath);
   rolloutsBefore = rolloutPaths.map(path => readFileSync(path));
@@ -314,10 +319,13 @@ test("catalog apply and native restore preserve Codex projects, threads, and rol
   expect(digest(statePath)).toBe(createHash("sha256").update(stateBefore).digest("hex"));
 
   const state = new Database(statePath, { readonly: true });
-  expect(state.query("SELECT id, cwd, title, model_provider FROM threads ORDER BY id").all()).toEqual([
+  try {
+    expect(state.query("SELECT id, cwd, title, model_provider FROM threads ORDER BY id").all()).toEqual([
     { id: "thread-sherpa", cwd: "/work/Sherpa", title: "Sherpa project", model_provider: "openai" },
     { id: "thread-website", cwd: "/work/pavelhov_website", title: "Website project", model_provider: "openai" },
-  ]);
-  state.close();
+    ]);
+  } finally {
+    state.close();
+  }
   expect(existsSync(join(codexHome, "codexcommander-journal.json"))).toBe(false);
 }, process.platform === "win32" ? 30_000 : 5_000);

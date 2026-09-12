@@ -70,7 +70,7 @@ function powershellValue(expression: string): string {
     );
     refuse(diagnostic
       ? `Windows effective-account lookup failed (${diagnostic[1]}, ${diagnostic[2]}, HRESULT 0x${diagnostic[3]}).`
-      : "Windows effective-account lookup failed.");
+      : `Windows effective-account lookup failed (exit ${Number.isSafeInteger(result.exitCode) ? result.exitCode : "unknown"}).`);
   }
   const value = new TextDecoder().decode(result.stdout).trim();
   if (!value) refuse("Windows effective-account lookup returned an empty value.");

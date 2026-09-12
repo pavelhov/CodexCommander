@@ -8,7 +8,8 @@
  * caller told to retry something that will fail identically forever is how a UI
  * spins on a problem only the user can fix.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as transitionState from "../src/codex/transition-state";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import {
   resolveCodexCoordinatorDatabasePath,
@@ -184,15 +185,17 @@ describe("refusals are not contention", () => {
     // A directory where the database belongs: openable never, busy never.
     mkdirSync(dbPath, { recursive: true });
 
-    const started = performance.now();
-    const result = await withCodexWriteLock(options({ timeoutMs: 2_000 }), () => "never");
-    const elapsed = performance.now() - started;
-
-    expect(result.status).toBe("refused");
-    expect(result.status === "refused" && result.retryable).toBe(false);
-    // It did not spend the deadline discovering that a permanent failure is
-    // permanent.
-    expect(elapsed).toBeLessThan(1_000);
+    const begin = spyOn(transitionState, "beginCodexCoordinatorTransaction");
+    try {
+      const result = await withCodexWriteLock(options({ timeoutMs: 2_000 }), () => "never");
+      expect(result.status).toBe("refused");
+      expect(result.status === "refused" && result.retryable).toBe(false);
+      // Count actual attempts, excluding the unrelated Windows account lookup
+      // from a wall-clock heuristic. A retry must make another transaction call.
+      expect(begin).toHaveBeenCalledTimes(1);
+    } finally {
+      begin.mockRestore();
+    }
   });
 
   test("an explicit home equal to the ambient one is accepted", async () => {

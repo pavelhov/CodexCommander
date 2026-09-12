@@ -6,7 +6,10 @@
  * "the lock function was invoked" — a pass-through mock satisfies that — but
  * that two real processes running the real injection cannot both write.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { setDefaultTimeout, afterEach, beforeEach, describe, expect, test } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

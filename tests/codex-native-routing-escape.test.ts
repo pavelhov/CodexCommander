@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -541,7 +544,7 @@ describe("config-only native routing escape", () => {
     } finally {
       database.close();
     }
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   test("Restore Back uses the same narrow incident cleanup before sync", () => {
     const fixture = incidentFixture();

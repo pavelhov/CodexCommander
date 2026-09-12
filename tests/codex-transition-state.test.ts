@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { setDefaultTimeout, afterEach, beforeEach, expect, test } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -175,7 +178,7 @@ for (const generation of [1, 2, 4]) {
       kind: "ready",
       state: { nativeGeneration: generation, currentTxId },
     });
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 }
 
 test("a native CAS with a matching txId but the wrong generation still conflicts", () => {
@@ -234,7 +237,7 @@ test("the row validator refuses every whitespace-only txId", () => {
 
     expect(readCodexTransitionState(), label).toEqual({ kind: "unavailable", reason: "database" });
   }
-}, process.platform === "win32" ? 30_000 : 5_000);
+}, process.platform === "win32" ? 60_000 : 5_000);
 
 /**
  * A capability backed by a nominal transaction is not opaque if its caller can

@@ -1,4 +1,7 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { setDefaultTimeout, describe, expect, test, beforeEach, afterEach } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -765,7 +768,7 @@ describe("codex-journal", () => {
     const db = new Database(path, { readonly: true });
     expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
     db.close();
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   // This scenario performs multiple real process/ACL operations on Windows.
   test("global recovery N excludes different CodexCommander homes sharing one CODEX_HOME", () => {
@@ -825,7 +828,7 @@ describe("codex-journal", () => {
       kind: "ready",
       state: { nativeGeneration: 1 },
     });
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   // This scenario performs multiple real process/ACL operations on Windows.
   test("a paused authorized recovery keeps concurrent recovery and normal initialization excluded", () => {
@@ -885,7 +888,7 @@ describe("codex-journal", () => {
     expect(result.concurrentInitializer.kind).not.toBe("ready");
     expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
     expect(existsSync(journalPath)).toBe(false);
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   test("reconcileJournal skips when journaled PID is alive", () => {
     const journalPath = join(testDir, "codexcommander-journal.json");
@@ -2003,7 +2006,7 @@ describe("codex-journal", () => {
     expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(originalConfig);
     expect(readFileSync(join(testDir, "codexcommander.config.toml"), "utf8")).toBe(originalProfile);
     expect(existsSync(join(testDir, "codexcommander-journal.json"))).toBe(false);
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   // This scenario performs multiple real process/ACL operations on Windows.
   test("synchronous restore participates in global N across different CodexCommander homes", () => {
@@ -2053,7 +2056,7 @@ describe("codex-journal", () => {
     expect(JSON.parse(restored.stdout).success).toBe(true);
     expect(readFileSync(join(testDir, "config.toml"), "utf8")).toBe(original);
     expect(existsSync(journalPath)).toBe(false);
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   test("injectCodexConfig creates a restorable journal for direct sync/init paths", () => {
     const originalConfig = [
@@ -2198,7 +2201,7 @@ describe("codex-journal", () => {
     expect(recovered).toContain("browser@openai-bundled");
     expect(recovered).not.toContain("[model_providers.codexcommander]");
     expect(recovered).not.toContain("Auto-injected by CodexCommander");
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   /**
    * The guard the #477 fix must not break. Deleting the early return outright —
@@ -2258,7 +2261,7 @@ describe("codex-journal", () => {
     const after = readFileSync(join(testDir, "config.toml"), "utf8");
     expect(after).not.toContain("[model_providers.codexcommander]");
     expect(after).not.toContain("Auto-injected by CodexCommander");
-  }, process.platform === "win32" ? 30_000 : 5_000);
+  }, process.platform === "win32" ? 60_000 : 5_000);
 
   test("writeJournal() with no options still snapshots a native config", () => {
     const r = runScript(testDir, `require("./src/codex/journal").writeJournal(); console.log("written");`);

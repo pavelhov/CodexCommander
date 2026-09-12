@@ -97,7 +97,6 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
   if (previousCodexCommanderHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
   else process.env.CODEXCOMMANDER_HOME = previousCodexCommanderHome;
-  if (existsSync(testRoot) && statSync(testRoot).isFile()) chmodSync(testRoot, 0o600);
   rmSync(testRoot, { recursive: true, force: true });
 });
 
@@ -328,8 +327,11 @@ test("busy and unavailable databases return typed outcomes instead of throwing",
     holder.close();
   }
 
-  rmSync(testRoot, { recursive: true, force: true });
-  writeFileSync(testRoot, "not a directory", "utf8");
+  // Keep the home a directory: applying a directory ACL to a file has different
+  // Windows inheritance semantics. A directory at the database path is equally
+  // unavailable to SQLite and leaves the fixture safely removable.
+  rmSync(databasePath, { force: true });
+  mkdirSync(databasePath);
   expect(readConfigGeneration()).toEqual({ kind: "unavailable", reason: "database" });
   expect(bumpConfigGeneration({ value: 0 })).toEqual({ kind: "unavailable", reason: "database" });
   expect(withExpectedConfigGenerationSync({ value: 0 }, () => "must-not-run"))

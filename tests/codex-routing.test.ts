@@ -1,4 +1,7 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { setDefaultTimeout, describe, expect, test, beforeEach, afterEach } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
