@@ -89,6 +89,9 @@ test("the effective identity is uid/SID and does not follow HOME", () => {
 });
 
 test("the coordinator resolver returns the final database path", () => {
+  const profileEnvironment = () => ["HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]
+    .map(name => process.env[name]);
+  const environmentBefore = profileEnvironment();
   const canonicalHome = realpathSync.native(codexHome);
   const finalPath = resolveCodexCoordinatorDatabasePath(
     resolveEffectiveUserIdentity(),
@@ -102,6 +105,7 @@ test("the coordinator resolver returns the final database path", () => {
     resolveEffectiveUserIdentity(),
     canonicalHome,
   ));
+  expect(profileEnvironment()).toEqual(environmentBefore);
 });
 
 test("real processes resolve one identity and coordinator path across every home/runtime environment", async () => {

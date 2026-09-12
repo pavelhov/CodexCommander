@@ -66,7 +66,7 @@ function powershellValue(expression: string): string {
     // Only this fixed diagnostic grammar may cross the subprocess boundary.
     // Compiler messages and native errors can contain paths or account details.
     const diagnostic = new TextDecoder().decode(result.stderr).match(
-      /^CCX_IDENTITY_FAILURE:(compile|token-environment|known-folder):([A-Za-z0-9_.]{1,80}):([0-9A-F]{8})\r?$/m,
+      /^CCX_IDENTITY_FAILURE:(compile|token-environment|registered-folder):([A-Za-z0-9_.]{1,80}):([0-9A-F]{8})\r?$/m,
     );
     refuse(diagnostic
       ? `Windows effective-account lookup failed (${diagnostic[1]}, ${diagnostic[2]}, HRESULT 0x${diagnostic[3]}).`
@@ -156,28 +156,29 @@ function resolvePosixRuntimeRoot(uid: number): string {
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  // Known-folder expansion can read USERPROFILE even with an explicit token.
-  // Rebuild only this disposable helper's environment from the OS token before
-  // resolving the registered (possibly redirected) LocalAppData folder.
-  const localAppData = powershellValue(`
+  // Shell folder expansion can retain the launcher's ambient USERPROFILE.
+  // Expand the raw registered location against the OS token's environment,
+  // without consulting or mutating this process's environment.
+  const localAppData = powershellValue(String.raw`
 $stage = 'compile'
 try {
 Add-Type -TypeDefinition @'
 using System;
-using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Text.RegularExpressions;
+using Microsoft.Win32;
 public static class CodexCommanderKnownFolders {
+  public static string Stage = "token-environment";
   [DllImport("userenv.dll", SetLastError = true, ExactSpelling = true)]
   [return: MarshalAs(UnmanagedType.Bool)]
   private static extern bool CreateEnvironmentBlock(out IntPtr block, IntPtr token, [MarshalAs(UnmanagedType.Bool)] bool inherit);
   [DllImport("userenv.dll", ExactSpelling = true)]
   [return: MarshalAs(UnmanagedType.Bool)]
   private static extern bool DestroyEnvironmentBlock(IntPtr block);
-  [DllImport("shell32.dll", ExactSpelling = true)]
-  private static extern int SHGetKnownFolderPath(ref Guid folder, uint flags, IntPtr token, out IntPtr path);
-  public static void UseTokenEnvironment(string expectedSid) {
+  public static string LocalAppData(string expectedSid) {
     using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
       if (!String.Equals(identity.User.Value, expectedSid, StringComparison.OrdinalIgnoreCase))
         throw new InvalidOperationException("Effective account changed during environment resolution.");
@@ -193,39 +194,48 @@ public static class CodexCommanderKnownFolders {
           if (separator > 0) values[entry.Substring(0, separator)] = entry.Substring(separator + 1);
           cursor = IntPtr.Add(cursor, checked((entry.Length + 1) * 2));
         }
-        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
-          string name = (string)entry.Key;
-          if (!name.StartsWith("=")) Environment.SetEnvironmentVariable(name, null);
+        Stage = "registered-folder";
+        string path;
+        bool expand;
+        using (RegistryKey users = RegistryKey.OpenBaseKey(RegistryHive.Users, RegistryView.Registry64))
+        using (RegistryKey key = users.OpenSubKey(identity.User.Value + @"\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")) {
+          if (key == null) throw new InvalidOperationException("Registered folder key is unavailable.");
+          var kind = key.GetValueKind("Local AppData");
+          if (kind != RegistryValueKind.String && kind != RegistryValueKind.ExpandString)
+            throw new InvalidOperationException("Registered folder value is not a string.");
+          expand = kind == RegistryValueKind.ExpandString;
+          path = key.GetValue("Local AppData", null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
         }
-        foreach (var entry in values) Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+        if (String.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("Registered folder is empty.");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int depth = 0; expand && path.IndexOf('%') >= 0; depth++) {
+          if (depth >= 16 || path.Length > 32767 || !seen.Add(path))
+            throw new InvalidOperationException("Registered folder expansion did not converge.");
+          bool replaced = false;
+          path = Regex.Replace(path, @"%([^%]+)%", match => {
+            string value;
+            if (!values.TryGetValue(match.Groups[1].Value, out value))
+              throw new InvalidOperationException("Registered folder references an unavailable variable.");
+            replaced = true;
+            return value;
+          });
+          if (!replaced) throw new InvalidOperationException("Registered folder has an unresolved variable.");
+        }
+        string root = Path.GetPathRoot(path);
+        if (path.Length > 32767 || path.IndexOf('\0') >= 0 || String.IsNullOrEmpty(root) || root.Length < 3 || root.EndsWith(":"))
+          throw new InvalidOperationException("Registered folder is not an absolute path.");
+        return Path.GetFullPath(path);
       } finally {
         if (block != IntPtr.Zero) DestroyEnvironmentBlock(block);
-      }
-    }
-  }
-  public static string LocalAppData(string expectedSid) {
-    using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
-      if (!String.Equals(identity.User.Value, expectedSid, StringComparison.OrdinalIgnoreCase))
-        throw new InvalidOperationException("Effective account changed during folder resolution.");
-      Guid folder = new Guid("F1B32785-6FBA-4FCF-9D55-7B8E7F157091");
-      IntPtr path = IntPtr.Zero;
-      try {
-        // KF_FLAG_DONT_VERIFY: resolve the registered location even when its
-        // directory is absent; the caller creates the namespace recursively.
-        Marshal.ThrowExceptionForHR(SHGetKnownFolderPath(ref folder, 0x4000, identity.Token, out path));
-        return Marshal.PtrToStringUni(path);
-      } finally {
-        if (path != IntPtr.Zero) Marshal.FreeCoTaskMem(path);
       }
     }
   }
 }
 '@
 $stage = 'token-environment'
-[CodexCommanderKnownFolders]::UseTokenEnvironment('${identity.sid}')
-$stage = 'known-folder'
 [CodexCommanderKnownFolders]::LocalAppData('${identity.sid}')
 } catch {
+  if ($stage -ne 'compile') { $stage = [CodexCommanderKnownFolders]::Stage }
   $failure = $_.Exception.GetBaseException()
   [Console]::Error.WriteLine('CCX_IDENTITY_FAILURE:' + $stage + ':' + $failure.GetType().FullName + ':' + $failure.HResult.ToString('X8'))
   exit 1
@@ -233,7 +243,7 @@ $stage = 'known-folder'
 `);
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
 
-  // The SID and known-folder values come from the effective token/Windows APIs,
+  // The SID and registered folder values come from the effective token/registry,
   // never USERPROFILE or LOCALAPPDATA. WP11 adds descriptor/reparse/ACL checks at
   // the stable-database open boundary where those checks can cover SQLite too.
   const root = resolve(localAppData, "CodexCommander", "Runtime", "v1", identity.sid.toUpperCase());
