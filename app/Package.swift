@@ -11,11 +11,15 @@ let package = Package(
         .executable(name: "UIProbe", targets: ["UIProbe"]),
         .executable(name: "IconProbe", targets: ["IconProbe"]),
     ],
+    dependencies: [
+        // Sparkle 2.9.6; immutable revision also pins its binary artifact checksum.
+        .package(url: "https://github.com/sparkle-project/Sparkle", revision: "ac2def288cbff5cfc7df3ffef6abdf45b72bcb0a"),
+    ],
     targets: [
         .target(name: "MenuBarCore", path: "Sources/MenuBarCore"),
         // AppKit views live in a library so both the app and the visual-QA probe can
         // build the same surface. An executable target cannot be imported.
-        .target(name: "MenuBarUI", dependencies: ["MenuBarCore"], path: "Sources/MenuBarUI"),
+        .target(name: "MenuBarUI", dependencies: ["MenuBarCore", .product(name: "Sparkle", package: "Sparkle")], path: "Sources/MenuBarUI"),
         .executableTarget(
             name: "MenuBarApp",
             dependencies: ["MenuBarCore", "MenuBarUI"],
