@@ -78,6 +78,8 @@ class Fixture {
   readonly userprofileA = join(this.root, "userprofile-a");
   readonly userprofileB = join(this.root, "userprofile-b");
   readonly runtime = join(this.root, "runtime");
+  readonly appdata = join(this.root, "appdata");
+  readonly localAppdata = join(this.root, "local-appdata");
   readonly provider = join(this.root, "fixture");
   readonly dataToken = "composed-data-token";
   readonly managementToken = "composed-admin-token";
@@ -87,7 +89,7 @@ class Fixture {
   readonly children: Array<ReturnType<typeof Bun.spawn>> = [];
 
   constructor() {
-    for (const path of [this.codex, this.ccx, this.homeA, this.homeB, this.userprofileA, this.userprofileB, this.runtime, this.provider]) {
+    for (const path of [this.codex, this.ccx, this.homeA, this.homeB, this.userprofileA, this.userprofileB, this.runtime, this.provider, this.appdata, this.localAppdata]) {
       mkdirSync(path, { recursive: true, mode: 0o700 });
     }
     this.lockPath = resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), realpathSync.native(this.codex));
@@ -111,6 +113,10 @@ class Fixture {
       ...windowsEnv,
       HOME: home,
       USERPROFILE: userprofile,
+      // PowerShell/.NET tools need a complete profile environment even when
+      // application homes differ. Both directories remain fixture-owned.
+      APPDATA: this.appdata,
+      LOCALAPPDATA: this.localAppdata,
       GROK_HOME: join(this.homeA, ".grok"),
       CODEX_HOME: this.codex,
       CODEXCOMMANDER_HOME: this.ccx,
