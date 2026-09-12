@@ -29,20 +29,21 @@ v0.1.6 shipped before the in-app updater. Once the first updater-enabled release
 install that release manually once using the steps above. The behavior below describes that upcoming
 release; it is not available in v0.1.6.
 
-![Upcoming macOS menu with Check for Updates, automatic checks, and the installation pause disclosure](/macos-updates.png)
+![Upcoming macOS menu with an update action](/macos-updates.png)
 
-Choose **Check for Updates…** to check for a compatible stable release and review its version and
-release notes. Checking, including a failed or offline check, leaves the proxy running. You can opt in
-to **Automatically check for updates**; this enables checks only. Downloads and installation always
-require your explicit **Install** choice in the update window.
+The app checks for compatible stable releases quietly in the background. When it finds one,
+the menu shows **Update Available…**. Select it to review the version and release notes.
+You can also choose **Check for Updates…** to check manually. Checking, including a failed or
+offline background check, leaves the proxy running and does not open an unsolicited update window.
 
-Installing pauses CodexCommander **before the download begins**, through installation and relaunch.
-If active requests exist when you choose Install, **Active requests may fail** immediately offers
-**Update Anyway** or **Later**. There is no countdown or wait for requests to finish. Later leaves
-existing requests running. Update Anyway permits interruption: requests may fail and need a retry,
-and remote provider work may continue. CodexCommander never automatically replays interrupted work.
-With no active requests, the update proceeds from the update window's Install choice without an
-additional confirmation dialog.
+Downloads and installation require an explicit choice. When you choose to install, a confirmation
+explains that CodexCommander pauses **before the download begins**, through installation and relaunch,
+and that active requests may fail. Choose **Update Anyway** to proceed or **Later** to keep working.
+The warning appears in that confirmation, rather than permanently in the menu. There is no countdown
+or wait for requests to finish. Interrupted requests may need a retry, and remote provider work may
+continue. CodexCommander never automatically replays interrupted work.
+
+![Installation confirmation with Update Anyway and Later](/macos-update-confirmation.png)
 
 After verified installation and recovery, the app restores your previous proxy, routing, and
 supervision choices: a stopped proxy stays stopped, and native routing stays native. It preserves

@@ -1769,8 +1769,8 @@ MainActor.assumeIsolated {
             let start = await session.recover()
             runner.equal(start, false)
             runner.equal(session.blocksLifecycle, false)
-            runner.equal(session.message.contains(UpdateSession.pauseDisclosure), true,
-                         "pause disclosure remains visible before another update check")
+            runner.equal(session.message.contains(UpdateSession.pauseDisclosure), false,
+                         "idle surface has no permanent pause disclaimer")
             done = true
         }
         spinMainRunLoop(seconds: 0.1)
@@ -1837,7 +1837,7 @@ MainActor.assumeIsolated {
         let driver = UpdateController(hostBundle: .main, boundary: .init(
             prepare: { await session.prepare(target: $0) },
             persistArmed: { try await session.arm(target: $0) },
-            cancelPreparation: { await session.cancelPreparation() }, stateChanged: { _ in }))
+            cancelPreparation: { await session.cancelPreparation() }, stateChanged: { _ in }), confirmInstallation: { true })
         var done = false
         var replies = 0
         Task { @MainActor in
@@ -1857,6 +1857,129 @@ MainActor.assumeIsolated {
         driver.dismissUpdateInstallation()
         runner.equal(driver.coordinator.phase, .uncertain)
         runner.equal(session.blocksLifecycle, true, "dismiss is not disarm")
+    }
+
+    runner.test("updater UI: scheduled discovery advertises availability without consent or preparation") {
+        var disclosures = 0
+        var preparations = 0
+        let driver = UpdateController(hostBundle: .main, boundary: .init(
+            prepare: { _ in preparations += 1; return true }, persistArmed: { _ in },
+            cancelPreparation: { true }, stateChanged: { _ in }),
+            confirmInstallation: { disclosures += 1; return false })
+        driver.reconcileStartup(installerDisarmed: true)
+        let item = SUAppcastItem(dictionary: ["enclosure": ["url": "https://example.test/2.zip", "sparkle:version": "2"]])!
+        runner.equal(driver.supportsGentleScheduledUpdateReminders, true)
+        runner.equal(driver.standardUserDriverShouldHandleShowingScheduledUpdate(item, andInImmediateFocus: true), false)
+        runner.equal(driver.standardUserDriverShouldHandleShowingScheduledUpdate(item, andInImmediateFocus: false), false)
+        var decide: ((SPUUserUpdateChoice) -> Void)?
+        var dismissed = 0
+        driver.handleOffer(target: "2", stage: .notDownloaded, present: { decide = $0 }, reply: {
+            if $0 == .dismiss { dismissed += 1 }
+        })
+        runner.equal(driver.updateAvailable, true)
+        runner.equal(disclosures, 0)
+        runner.equal(preparations, 0)
+        let controller = PopoverViewController()
+        controller.applyUpdatePresentation(title: driver.updateAvailable ? "Update Available…" : "Check for Updates…",
+            enabled: true, blocked: false, message: "")
+        runner.equal(controller.updateActionTitleForTesting, "Update Available…")
+        decide?(.install)
+        runner.equal(disclosures, 1, "only explicit install opens the pause disclosure")
+        runner.equal(preparations, 0, "Later never prepares or downloads")
+        runner.equal(dismissed, 1)
+        decide?(.install)
+        runner.equal(disclosures, 1, "retained reply consumed once")
+        driver.dismissUpdateInstallation()
+        runner.equal(driver.updateAvailable, false)
+    }
+
+    runner.test("updater UI: Sparkle scheduled offers stay hidden, including critical releases; manual offers open") {
+        for userInitiated in [false, true] {
+            for critical in [false, true] {
+                let driver = UpdateController(hostBundle: .main, boundary: .init(
+                    prepare: { _ in false }, persistArmed: { _ in }, cancelPreparation: { true },
+                    stateChanged: { _ in }), confirmInstallation: { fatalError("unsolicited consent") })
+                driver.reconcileStartup(installerDisarmed: true)
+                let archive = NSKeyedArchiver(requiringSecureCoding: true)
+                archive.encode(0, forKey: "SPUUserUpdateStateStage")
+                archive.encode(userInitiated, forKey: "SPUUserUpdateStateUserInitiated")
+                archive.finishEncoding()
+                let decoder = try! NSKeyedUnarchiver(forReadingFrom: archive.encodedData)
+                let state = SPUUserUpdateState(coder: decoder)!
+                decoder.finishDecoding()
+                var dictionary: [String: Any] = ["enclosure": ["url": "https://example.test/2.zip", "sparkle:version": "2"]]
+                if critical { dictionary["sparkle:criticalUpdate"] = [String: String]() }
+                let item = SUAppcastItem(dictionary: dictionary)!
+                runner.equal(item.isCriticalUpdate, critical)
+                let visibleBefore = NSApp.windows.filter { $0.isVisible }.count
+                driver.showUpdateFound(with: item, state: state) { _ in }
+                spinMainRunLoop(seconds: 0.05)
+                runner.equal(driver.updateAvailable, true)
+                runner.equal(NSApp.windows.filter { $0.isVisible }.count > visibleBefore, userInitiated,
+                    "only manual offers show a window; critical=\(critical)")
+                if !userInitiated {
+                    driver.showUpdateInFocus()
+                    runner.equal(NSApp.windows.filter { $0.isVisible }.count > visibleBefore, true,
+                        "user action focuses the retained scheduled offer")
+                }
+                driver.dismissUpdateInstallation()
+                runner.equal(driver.updateAvailable, false)
+            }
+        }
+    }
+
+    runner.test("updater UI: pause alert discloses interruption and defaults to Later") {
+        let alert = UpdateController.makePauseAlert()
+        runner.equal(alert.informativeText.contains(UpdateSession.pauseDisclosure), true)
+        runner.equal(alert.informativeText.contains("will not be replayed"), true)
+        runner.equal(alert.buttons.map { $0.title }, ["Update Anyway", "Later"])
+        runner.equal(alert.buttons[0].keyEquivalent, "")
+        runner.equal(alert.buttons[1].keyEquivalent, "\r")
+    }
+
+    runner.test("updater UI: idle background errors and no-update results acknowledge quietly") {
+        let driver = UpdateController(hostBundle: .main, boundary: .init(
+            prepare: { _ in false }, persistArmed: { _ in }, cancelPreparation: { true },
+            stateChanged: { _ in }), confirmInstallation: { fatalError("unsolicited consent") })
+        driver.reconcileStartup(installerDisarmed: true)
+        var acknowledgements = 0
+        let error = NSError(domain: "test.updater", code: 1)
+        driver.showUpdateNotFoundWithError(error) { acknowledgements += 1 }
+        driver.showUpdaterError(error) { acknowledgements += 1 }
+        runner.equal(acknowledgements, 2)
+        runner.equal(driver.updateAvailable, false)
+        runner.equal(driver.coordinator.phase, .idle)
+    }
+
+    runner.test("updater UI: background check failure during recovery stays quiet and guarded") {
+        let driver = UpdateController(hostBundle: .main, boundary: .init(
+            prepare: { _ in false }, persistArmed: { _ in }, cancelPreparation: { false },
+            stateChanged: { _ in }), confirmInstallation: { fatalError("unsolicited consent") })
+        driver.reconcileStartup(installerDisarmed: false)
+        var acknowledged = false
+        driver.showUpdaterError(NSError(domain: "test.offline", code: 1)) { acknowledged = true }
+        runner.equal(acknowledged, true)
+        runner.equal(driver.coordinator.phase, .uncertain)
+        runner.equal(driver.updateAvailable, false)
+    }
+
+    runner.test("updater UI: disclosed interruption consent avoids a second active-request alert") {
+        let helper = RecordingUpdateRunner([.idle, .confirmationRequired, .prepared])
+        var duplicateWarnings = 0
+        let session = UpdateSession(helper: helper, confirmInterruption: { duplicateWarnings += 1; return false })
+        var completed = false
+        Task { @MainActor in
+            _ = await session.recover()
+            let prepared = await session.prepare(target: "2", interruptionAuthorized: true)
+            runner.equal(prepared, true)
+            runner.equal(duplicateWarnings, 0)
+            let commands = await helper.commands
+            runner.equal(commands.last?.updateAnyway, true)
+            completed = true
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while !completed && Date() < deadline { spinMainRunLoop(seconds: 0.01) }
+        runner.equal(completed, true)
     }
 
     runner.test("updater UI: missing signing key never initializes Sparkle but still reconciles") {
@@ -1928,7 +2051,7 @@ MainActor.assumeIsolated {
         let session = UpdateSession(helper: helper, confirmInterruption: { true })
         let driver = UpdateController(hostBundle: .main, boundary: .init(
             prepare: { await session.prepare(target: $0) }, persistArmed: { try await session.arm(target: $0) },
-            cancelPreparation: { await session.cancelPreparation() }, stateChanged: { _ in }))
+            cancelPreparation: { await session.cancelPreparation() }, stateChanged: { _ in }), confirmInstallation: { true })
         var installs = 0
         var dismisses = 0
         Task { @MainActor in
@@ -1948,7 +2071,7 @@ MainActor.assumeIsolated {
     }
     runner.test("updater UI: Finish Update remains reachable while spawn controls are guarded") {
         let controller = PopoverViewController()
-        controller.applyUpdatePresentation(title: "Finish Update…", enabled: true, automatic: false,
+        controller.applyUpdatePresentation(title: "Finish Update…", enabled: true,
             blocked: true, message: "Update recovery needs attention.")
         controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
         runner.equal(controller.guidanceText, nil, "guarded recovery must not advise starting the proxy")

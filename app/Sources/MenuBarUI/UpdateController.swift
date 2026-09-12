@@ -5,7 +5,7 @@ import Sparkle
 /// Early-gating adapter. Production startup and menu wiring deliberately live elsewhere.
 /// All lifecycle closures must finish their durable work before returning.
 @MainActor
-public final class UpdateController: NSObject, SPUUserDriver {
+public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDriverDelegate {
     public struct Boundary {
         public var prepare: (String) async -> Bool
         public var persistArmed: (String) async throws -> Void
@@ -24,13 +24,46 @@ public final class UpdateController: NSObject, SPUUserDriver {
     }
 
     public private(set) var coordinator = UpdateCoordinator()
-    private let standard: SPUStandardUserDriver
+    private lazy var standard = SPUStandardUserDriver(hostBundle: hostBundle, delegate: self)
+    private let hostBundle: Bundle
+    private let confirmInstallation: () -> Bool
+    package private(set) var updateAvailable = false
+    private var userInitiated = false
     private let boundary: Boundary
 
-    public init(hostBundle: Bundle, boundary: Boundary) {
-        self.standard = SPUStandardUserDriver(hostBundle: hostBundle, delegate: nil)
+    public init(hostBundle: Bundle, boundary: Boundary, confirmInstallation: @escaping () -> Bool = UpdateController.confirmPause) {
+        self.hostBundle = hostBundle
+        self.confirmInstallation = confirmInstallation
         self.boundary = boundary
         super.init()
+    }
+
+    public static func makePauseAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "Install the update?"
+        alert.informativeText = UpdateSession.pauseDisclosure + " Active requests may fail and will not be replayed; retry them after the update."
+        alert.addButton(withTitle: "Update Anyway")
+        alert.addButton(withTitle: "Later")
+        alert.buttons[0].keyEquivalent = ""
+        alert.buttons[1].keyEquivalent = "\r"
+        return alert
+    }
+
+    public static func confirmPause() -> Bool {
+        let alert = makePauseAlert()
+        NSApp.activate(ignoringOtherApps: true)
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    public var supportsGentleScheduledUpdateReminders: Bool { true }
+    public func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool { false }
+    public func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
+        updateAvailable = true
+        changed()
+    }
+    public func standardUserDriverWillFinishUpdateSession() {
+        updateAvailable = false
+        changed()
     }
 
     public func reconcileStartup(installerDisarmed: Bool) {
@@ -42,6 +75,7 @@ public final class UpdateController: NSObject, SPUUserDriver {
 
     public func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState,
                                 reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        userInitiated = state.userInitiated
         let stage: UpdateCoordinator.InstallerStage = state.stage == .installing ? .installing
             : (state.stage == .downloaded ? .downloaded : .notDownloaded)
         handleOffer(target: appcastItem.versionString, stage: stage, present: { decide in
@@ -58,6 +92,7 @@ public final class UpdateController: NSObject, SPUUserDriver {
             reply(.dismiss)
             return
         }
+        updateAvailable = true
         changed()
         let offerGeneration = coordinator.generation
         var replied = false
@@ -76,6 +111,12 @@ public final class UpdateController: NSObject, SPUUserDriver {
                 self.coordinator.cancel()
                 self.changed()
                 respond(choice)
+                return
+            }
+            guard self.confirmInstallation() else {
+                self.coordinator.cancel()
+                self.changed()
+                respond(.dismiss)
                 return
             }
             guard let generation = self.coordinator.beginPreparation() else { return }
@@ -112,11 +153,11 @@ public final class UpdateController: NSObject, SPUUserDriver {
     }
 
     public func show(_ request: SPUUpdatePermissionRequest, reply: @escaping (SUUpdatePermissionResponse) -> Void) { standard.show(request, reply: reply) }
-    public func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) { standard.showUserInitiatedUpdateCheck(cancellation: cancellation) }
+    public func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) { userInitiated = true; standard.showUserInitiatedUpdateCheck(cancellation: cancellation) }
     public func showUpdateReleaseNotes(with downloadData: SPUDownloadData) { standard.showUpdateReleaseNotes(with: downloadData) }
     public func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) { standard.showUpdateReleaseNotesFailedToDownloadWithError(error) }
-    public func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) { standard.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement) }
-    public func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) { coordinator.installerSessionEnded(); changed(); standard.showUpdaterError(error, acknowledgement: acknowledgement) }
+    public func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) { updateAvailable = false; changed(); if userInitiated { standard.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement) } else { acknowledgement() } }
+    public func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) { let showError = userInitiated || [.preparing, .prepared, .armed].contains(coordinator.phase); coordinator.installerSessionEnded(); updateAvailable = false; changed(); if showError { standard.showUpdaterError(error, acknowledgement: acknowledgement) } else { acknowledgement() } }
     public func showDownloadInitiated(cancellation: @escaping () -> Void) {
         standard.showDownloadInitiated { [weak self] in
             self?.coordinator.cancel(); self?.changed(); cancellation()
@@ -139,6 +180,6 @@ public final class UpdateController: NSObject, SPUUserDriver {
     }
     public func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) { standard.showInstallingUpdate(withApplicationTerminated: applicationTerminated, retryTerminatingApplication: retryTerminatingApplication) }
     public func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { coordinator.installerSessionEnded(); changed(); standard.showUpdateInstalledAndRelaunched(relaunched, acknowledgement: acknowledgement) }
-    public func dismissUpdateInstallation() { coordinator.installerSessionEnded(); changed(); standard.dismissUpdateInstallation() }
-    public func showUpdateInFocus() { standard.showUpdateInFocus() }
+    public func dismissUpdateInstallation() { if coordinator.phase == .offered { coordinator.cancel() }; coordinator.installerSessionEnded(); updateAvailable = false; userInitiated = false; changed(); standard.dismissUpdateInstallation() }
+    public func showUpdateInFocus() { userInitiated = true; standard.showUpdateInFocus() }
 }

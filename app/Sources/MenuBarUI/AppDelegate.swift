@@ -158,7 +158,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.onApplyCodexCatalog = { [weak self] in self?.applyCodexCatalog() }
         controller.onOpenStartupOptions = { [weak self] in self?.openStartupOptions() }
         controller.onCheckForUpdates = { [weak self] in self?.checkForUpdates(nil) }
-        controller.onAutomaticUpdateChecks = { [weak self] in self?.toggleAutomaticUpdateChecks(nil) }
         controller.onStopAndQuit = { [weak self] in self?.stopCodexCommanderAndQuit(nil) }
         controller.onLaunchAtLoginChange = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
@@ -198,7 +197,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             || LifecycleHelperDiscovery.discover()?.appOwnedRuntime == true
         guard packaged else {
             controller.applyUpdatePresentation(title: "Updates unavailable in this build", enabled: false,
-                                               automatic: false, blocked: false, message: "")
+                                               blocked: false, message: "")
             reconcileLaunchAtLogin()
             startProxyOnLaunch()
             return
@@ -246,20 +245,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         guard let updater = appUpdater else { return }
         let blocked = updaterStartupPending || updater.blocksLifecycle
         controller.applyUpdatePresentation(
-            title: blocked ? "Finish Update…" : "Check for Updates…",
+            title: blocked ? "Finish Update…" : (updater.updateAvailable ? "Update Available…" : "Check for Updates…"),
             enabled: (updater.available || blocked) && !updaterStartupPending,
-            automatic: updater.automaticChecks, blocked: blocked,
-            message: updater.unavailableReason ?? updater.session.message, automaticEnabled: updater.available)
+            blocked: blocked,
+            message: blocked ? updater.session.message : (updater.unavailableReason ?? ""))
         updateApplicationMenu()
     }
 
     @objc private func checkForUpdates(_ sender: Any?) {
         appUpdater?.check()
-    }
-
-    @objc private func toggleAutomaticUpdateChecks(_ sender: Any?) {
-        guard let updater = appUpdater else { return }
-        updater.setAutomaticChecks(!updater.automaticChecks)
     }
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -469,9 +463,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             check.keyEquivalentModifierMask = [.command, .shift]
             check.target = self
             menu.insertItem(check, at: 0)
-            let automatic = NSMenuItem(title: "Automatically Check for Updates", action: #selector(toggleAutomaticUpdateChecks(_:)), keyEquivalent: "")
-            automatic.target = self
-            menu.insertItem(automatic, at: 1)
         }
         updateApplicationMenu()
     }
@@ -482,12 +473,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(checkForUpdates(_:)) {
-            menuItem.title = appUpdater?.blocksLifecycle == true ? "Finish Update…" : "Check for Updates…"
+            menuItem.title = appUpdater?.blocksLifecycle == true ? "Finish Update…" : (appUpdater?.updateAvailable == true ? "Update Available…" : "Check for Updates…")
             return (appUpdater?.available == true || appUpdater?.blocksLifecycle == true) && !updaterStartupPending
-        }
-        if menuItem.action == #selector(toggleAutomaticUpdateChecks(_:)) {
-            menuItem.state = appUpdater?.automaticChecks == true ? .on : .off
-            return appUpdater?.available == true
         }
         if menuItem.action == #selector(stopCodexCommanderAndQuit(_:)) {
             return LifecycleActionAvailability.canStopAndQuit(

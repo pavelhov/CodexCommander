@@ -37,7 +37,7 @@ public final class UpdateSession {
         }
     }
 
-    public func prepare(target: String) async -> Bool {
+    public func prepare(target: String, interruptionAuthorized: Bool = false) async -> Bool {
         guard !busy else { return false }
         busy = true
         defer { busy = false; changed?() }
@@ -57,7 +57,7 @@ public final class UpdateSession {
             var result = try await helper.run(MacOSUpdateCommand(.prepare, transactionId: id, targetBuild: target))
             adopt(result)
             if result.status == .confirmationRequired {
-                guard confirmInterruption() else { return false }
+                guard interruptionAuthorized || confirmInterruption() else { return false }
                 result = try await helper.run(MacOSUpdateCommand(.prepare, transactionId: id, targetBuild: target, updateAnyway: true))
                 adopt(result)
             }
@@ -118,8 +118,8 @@ public final class UpdateSession {
         } else {
             transactionId = nil; targetBuild = nil
             message = result.status == .recovered
-                ? "Update recovery completed. " + Self.pauseDisclosure
-                : Self.pauseDisclosure
+                ? "Update recovery completed."
+                : ""
         }
     }
 }
@@ -143,7 +143,7 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
     }
 
     package var available: Bool { updater != nil }
-    var automaticChecks: Bool { updater?.automaticallyChecksForUpdates ?? false }
+    var updateAvailable: Bool { driver?.updateAvailable == true }
     var blocksLifecycle: Bool { session.blocksLifecycle }
 
     package func start() async -> Bool {
@@ -156,7 +156,7 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
             return ordinaryStartup
         }
         let driver = UpdateController(hostBundle: bundle, boundary: .init(
-            prepare: { [session] target in await session.prepare(target: target) },
+            prepare: { [session] target in await session.prepare(target: target, interruptionAuthorized: true) },
             persistArmed: { [session] target in try await session.arm(target: target) },
             cancelPreparation: { [session] in await session.cancelPreparation() },
             stateChanged: { [weak self] state in
@@ -168,6 +168,7 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
         driver.reconcileStartup(installerDisarmed: !session.blocksLifecycle)
         self.driver = driver
         let updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: driver, delegate: self)
+        updater.automaticallyChecksForUpdates = true
         updater.automaticallyDownloadsUpdates = false
         do {
             try updater.start()
@@ -185,12 +186,6 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
             updater?.checkForUpdates()
             changed?()
         }
-    }
-
-    func setAutomaticChecks(_ enabled: Bool) {
-        updater?.automaticallyChecksForUpdates = enabled
-        updater?.automaticallyDownloadsUpdates = false
-        changed?()
     }
 
     package func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,

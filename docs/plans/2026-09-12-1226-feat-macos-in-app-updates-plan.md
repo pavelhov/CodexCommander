@@ -28,7 +28,7 @@ The v0.1.6 removal of Quit Menu Bar simplifies normal quitting; it does not supp
 
 - D1: Full download, install, and relaunch is required. `session-settled: user-directed`. A notification linking to a download page does not meet the request. Governs: R1, R2, R3, R4.
 - D2: Keep Stop CodexCommander and Quit as the sole normal quit action, including Cmd+Q. `session-settled: user-approved`. Do not restore UI-only quit to support updates. Governs: R2.
-- A1: Start with stable releases, automatic checks subject to the user's update preference, and a manual Check for Updates action. Installation requires explicit user consent; no unattended replacement.
+- D4: Check stable releases automatically and quietly in the background. Show an available-update action in the menu; disclose the download/install pause only after the user chooses that action, then require explicit installation consent. Keep manual Check for Updates. Remove the automatic-check checkbox and permanent pause disclaimer. `session-settled: user-directed — revised after reviewing the actual menu screenshot; supersedes the earlier opt-in checking assumption`. Governs R1, R2, U4. No automatic downloads or unattended replacement.
 - D3: When active requests exist at the install attempt, immediately show Update Anyway or Later. Update Anyway authorizes interrupting requests; Later leaves them running. There is no countdown or drain wait. `session-settled: user-approved — chosen over waiting for active requests: the user explicitly selected Update Anyway or Later`. Governs R2, R3, R8. A quiet proxy proceeds through normal install consent; interrupted work is never automatically replayed.
 - A3: Existing v0.1.6 users need one manual installation of the first updater-enabled release. Do not assign the release number in this plan.
 
@@ -226,7 +226,7 @@ U1 resolves concrete pending-installer inspection and disarm evidence. Exact hel
 
 **Files:** `app/Sources/MenuBarUI/UpdateController.swift`; `app/Sources/MenuBarCore/UpdateCoordinator.swift`; `app/Sources/MenuBarUI/AppDelegate.swift`; `app/Sources/MenuBarUI/Views.swift`; `app/Sources/MenuBarUI/OperationStatusView.swift`; `app/Sources/MenuBarUI/PopoverViewController.swift`; `app/Sources/MenuBarApp/main.swift`; `app/Sources/MenuBarCoreTests/UpdateSuite.swift`; `app/Sources/MenuBarCoreTests/ActionSuite.swift`; `app/Sources/MenuBarUITests/main.swift`.
 
-**Approach:** Initialize recovery before ordinary startup and only then enable checks. Add Check for Updates, opt-in automatic checks and dockless update reminders. Present pause duration honestly, immediate active-request warning with Update Anyway/Later, download/install state and actionable recovery. Keep one normal Stop and Quit path; updater-authorized termination avoids a redundant normal-quit prompt only after preparation succeeds.
+**Approach:** Initialize recovery before ordinary startup and only then enable checks. Check quietly in the background and expose an available-update menu action, with manual Check for Updates retained. Show pause disclosure only after an update action is selected, followed by explicit install consent; no automatic-check checkbox or permanent disclaimer. Preserve immediate active-request warning with Update Anyway/Later, download/install state and actionable recovery. Keep one normal Stop and Quit path; updater-authorized termination avoids a redundant normal-quit prompt only after preparation succeeds.
 
 **Test scenarios:**
 

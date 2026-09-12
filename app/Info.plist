@@ -35,7 +35,7 @@
   <key>SUAllowsAutomaticUpdates</key>
   <false/>
   <key>SUEnableAutomaticChecks</key>
-  <false/>
+  <true/>
   <key>LSUIElement</key>
   <true/>
   <key>LSMultipleInstancesProhibited</key>

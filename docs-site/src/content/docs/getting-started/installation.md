@@ -66,9 +66,10 @@ will need to install it manually once. Its archive name will include both versio
 `CodexCommander-<version>-<build>-macos-universal.zip`, with a matching `.zip.sha256` file. The existing
 v0.1.6 archive remains `CodexCommander-0.1.6-macos-universal.zip`.
 
-After that bootstrap, **Check for Updates…** will offer compatible stable releases. Automatic checks
-are opt-in; installation requires an explicit choice and pauses the proxy before downloading through
-installation. See [App updates](/guides/macos-menu-bar/#app-updates-upcoming) for active-request
+After that bootstrap, the app checks quietly in the background and shows **Update Available…**
+when a compatible stable release is found. **Check for Updates…** remains available for manual checks.
+Choosing to install displays the pause/interruption warning with **Update Anyway** or **Later**;
+installation pauses the proxy before downloading through installation. See [App updates](/guides/macos-menu-bar/#app-updates-upcoming) for active-request
 choices and recovery. These previews are unnotarized; follow the
 [manual installation steps](/guides/macos-menu-bar/#install) for macOS first-launch prompts.
 

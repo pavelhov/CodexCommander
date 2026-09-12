@@ -20,7 +20,6 @@ public final class PopoverViewController: NSViewController {
     private let routeThroughProxyButton = NSButton()
     private let stopAndQuitButton = NSButton()
     private let updateButton = NSButton()
-    private let automaticUpdateButton = NSButton(checkboxWithTitle: "Automatically check for updates", target: nil, action: nil)
     private let updateMessage = NSTextField(wrappingLabelWithString: "")
     private var updateBlocksLifecycle = false
     private let startupMode = StartupModeView()
@@ -58,7 +57,6 @@ public final class PopoverViewController: NSViewController {
     public var onApplyCodexCatalog: (() -> Void)?
     public var onOpenStartupOptions: (() -> Void)?
     public var onCheckForUpdates: (() -> Void)?
-    public var onAutomaticUpdateChecks: (() -> Void)?
     public var onStopAndQuit: (() -> Void)?
     public var onLaunchAtLoginChange: ((Bool) -> Void)?
     public var onLaunchAtLoginRemediation: ((LaunchAtLoginRemediation) -> Void)?
@@ -147,7 +145,7 @@ public final class PopoverViewController: NSViewController {
         exitActions.alignment = .centerY
 
         footerActions.setViews(
-            [navigationActions, lifecycleActions, codexRouteActions, updateButton, automaticUpdateButton, updateMessage, exitActions],
+            [navigationActions, lifecycleActions, codexRouteActions, updateButton, updateMessage, exitActions],
             in: .top
         )
         footerActions.orientation = .vertical
@@ -202,9 +200,6 @@ public final class PopoverViewController: NSViewController {
         updateButton.action = #selector(updateTapped)
         updateButton.keyEquivalent = "u"
         updateButton.keyEquivalentModifierMask = [.command, .shift]
-        automaticUpdateButton.target = self
-        automaticUpdateButton.action = #selector(automaticUpdateTapped)
-        automaticUpdateButton.font = Theme.caption
         updateMessage.font = Theme.caption
         updateMessage.textColor = Theme.muted
         updateMessage.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2
@@ -410,13 +405,11 @@ public final class PopoverViewController: NSViewController {
         applyUpdateLifecycleGuard()
     }
 
-    public func applyUpdatePresentation(title: String, enabled: Bool, automatic: Bool, blocked: Bool, message: String, automaticEnabled: Bool? = nil) {
+    public func applyUpdatePresentation(title: String, enabled: Bool, blocked: Bool, message: String) {
         _ = view
         updateButton.title = title
         updateButton.setAccessibilityLabel(title)
         updateButton.isEnabled = enabled
-        automaticUpdateButton.state = automatic ? .on : .off
-        automaticUpdateButton.isEnabled = automaticEnabled ?? enabled
         updateMessage.stringValue = message
         updateMessage.isHidden = message.isEmpty
         updateBlocksLifecycle = blocked
@@ -439,7 +432,6 @@ public final class PopoverViewController: NSViewController {
     }
 
     @objc private func updateTapped() { onCheckForUpdates?() }
-    @objc private func automaticUpdateTapped() { onAutomaticUpdateChecks?() }
 
     public func refreshSize() { resize() }
 
