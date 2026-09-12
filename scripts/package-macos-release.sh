@@ -7,6 +7,40 @@ set -euo pipefail
 # retained as CI/test artifacts or explicitly labeled unnotarized previews, but only a Developer
 # ID-signed, Gatekeeper-accepted, stapled archive may be marked distribution-ready.
 
+# Install complete staged files with link(2), which never follows or overwrites
+# the destination. Staging lives on the output filesystem so each install is atomic.
+install_release_assets() {
+  bun -e '
+    const { lstatSync, realpathSync, linkSync, unlinkSync } = require("node:fs");
+    const { join, basename } = require("node:path");
+    const [stage, output, archive, checksum] = process.argv.slice(1);
+    try {
+      for (const directory of [stage, output]) {
+        const stat = lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error();
+      }
+      if (realpathSync(stage) === realpathSync(output)) throw new Error();
+      for (const name of [archive, checksum]) {
+        if (!name || basename(name) !== name || name === "." || name === "..") throw new Error();
+        const source = lstatSync(join(stage, name));
+        if (!source.isFile() || source.isSymbolicLink() || source.nlink !== 1) throw new Error();
+        try { lstatSync(join(output, name)); throw new Error("occupied"); }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
+      }
+      for (const name of [archive, checksum]) linkSync(join(stage, name), join(output, name));
+      for (const name of [archive, checksum]) unlinkSync(join(stage, name));
+    } catch {
+      console.error("Refusing unsafe or existing immutable release assets; no destination is overwritten.");
+      process.exit(1);
+    }
+  ' "$1" "$2" "$3" "$4"
+}
+
+# Sourcing exposes only the bounded installer for focused filesystem regression tests.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 output_dir="${RELEASE_OUTPUT_DIR:-$repo_root/dist/release}"
@@ -34,18 +68,33 @@ if [[ "$universal" != "0" && "$universal" != "1" ]]; then
   exit 1
 fi
 
+if [[ "$universal" != "1" ]]; then
+  echo "Authenticated macOS updater releases must be universal." >&2
+  exit 1
+fi
+bun "$script_dir/macos-update-packaging.ts" release
+
 if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=normal 2>/dev/null)" ]]; then
   echo "package:macos requires a clean git working tree (no uncommitted or untracked files)." >&2
   echo "Commit your changes, or use bun run build:macos for a local development build." >&2
   exit 1
 fi
 
+if [[ -L "$output_dir" ]]; then
+  echo "Refusing symbolic-link release output directory." >&2
+  exit 1
+fi
 mkdir -p "$output_dir"
-output_dir="$(cd "$output_dir" && pwd)"
+output_dir="$(cd "$output_dir" && pwd -P)"
 
 build_root="$(mktemp -d "${TMPDIR:-/tmp}/CodexCommander-release.XXXXXX")"
-cleanup() { rm -rf "$build_root"; }
+release_stage=""
+cleanup() {
+  rm -rf "$build_root"
+  if [[ -n "$release_stage" ]]; then rm -rf "$release_stage"; fi
+}
 trap cleanup EXIT
+release_stage="$(mktemp -d "$output_dir/.CodexCommander-assets.XXXXXX")"
 
 OUTPUT_DIR="$build_root" UNIVERSAL="$universal" CONFIGURATION=release \
   bash "$script_dir/build-macos-app.sh" >&2
@@ -121,19 +170,24 @@ else
   architecture_label="${architectures// /-}"
 fi
 
-archive_name="CodexCommander-${package_version}-macos-${architecture_label}.zip"
+archive_name="CodexCommander-${package_version}-${MACOS_BUILD_NUMBER}-macos-${architecture_label}.zip"
 checksum_name="${archive_name}.sha256"
 archive_path="$output_dir/$archive_name"
 checksum_path="$output_dir/$checksum_name"
-rm -f "$archive_path" "$checksum_path"
+if [[ -e "$archive_path" || -L "$archive_path" || -e "$checksum_path" || -L "$checksum_path" ]]; then
+  echo "Refusing to overwrite immutable release assets; allocate a new build number." >&2
+  exit 1
+fi
+
+staged_archive="$release_stage/$archive_name"
 
 # ditto rather than zip: it preserves extended attributes and symlinks, so the unpacked
 # bundle stays launchable. Plain zip corrupts the code signature.
-ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$archive_path"
+ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staged_archive"
 
 # An archive that exists but does not contain the executable is the failure mode this
 # assertion exists to catch.
-archive_entries="$(unzip -Z1 "$archive_path")"
+archive_entries="$(unzip -Z1 "$staged_archive")"
 if ! grep -Fqx 'CodexCommander.app/Contents/MacOS/CodexCommanderMenuBar' <<< "$archive_entries"; then
   echo "Packaged archive does not contain the CodexCommander executable." >&2
   echo "Archive entries were:" >&2
@@ -151,10 +205,23 @@ for required_entry in \
   fi
 done
 
+# Verify the actual archive after extraction, including nested framework links and
+# executable permissions. Source-bundle validation alone cannot prove ZIP integrity.
+verification_root="$build_root/archive-verification"
+mkdir -p "$verification_root"
+ditto -x -k "$staged_archive" "$verification_root"
+verified_app="$verification_root/CodexCommander.app"
+bun "$script_dir/macos-update-packaging.ts" framework "$verified_app/Contents/Frameworks/Sparkle.framework"
+codesign --verify --deep --strict "$verified_app"
+lipo "$verified_app/Contents/MacOS/CodexCommanderMenuBar" -verify_arch arm64 x86_64
+lipo "$verified_app/Contents/Resources/runtime/node_modules/bun/bin/bun.exe" -verify_arch arm64 x86_64
+
 (
-  cd "$output_dir"
+  cd "$release_stage"
   shasum -a 256 "$archive_name" > "$checksum_name"
 )
+
+install_release_assets "$release_stage" "$output_dir" "$archive_name" "$checksum_name"
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {

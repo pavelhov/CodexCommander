@@ -1,3 +1,4 @@
+import { assertMacosUpdateAllowsMutation, assertMacosUpdateAllowsRuntimeStart, MacosUpdateTransactionStore, withDelegatedMacosUpdateRecovery } from "../server/macos-update-transaction";
 import {
   loadConfig,
   readPid,
@@ -297,12 +298,20 @@ export interface ForegroundProxyStartIo {
   waitForever?: () => Promise<never>;
 }
 
+function delegatedUpdateRecoveryId(): string | undefined {
+  const pending = new MacosUpdateTransactionStore().read();
+  if (!pending) return undefined;
+  try { if (assertMacosUpdateAllowsRuntimeStart() === "independent") return undefined; } catch { /* bundle child requires scoped recovery proof */ }
+  return pending.transactionId;
+}
+
 async function acquireForegroundStartAuthority(
   mode: "explicit" | "delegated" | "service",
   io: ForegroundProxyStartIo,
 ): Promise<{
   authority?: ProxyLifecycleAuthority;
   mayMutateRouting: boolean;
+  recoveryId?: string;
   release(): void;
 }> {
   if (mode === "explicit") {
@@ -322,7 +331,7 @@ async function acquireForegroundStartAuthority(
         io.consumeServiceStartDelegation ?? consumeProxyServiceStartDelegation
       )();
       if (delegation) {
-        return { mayMutateRouting: false, release: () => delegatedStart.release() };
+        return { mayMutateRouting: false, recoveryId: delegatedUpdateRecoveryId(), release: () => delegatedStart.release() };
       }
     } catch (error) {
       delegatedStart.release();
@@ -337,7 +346,11 @@ async function acquireForegroundStartAuthority(
 
   // A parent-delegated foreground child is the deliberate S-only participant.
   const start = await (io.acquireServiceStartLock ?? acquireProxyStartLock)();
-  return { mayMutateRouting: false, release: () => start.release() };
+  try {
+    const recoveryId = delegatedUpdateRecoveryId();
+    if (recoveryId && !(io.consumeServiceStartDelegation ?? consumeProxyServiceStartDelegation)()) throw new Error("Update recovery start lacks delegated authority.");
+    return { mayMutateRouting: false, recoveryId, release: () => start.release() };
+  } catch (error) { start.release(); throw error; }
 }
 
 export async function runForegroundProxyStart(
@@ -357,12 +370,18 @@ export async function runForegroundProxyStart(
   if (serviceToken) env.CODEXCOMMANDER_API_AUTH_TOKEN = serviceToken;
   const serviceChild = env.CCX_SERVICE === "1";
   const delegatedStart = env[PROXY_DELEGATED_START_ENV] === "1";
-  const parentDelegated = serviceChild || delegatedStart;
+  let parentDelegated = serviceChild || delegatedStart;
+  let independentDuringUpdate = false;
   const lifecycleMode = serviceChild ? "service" : delegatedStart ? "delegated" : "explicit";
 
   let lifecycle: Awaited<ReturnType<typeof acquireForegroundStartAuthority>>;
   try {
     lifecycle = await acquireForegroundStartAuthority(lifecycleMode, io);
+    try {
+      if (lifecycle.recoveryId) withDelegatedMacosUpdateRecovery(lifecycle.recoveryId, () => assertMacosUpdateAllowsMutation());
+      else independentDuringUpdate = assertMacosUpdateAllowsRuntimeStart() === "independent";
+      if (independentDuringUpdate) { lifecycle.mayMutateRouting = false; parentDelegated = true; }
+    } catch (error) { lifecycle.release(); throw error; }
   } catch (error) {
     logger.error(
       `❌ Could not coordinate proxy ${parentDelegated ? "startup" : "lifecycle"}: ${
@@ -372,6 +391,7 @@ export async function runForegroundProxyStart(
     return 1;
   }
 
+  const continueStart = async (): Promise<number> => {
   let authorityReleased = false;
   const releaseAuthority = (): void => {
     if (authorityReleased) return;
@@ -430,6 +450,10 @@ export async function runForegroundProxyStart(
       config = load();
     }
 
+    if (currentHomeLive && independentDuringUpdate) {
+      logger.log("Independent proxy is already running; update-time routing remains unchanged.");
+      return 0;
+    }
     if (currentHomeLive) {
       let synced: CliCodexSyncResult;
       try {
@@ -571,7 +595,8 @@ export async function runForegroundProxyStart(
       // Cleanup continues so routing and runtime records are not stranded.
     }
     const recycling = (io.isRecyclingForExit ?? isRecyclingForExit)();
-    if (!recycling) {
+    const preserveSharedState = independentDuringUpdate && new MacosUpdateTransactionStore().read() !== null;
+    if (!recycling && !preserveSharedState) {
       try {
         (io.revertSystemEnv ?? revertSystemEnv)();
       } catch {
@@ -581,6 +606,7 @@ export async function runForegroundProxyStart(
     removePidFn(process.pid);
     removeRuntimePortFn(process.pid);
     if (!recycling
+      && !preserveSharedState
       && !serviceChild
       && (io.serviceEnvironmentOwnedHere ?? serviceEnvironmentOwnedHere)()) {
       try {
@@ -609,7 +635,7 @@ export async function runForegroundProxyStart(
         // E -> S pair before changing durable routing intent. This avoids both
         // recursive E acquisition and a Start interleaving ON around native
         // restoration.
-        if (!serviceChild && !(io.isRecyclingForExit ?? isRecyclingForExit)()) {
+        if (!serviceChild && !(independentDuringUpdate && new MacosUpdateTransactionStore().read()) && !(io.isRecyclingForExit ?? isRecyclingForExit)()) {
           try {
             await initialization;
             if (authorityReleased) {
@@ -714,4 +740,6 @@ export async function runForegroundProxyStart(
   }
   await initialization;
   return 0;
+  };
+  return lifecycle.recoveryId ? withDelegatedMacosUpdateRecovery(lifecycle.recoveryId, continueStart) : continueStart();
 }
