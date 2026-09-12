@@ -921,7 +921,7 @@ export async function ensureProxyLifecycle(
 }
 
 /** Caller holds proxy-ensure.lock across preparation, spawn, readiness and sync. */
-async function ensureProxyLifecycleUnderLock(
+export async function ensureProxyLifecycleUnderLock(
   options: EnsureProxyLifecycleOptions = {},
   authority: ProxyLifecycleAuthority,
 ): Promise<ProxyLifecycleResult> {

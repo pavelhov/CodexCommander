@@ -311,7 +311,7 @@ public enum LifecycleHelperDiscovery {
     }
 }
 
-private final class BoundedOutput: @unchecked Sendable {
+final class BoundedOutput: @unchecked Sendable {
     private let lock = NSLock()
     private let limit: Int
     private var data = Data()
@@ -335,7 +335,7 @@ private final class BoundedOutput: @unchecked Sendable {
     }
 }
 
-private final class TimeoutState: @unchecked Sendable {
+final class TimeoutState: @unchecked Sendable {
     private let lock = NSLock()
     private var fired = false
 
@@ -455,7 +455,7 @@ public actor LifecycleHelper: LifecycleCommandRunning {
 
     /// Preserve CodexCommander/Codex configuration while removing runtime preloads and an
     /// attacker-controlled PATH from this privileged fixed-action bridge.
-    private nonisolated static func controlledEnvironment(for invocation: LifecycleInvocation) -> [String: String] {
+    nonisolated static func controlledEnvironment(for invocation: LifecycleInvocation) -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
         if let workingDirectory = invocation.workingDirectory {

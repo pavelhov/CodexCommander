@@ -10,6 +10,8 @@ export interface MacosUpdateBundleIdentity {
   build: string;
 }
 export interface MacosUpdateSemanticSnapshot {
+  sourceFingerprint?: string;
+  intentFingerprint?: string;
   running: boolean;
   routing: "native" | "owned" | "external";
   supervision: "none" | "launchd";
@@ -28,6 +30,7 @@ export interface MacosUpdateRequest {
 }
 export interface MacosUpdateTransaction {
   schemaVersion: 1;
+  postPreparationFingerprint: string | null;
   transactionId: string;
   source: MacosUpdateBundleIdentity;
   target: MacosUpdateBundleIdentity;
@@ -56,15 +59,15 @@ function identity(value: unknown): value is MacosUpdateBundleIdentity {
   return exact(value, ["bundlePath", "build"]) && bounded(value.bundlePath) && isAbsolute(value.bundlePath) && value.bundlePath.endsWith(".app") && typeof value.build === "string" && /^[1-9][0-9]{0,19}$/.test(value.build);
 }
 function snapshot(value: unknown): value is MacosUpdateSemanticSnapshot {
-  if (!exact(value, ["running", "routing", "supervision", "process", "supervisorFingerprint"]))
+  if (!value || typeof value !== "object" || !exact(value, ["running", "routing", "supervision", "process", "supervisorFingerprint", ...("sourceFingerprint" in value ? ["sourceFingerprint"] : []), ...("intentFingerprint" in value ? ["intentFingerprint"] : [])]))
     return false;
-  return typeof value.running === "boolean" && ["native", "owned", "external"].includes(String(value.routing)) && ["none", "launchd"].includes(String(value.supervision))
+  return (value.sourceFingerprint === undefined || bounded(value.sourceFingerprint)) && (value.intentFingerprint === undefined || bounded(value.intentFingerprint)) && typeof value.running === "boolean" && ["native", "owned", "external"].includes(String(value.routing)) && ["none", "launchd"].includes(String(value.supervision))
     && (value.process === null || (exact(value.process, ["pid", "fingerprint"]) && integer(value.process.pid) && bounded(value.process.fingerprint)))
     && (value.supervisorFingerprint === null || bounded(value.supervisorFingerprint));
 }
 function parse(value: unknown): MacosUpdateTransaction {
-  if (!exact(value, ["schemaVersion", "transactionId", "source", "target", "phase", "generation", "installerMayBeArmed", "interruptionAuthorized", "original", "latestIntent"])
-    || value.schemaVersion !== 1 || !bounded(value.transactionId) || !identity(value.source) || !identity(value.target)
+  if (!exact(value, ["schemaVersion", "postPreparationFingerprint", "transactionId", "source", "target", "phase", "generation", "installerMayBeArmed", "interruptionAuthorized", "original", "latestIntent"])
+    || !(value.postPreparationFingerprint === null || bounded(value.postPreparationFingerprint)) || value.schemaVersion !== 1 || !bounded(value.transactionId) || !identity(value.source) || !identity(value.target)
     || value.source.bundlePath !== value.target.bundlePath || BigInt(value.target.build) <= BigInt(value.source.build)
     || typeof value.interruptionAuthorized !== "boolean" || typeof value.installerMayBeArmed !== "boolean" || !phases.includes(value.phase as MacosUpdatePhase) || !integer(value.generation) || !snapshot(value.original)
     || !(value.latestIntent === null || (exact(value.latestIntent, ["running", "routing", "generation"]) && (value.latestIntent.running === false || value.latestIntent.running === null) && (value.latestIntent.routing === "native" || value.latestIntent.routing === null) && integer(value.latestIntent.generation) && value.latestIntent.generation <= value.generation)))
@@ -151,10 +154,10 @@ export class MacosUpdateTransactionStore {
       return prior;
     }
     return this.write(authority, {
-      schemaVersion: 1, transactionId: request.transactionId, source: request.source, target: request.target, phase: "preparing", generation: 1, installerMayBeArmed: false, interruptionAuthorized: false, original, latestIntent: null
+      schemaVersion: 1, postPreparationFingerprint: null, transactionId: request.transactionId, source: request.source, target: request.target, phase: "preparing", generation: 1, installerMayBeArmed: false, interruptionAuthorized: false, original, latestIntent: null
     });
   }
-  transition(authority: ProxyLifecycleAuthority, id: string, phase: MacosUpdatePhase): MacosUpdateTransaction {
+  transition(authority: ProxyLifecycleAuthority, id: string, phase: MacosUpdatePhase, preparationFingerprint?: string): MacosUpdateTransaction {
     const prior = this.require(id);
     const allowed: Record<MacosUpdatePhase, MacosUpdatePhase[]> = {
       preparing: ["confirmation-required", "prepared", "uncertain", "recovering"],
@@ -164,7 +167,7 @@ export class MacosUpdateTransactionStore {
     if ((phase === "recovering" && prior.installerMayBeArmed) || !allowed[prior.phase].includes(phase))
       throw new MacosUpdateBlockedError();
     return this.write(authority, {
-      ...prior, phase, installerMayBeArmed: prior.installerMayBeArmed || phase === "armed", generation: prior.generation + 1
+      ...prior, phase, postPreparationFingerprint: phase === "prepared" && preparationFingerprint !== undefined && prior.postPreparationFingerprint === null ? preparationFingerprint : prior.postPreparationFingerprint, installerMayBeArmed: prior.installerMayBeArmed || phase === "armed", generation: prior.generation + 1
     });
   }
   require(id: string): MacosUpdateTransaction {
@@ -180,6 +183,11 @@ export class MacosUpdateTransactionStore {
     return this.write(authority, {
       ...prior, interruptionAuthorized: true, generation: prior.generation + 1
     });
+  }
+  recordPreparationFingerprint(authority: ProxyLifecycleAuthority, id: string, fingerprint: string): MacosUpdateTransaction {
+    const prior = this.require(id);
+    if (prior.phase !== "prepared" || !bounded(fingerprint)) throw new MacosUpdateBlockedError();
+    return this.write(authority, {...prior, postPreparationFingerprint: fingerprint, generation: prior.generation + 1});
   }
   recordOff(authority: ProxyLifecycleAuthority): MacosUpdateTransaction | null {
     const prior = this.read();
@@ -205,7 +213,8 @@ export class MacosUpdateTransactionStore {
   cancelBeforeArm(authority: ProxyLifecycleAuthority, id: string): MacosUpdateTransaction {
     if (this.require(id).installerMayBeArmed)
       throw new MacosUpdateBlockedError();
-    return this.transition(authority, id, "recovering");
+    const prior = this.require(id);
+    return this.write(authority, {...prior, phase: "recovering", generation: prior.generation + 1});
   }
   /** U3 supplies installer proof; absence, age, helper exit and errors are never proof. */
   beginVerifiedRecovery(authority: ProxyLifecycleAuthority, id: string, proof: "replacement-completed" | "installer-disarmed"): MacosUpdateTransaction {
@@ -261,6 +270,7 @@ export function withDelegatedMacosUpdateRecovery<T>(id: string, work: () => T): 
 }
 export function currentMacosUpdateRecoveryId(): string | undefined { return recoveryScope.getStore(); }
 export interface MacosUpdatePreparationIo {
+  preparationFingerprint?: () => string;
   /** Must establish exact process and supervisor bundle provenance, refusing unknown ownership. */
   capture(): Promise<MacosUpdateSemanticSnapshot>;
   /** Live attested management admission boundary; immediate count with no drain wait. */
@@ -318,7 +328,7 @@ export async function prepareMacosUpdate(store: MacosUpdateTransactionStore, aut
       throw new MacosUpdateBlockedError();
     // Canonical stop releases S while retaining E for respawn verification.
     await authority.acquireStart();
-    transaction = store.transition(authority, transaction.transactionId, "prepared");
+    transaction = store.transition(authority, transaction.transactionId, "prepared", io.preparationFingerprint?.());
     return {
       status: "prepared", transaction, active: 0
     };
