@@ -1,6 +1,7 @@
 import AppKit
 import MenuBarCore
 import MenuBarUI
+import Sparkle
 
 // UI-layer tests for the approved menu-bar panel: hierarchy, accordion behaviour,
 // deep-link encoding, accessibility, and panel sizing.
@@ -17,13 +18,15 @@ final class ApplicationMenuTarget: NSObject {
 final class RecordingLifecycleRunner: @unchecked Sendable, LifecycleCommandRunning {
     private let queue = DispatchQueue(label: "menu-bar-ui-tests.lifecycle-recorder")
     private var actions: [LifecycleAction] = []
+    private let resultState: LifecycleState
+    init(resultState: LifecycleState = .running) { self.resultState = resultState }
 
     func run(_ action: LifecycleAction) async throws -> LifecycleCommandResult {
         queue.sync { actions.append(action) }
         return LifecycleCommandResult(
             action: action,
             ok: true,
-            state: .running,
+            state: resultState,
             changed: true,
             pid: 41,
             port: 10100,
@@ -463,11 +466,14 @@ runner.test("ui: stopped proxy keeps the raw start command as guidance") {
     runner.equal(controller.startupOptionsVisible, false, "startup options are not shown while stopped")
 }
 
+MainActor.assumeIsolated {
 runner.test("ui: startup options handoff targets the dashboard startup page") {
     let delegate = AppDelegate()
     let url = delegate.startupOptionsURL()
     runner.equal(url.fragment, "startup", "dashboard hash")
     runner.expect(url.absoluteString.hasPrefix("http://127.0.0.1:"), "loopback")
+}
+
 }
 
 // MARK: - Accordion / no duplicates
@@ -1449,6 +1455,7 @@ runner.test("ui: catalog apply requires readiness and a confirmed running proxy"
     )
 }
 
+MainActor.assumeIsolated {
 runner.test("ui: app menu starts with its single exit disabled until initial state arrives") {
     let delegate = AppDelegate()
     let menu = ApplicationMenuFactory.make(
@@ -1619,6 +1626,8 @@ runner.test("ui: stable and relocatable catalog recheck still dispatches Ensure"
     }
 }
 
+}
+
 // MARK: - Resource honesty
 
 runner.test("ui: provider icon loader returns real SVG-backed images for known providers") {
@@ -1727,6 +1736,254 @@ func runCompanionHeartbeatTests(_ runner: TestRunner) {
 // Top-level code runs on the process main thread, so the MainActor hop is safe here.
 MainActor.assumeIsolated {
     runCompanionHeartbeatTests(runner)
+}
+
+actor RecordingUpdateRunner: MacOSUpdateCommandRunning {
+    var commands: [MacOSUpdateCommand] = []
+    var statuses: [MacOSUpdateStatus]
+    let capturedId: String?
+    var prepareDelay: UInt64 = 0
+    init(_ statuses: [MacOSUpdateStatus], capturedId: String? = nil) {
+        self.statuses = statuses; self.capturedId = capturedId
+    }
+    func setPrepareDelay(_ value: UInt64) { prepareDelay = value }
+    func run(_ command: MacOSUpdateCommand) async throws -> MacOSUpdateResult {
+        commands.append(command)
+        if command.action == .prepare, prepareDelay > 0 { try await Task.sleep(nanoseconds: prepareDelay) }
+        guard !statuses.isEmpty else { throw LifecycleHelperError.invalidResponse }
+        let status = statuses.removeFirst()
+        let pending = ![MacOSUpdateStatus.idle, .recovered].contains(status)
+        return MacOSUpdateResult(action: command.action, status: status,
+            transactionId: pending ? (command.transactionId ?? capturedId) : nil,
+            targetBuild: pending ? (command.targetBuild ?? "2") : nil,
+            active: status == .confirmationRequired ? 1 : 0)
+    }
+}
+
+MainActor.assumeIsolated {
+    runner.test("updater UI: recovered stopped intent skips ordinary launch") {
+        let helper = RecordingUpdateRunner([.recovered])
+        let session = UpdateSession(helper: helper, confirmInterruption: { false })
+        var done = false
+        Task { @MainActor in
+            let start = await session.recover()
+            runner.equal(start, false)
+            runner.equal(session.blocksLifecycle, false)
+            runner.equal(session.message.contains(UpdateSession.pauseDisclosure), true,
+                         "pause disclosure remains visible before another update check")
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.1)
+        runner.equal(done, true)
+    }
+    runner.test("updater UI: Later releases preparation without arming or downloading") {
+        let helper = RecordingUpdateRunner([.idle, .confirmationRequired, .recovered])
+        let session = UpdateSession(helper: helper, confirmInterruption: { false })
+        var done = false
+        Task { @MainActor in
+            _ = await session.recover()
+            let prepared = await session.prepare(target: "2")
+            runner.equal(prepared, false)
+            let cancelled = await session.cancelPreparation()
+            runner.equal(cancelled, true)
+            let commands = await helper.commands
+            runner.equal(commands.map(\.action), [.reconcile, .prepare, .cancel])
+            runner.equal(commands[1].transactionId, commands[2].transactionId)
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.1)
+        runner.equal(done, true)
+    }
+    runner.test("updater UI: recovery retry reuses captured UUID and target through consent and arm") {
+        let id = UUID().uuidString
+        let helper = RecordingUpdateRunner([.finishRequired, .confirmationRequired, .prepared, .armed], capturedId: id)
+        let session = UpdateSession(helper: helper, confirmInterruption: { true })
+        var done = false
+        Task { @MainActor in
+            _ = await session.recover()
+            runner.equal(session.message.contains("is paused"), false, "uncertain recovery does not claim physical stop")
+            let prepared = await session.prepare(target: "2")
+            runner.equal(prepared, true)
+            do { try await session.arm(target: "2") } catch { runner.equal(true, false, "arm failed") }
+            let commands = await helper.commands
+            runner.equal(commands.map(\.action), [.reconcile, .prepare, .prepare, .arm])
+            runner.equal(commands.dropFirst().allSatisfy { $0.transactionId == id }, true)
+            runner.equal(commands[2].updateAnyway, true)
+            runner.equal(session.blocksLifecycle, true)
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.1)
+        runner.equal(done, true)
+    }
+    runner.test("updater UI: mismatched offer cannot overwrite a pending target") {
+        let helper = RecordingUpdateRunner([.finishRequired], capturedId: UUID().uuidString)
+        let session = UpdateSession(helper: helper, confirmInterruption: { true })
+        var done = false
+        Task { @MainActor in
+            _ = await session.recover()
+            let prepared = await session.prepare(target: "3")
+            runner.equal(prepared, false)
+            let commands = await helper.commands
+            runner.equal(commands.map(\.action), [.reconcile])
+            runner.equal(session.targetBuild, "2")
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.1)
+        runner.equal(done, true)
+    }
+    runner.test("updater UI: real controller forwards Install only after helper prepare and durable arm") {
+        let helper = RecordingUpdateRunner([.idle, .prepared, .armed])
+        let session = UpdateSession(helper: helper, confirmInterruption: { true })
+        let driver = UpdateController(hostBundle: .main, boundary: .init(
+            prepare: { await session.prepare(target: $0) },
+            persistArmed: { try await session.arm(target: $0) },
+            cancelPreparation: { await session.cancelPreparation() }, stateChanged: { _ in }))
+        var done = false
+        var replies = 0
+        Task { @MainActor in
+            _ = await session.recover()
+            driver.reconcileStartup(installerDisarmed: true)
+            driver.handleOffer(target: "2", stage: .notDownloaded, present: { $0(.install) }, reply: { choice in
+                runner.equal(driver.coordinator.phase, .armed)
+                runner.equal(choice == .install, true)
+                replies += 1
+            })
+            runner.equal(replies, 0, "retained until asynchronous helper completes")
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.15)
+        runner.equal(done, true)
+        runner.equal(replies, 1)
+        driver.dismissUpdateInstallation()
+        runner.equal(driver.coordinator.phase, .uncertain)
+        runner.equal(session.blocksLifecycle, true, "dismiss is not disarm")
+    }
+
+    runner.test("updater UI: missing signing key never initializes Sparkle but still reconciles") {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".app")
+        let contents = folder.appendingPathComponent("Contents")
+        try! FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let info: [String: Any] = ["CFBundleIdentifier": "test.updater." + UUID().uuidString,
+                                  "CFBundleName": "Updater test", "CFBundleVersion": "1",
+                                  "CodexCommanderUpdaterEnabled": true]
+        let plist = try! PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try! plist.write(to: contents.appendingPathComponent("Info.plist"))
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let helper = RecordingUpdateRunner([.recovered])
+        let updater = AppUpdater(bundle: Bundle(url: folder)!, helper: helper, confirmInterruption: { false })
+        var done = false
+        Task { @MainActor in
+            let ordinary = await updater.start()
+            runner.equal(ordinary, false)
+            runner.equal(updater.available, false)
+            let commands = await helper.commands
+            runner.equal(commands.map(\.action), [.reconcile])
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.1)
+        runner.equal(done, true)
+    }
+    runner.test("updater UI: pending recovery selects captured build when stable feed advances") {
+        let helper = RecordingUpdateRunner([.finishRequired], capturedId: UUID().uuidString)
+        let updater = AppUpdater(bundle: .main, helper: helper, confirmInterruption: { false })
+        let old = SUAppcastItem(dictionary: ["enclosure": ["url": "https://example.test/2.zip", "sparkle:version": "2"]])!
+        let newer = SUAppcastItem(dictionary: ["enclosure": ["url": "https://example.test/3.zip", "sparkle:version": "3"]])!
+        var done = false
+        Task { @MainActor in
+            _ = await updater.session.recover()
+            runner.equal(updater.bestValidUpdate(in: [newer, old])?.versionString, "2")
+            runner.equal(updater.bestValidUpdate(in: [newer]) === newer, false, "missing captured build never falls forward")
+            runner.equal(updater.bestValidUpdate(in: [newer]) != nil, true, "empty sentinel suppresses Sparkle default selection")
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.1)
+        runner.equal(done, true)
+    }
+    runner.test("updater UI: ordinary quit records newer OFF then canonical Stop during pending update") {
+        let helper = RecordingUpdateRunner([.finishRequired, .finishRequired], capturedId: UUID().uuidString)
+        let updater = AppUpdater(bundle: .main, helper: helper, confirmInterruption: { false })
+        let lifecycle = RecordingLifecycleRunner(resultState: .stopped)
+        var terminated = false
+        let delegate = AppDelegate(appBundleLocation: .stable,
+            actions: ActionCoordinator(lifecycle: lifecycle), lifecycleConfirmation: { _ in true },
+            updater: updater, terminateApplication: { terminated = true })
+        var done = false
+        Task { @MainActor in
+            _ = await updater.session.recover()
+            runner.equal(delegate.applicationShouldTerminate(app), .terminateCancel)
+            done = true
+        }
+        spinMainRunLoop(seconds: 0.15)
+        runner.equal(done, true)
+        runner.equal(lifecycle.recordedActions, [.stop])
+        runner.equal(terminated, true)
+        Task { @MainActor in
+            let commands = await helper.commands
+            runner.equal(commands.map(\.action), [.reconcile, .recordOff])
+        }
+        spinMainRunLoop(seconds: 0.05)
+    }
+    runner.test("updater UI: stale controller preparation completion never forwards Install") {
+        let helper = RecordingUpdateRunner([.idle, .prepared, .recovered])
+        let session = UpdateSession(helper: helper, confirmInterruption: { true })
+        let driver = UpdateController(hostBundle: .main, boundary: .init(
+            prepare: { await session.prepare(target: $0) }, persistArmed: { try await session.arm(target: $0) },
+            cancelPreparation: { await session.cancelPreparation() }, stateChanged: { _ in }))
+        var installs = 0
+        var dismisses = 0
+        Task { @MainActor in
+            _ = await session.recover()
+            await helper.setPrepareDelay(50_000_000)
+            driver.reconcileStartup(installerDisarmed: true)
+            driver.handleOffer(target: "2", stage: .notDownloaded, present: { $0(.install) }, reply: {
+                if $0 == .install { installs += 1 } else { dismisses += 1 }
+            })
+        }
+        spinMainRunLoop(seconds: 0.02)
+        driver.dismissUpdateInstallation()
+        spinMainRunLoop(seconds: 0.12)
+        runner.equal(installs, 0)
+        runner.equal(dismisses, 1)
+        runner.equal(session.blocksLifecycle, false, "helper verified pre-arm cancellation")
+    }
+    runner.test("updater UI: Finish Update remains reachable while spawn controls are guarded") {
+        let controller = PopoverViewController()
+        controller.applyUpdatePresentation(title: "Finish Update…", enabled: true, automatic: false,
+            blocked: true, message: "Update recovery needs attention.")
+        controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
+        runner.equal(controller.guidanceText, nil, "guarded recovery must not advise starting the proxy")
+        runner.equal(controller.commandText, nil, "guarded recovery must not advertise ccx start")
+        runner.equal(controller.updateActionTitleForTesting, "Finish Update…")
+        runner.equal(controller.updateActionEnabledForTesting, true)
+        var clicked = false
+        controller.onCheckForUpdates = { clicked = true }
+        controller.clickUpdateForTesting()
+        runner.equal(clicked, true)
+        if let output = ProcessInfo.processInfo.environment["CCX_UPDATER_SCREENSHOT"] {
+            controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
+            let window = NSWindow(contentRect: controller.view.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = controller.view
+            window.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 1)
+            controller.view.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            if let bitmap = controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds) {
+                controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
+                let rendered = NSImage(size: controller.view.bounds.size)
+                rendered.lockFocus()
+                NSColor(calibratedWhite: 0.12, alpha: 1).setFill()
+                controller.view.bounds.fill()
+                let foreground = NSImage(size: controller.view.bounds.size)
+                foreground.addRepresentation(bitmap)
+                NSGraphicsContext.current?.imageInterpolation = .high
+                foreground.draw(in: controller.view.bounds, from: .zero, operation: .sourceOver, fraction: 1)
+                rendered.unlockFocus()
+                if let tiff = rendered.tiffRepresentation, let opaque = NSBitmapImageRep(data: tiff) {
+                    try? opaque.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output))
+                }
+            }
+        }
+    }
 }
 
 exit(runner.summarize())

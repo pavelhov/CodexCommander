@@ -70,6 +70,13 @@ enum UpdateSuite {
             t.equal(c.phase, .uncertain)
             t.equal(c.mayRestoreAfterCancellation, false)
         }
+        t.test("update: a previously downloaded installer is not disarmed by Later") {
+            var c = fresh()
+            c.receiveOffer(target: "2", stage: .downloaded)
+            c.cancel()
+            t.equal(c.phase, .uncertain)
+            t.equal(c.mayRestoreAfterCancellation, false)
+        }
         t.test("update: cancellation and nil session completion after forwarding stay uncertain") {
             var c = fresh()
             c.receiveOffer(target: "2", stage: .notDownloaded)

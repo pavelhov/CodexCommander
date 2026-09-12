@@ -44,20 +44,34 @@ public final class UpdateController: NSObject, SPUUserDriver {
                                 reply: @escaping (SPUUserUpdateChoice) -> Void) {
         let stage: UpdateCoordinator.InstallerStage = state.stage == .installing ? .installing
             : (state.stage == .downloaded ? .downloaded : .notDownloaded)
-        guard coordinator.receiveOffer(target: appcastItem.versionString, stage: stage) else {
+        handleOffer(target: appcastItem.versionString, stage: stage, present: { decide in
+            self.standard.showUpdateFound(with: appcastItem, state: state, reply: decide)
+        }, reply: reply)
+    }
+
+    /// Same retained-reply boundary used by the real standard driver and the UI harness.
+    package func handleOffer(target: String, stage: UpdateCoordinator.InstallerStage,
+                             present: (@escaping (SPUUserUpdateChoice) -> Void) -> Void,
+                             reply: @escaping (SPUUserUpdateChoice) -> Void) {
+        guard coordinator.receiveOffer(target: target, stage: stage) else {
             // Dismiss preserves a preexisting installer; never advertise this as disarm.
             reply(.dismiss)
             return
         }
         changed()
+        let offerGeneration = coordinator.generation
         var replied = false
         let respond: (SPUUserUpdateChoice) -> Void = { choice in
             guard !replied else { return }
             replied = true
             reply(choice)
         }
-        standard.showUpdateFound(with: appcastItem, state: state) { [weak self] choice in
+        present { [weak self] choice in
             guard let self else { respond(.dismiss); return }
+            guard self.coordinator.generation == offerGeneration, self.coordinator.phase == .offered else {
+                respond(.dismiss)
+                return
+            }
             guard choice == .install else {
                 self.coordinator.cancel()
                 self.changed()
@@ -67,7 +81,7 @@ public final class UpdateController: NSObject, SPUUserDriver {
             guard let generation = self.coordinator.beginPreparation() else { return }
             self.changed()
             Task { @MainActor in
-                let verified = await self.boundary.prepare(appcastItem.versionString)
+                let verified = await self.boundary.prepare(target)
                 guard self.coordinator.preparationCompleted(generation: generation, verified: verified) else {
                     if !(await self.boundary.cancelPreparation()) {
                         self.coordinator.requireRecovery()
@@ -78,7 +92,7 @@ public final class UpdateController: NSObject, SPUUserDriver {
                 }
                 self.changed()
                 do {
-                    try await self.boundary.persistArmed(appcastItem.versionString)
+                    try await self.boundary.persistArmed(target)
                     guard self.coordinator.installationArmed(generation: generation) else {
                         self.coordinator.installerSessionEnded()
                         self.changed()

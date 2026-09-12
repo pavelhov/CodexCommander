@@ -6,7 +6,12 @@ private enum CodexRouteConfirmationError: Error {
     case mismatch
 }
 
+@MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+    private var appUpdater: AppUpdater?
+    private var normalTerminationAuthorized = false
+    private var terminateApplication: () -> Void = { NSApp.terminate(nil) }
+    private var updaterStartupPending = false
     private var statusItem: NSStatusItem?
     private let panel = PopoverPanel()
     private let controller = PopoverViewController()
@@ -41,11 +46,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     package init(
         appBundleLocation: AppBundleLocation,
         actions: ActionCoordinator?,
-        lifecycleConfirmation: ((LifecycleConfirmation) -> Bool)? = nil
+        lifecycleConfirmation: ((LifecycleConfirmation) -> Bool)? = nil,
+        updater: AppUpdater? = nil,
+        terminateApplication: (() -> Void)? = nil
     ) {
         self.appBundleLocation = appBundleLocation
         self.actions = actions
         self.lifecycleConfirmation = lifecycleConfirmation
+        self.appUpdater = updater
+        if let terminateApplication { self.terminateApplication = terminateApplication }
         super.init()
     }
 
@@ -148,6 +157,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
         controller.onApplyCodexCatalog = { [weak self] in self?.applyCodexCatalog() }
         controller.onOpenStartupOptions = { [weak self] in self?.openStartupOptions() }
+        controller.onCheckForUpdates = { [weak self] in self?.checkForUpdates(nil) }
+        controller.onAutomaticUpdateChecks = { [weak self] in self?.toggleAutomaticUpdateChecks(nil) }
         controller.onStopAndQuit = { [weak self] in self?.stopCodexCommanderAndQuit(nil) }
         controller.onLaunchAtLoginChange = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
@@ -173,14 +184,88 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             }
             await MainActor.run { (NSApp.delegate as? AppDelegate)?.startPolling() }
         }
+
+        startCompanionHeartbeat()
+        beginUpdateRecovery()
+    }
+
+    @MainActor
+    private func beginUpdateRecovery() {
+        // Source builds do not have an embedded runtime. Packaged apps always
+        // reconcile, even if release signing has not enabled update discovery.
+        let packaged = Bundle.main.object(forInfoDictionaryKey: "CodexCommanderUpdaterEnabled") as? Bool == true
+            || Bundle.main.bundleURL.pathExtension == "app"
+            || LifecycleHelperDiscovery.discover()?.appOwnedRuntime == true
+        guard packaged else {
+            controller.applyUpdatePresentation(title: "Updates unavailable in this build", enabled: false,
+                                               automatic: false, blocked: false, message: "")
+            reconcileLaunchAtLogin()
+            startProxyOnLaunch()
+            return
+        }
+        updaterStartupPending = true
+        let updater = AppUpdater(bundle: .main, helper: MacOSUpdateHelper()) { [weak self] in
+            let alert = NSAlert()
+            alert.messageText = "Active requests may fail"
+            alert.informativeText = "Updating pauses CodexCommander during download and installation. Interrupted requests will not be replayed."
+            alert.addButton(withTitle: "Update Anyway")
+            alert.addButton(withTitle: "Later")
+            alert.buttons[0].keyEquivalent = ""
+            alert.buttons[1].keyEquivalent = "\r"
+            self?.panel.isPresentingModal = true
+            NSApp.activate(ignoringOtherApps: true)
+            let response = alert.runModal()
+            self?.panel.isPresentingModal = false
+            return response == .alertFirstButtonReturn
+        }
+        appUpdater = updater
+        updater.changed = { [weak self] in self?.refreshUpdatePresentation() }
+        refreshUpdatePresentation()
+        Task { @MainActor [weak self] in
+            let ordinaryStartup = await updater.start()
+            guard let self else { return }
+            self.reconcileLaunchAtLogin()
+            self.updaterStartupPending = false
+            self.refreshUpdatePresentation()
+            if ordinaryStartup { self.startProxyOnLaunch() }
+            else { self.refreshNow() }
+        }
+    }
+
+    private func reconcileLaunchAtLogin() {
         controller.applyLaunchAtLogin(
             launchAtLoginController.reconcile(
                 executableFingerprint: executableFingerprint,
                 registrationAllowed: launchAtLoginRegistrationAllowed
             )
         )
-        startCompanionHeartbeat()
-        startProxyOnLaunch()
+    }
+
+    @MainActor
+    private func refreshUpdatePresentation() {
+        guard let updater = appUpdater else { return }
+        let blocked = updaterStartupPending || updater.blocksLifecycle
+        controller.applyUpdatePresentation(
+            title: blocked ? "Finish Update…" : "Check for Updates…",
+            enabled: (updater.available || blocked) && !updaterStartupPending,
+            automatic: updater.automaticChecks, blocked: blocked,
+            message: updater.unavailableReason ?? updater.session.message, automaticEnabled: updater.available)
+        updateApplicationMenu()
+    }
+
+    @objc private func checkForUpdates(_ sender: Any?) {
+        appUpdater?.check()
+    }
+
+    @objc private func toggleAutomaticUpdateChecks(_ sender: Any?) {
+        guard let updater = appUpdater else { return }
+        updater.setAutomaticChecks(!updater.automaticChecks)
+    }
+
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if normalTerminationAuthorized || appUpdater?.authorizedTermination == true { return .terminateNow }
+        stopCodexCommanderAndQuit(nil)
+        return .terminateCancel
     }
 
     public func applicationDidBecomeActive(_ notification: Notification) {
@@ -379,6 +464,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
             target: self,
             stopAndQuitAction: #selector(stopCodexCommanderAndQuit(_:))
         )
+        if let menu = NSApp.mainMenu?.items.first?.submenu {
+            let check = NSMenuItem(title: "Check for Updates…", action: #selector(checkForUpdates(_:)), keyEquivalent: "u")
+            check.keyEquivalentModifierMask = [.command, .shift]
+            check.target = self
+            menu.insertItem(check, at: 0)
+            let automatic = NSMenuItem(title: "Automatically Check for Updates", action: #selector(toggleAutomaticUpdateChecks(_:)), keyEquivalent: "")
+            automatic.target = self
+            menu.insertItem(automatic, at: 1)
+        }
         updateApplicationMenu()
     }
 
@@ -387,6 +481,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(checkForUpdates(_:)) {
+            menuItem.title = appUpdater?.blocksLifecycle == true ? "Finish Update…" : "Check for Updates…"
+            return (appUpdater?.available == true || appUpdater?.blocksLifecycle == true) && !updaterStartupPending
+        }
+        if menuItem.action == #selector(toggleAutomaticUpdateChecks(_:)) {
+            menuItem.state = appUpdater?.automaticChecks == true ? .on : .off
+            return appUpdater?.available == true
+        }
         if menuItem.action == #selector(stopCodexCommanderAndQuit(_:)) {
             return LifecycleActionAvailability.canStopAndQuit(
                 state: latest?.state,
@@ -497,7 +599,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         refreshCatalogApplyAvailability()
         controller.showProgress("Stopping CodexCommander…")
         Task { [actions, coordinator] in
-            let outcome = await actions?.stop() ?? .failed("Lifecycle control is unavailable.")
+            let recorded = await self.appUpdater?.session.recordOff() ?? true
+            let outcome: ProxyControlOutcome
+            if recorded {
+                outcome = await actions?.stop() ?? .failed("Lifecycle control is unavailable.")
+            } else {
+                outcome = .failed("Could not save Stop intent. Try again before quitting.")
+            }
             let shouldTerminate = quitWhenStopped
                 && StopAndQuitPolicy.shouldTerminate(after: outcome)
             if !shouldTerminate { await coordinator?.forceRefresh() }
@@ -506,7 +614,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 self.lifecycleInFlight = false
                 self.updateApplicationMenu()
                 if shouldTerminate {
-                    NSApp.terminate(nil)
+                    self.normalTerminationAuthorized = true
+                    self.terminateApplication()
                     return
                 }
                 switch outcome {
@@ -540,6 +649,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     private func routeCodexThroughProxy() {
+        guard permitsSpawnCapableLifecycleAction() else { return }
         performCodexRoute(
             destination: .codexCommander,
             expectedRoutingKind: .codexCommanderLocal
@@ -741,11 +851,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.setCatalogApplyEnabled(CatalogUpdateActionAvailability.canApply(
             updateReady: catalogUpdateReady,
             state: latest?.state,
-            controlsAllowed: !catalogActionInFlight && !lifecycleInFlight && !restartInFlight
+            controlsAllowed: !catalogActionInFlight && !lifecycleInFlight && !restartInFlight && appUpdater?.blocksLifecycle != true
         ))
     }
 
     private func permitsSpawnCapableLifecycleAction() -> Bool {
+        guard !updaterStartupPending, appUpdater?.blocksLifecycle != true else {
+            refreshUpdatePresentation()
+            return false
+        }
         guard appBundleLocation == .translocated else { return true }
         controller.showAppTranslocated()
         return false
@@ -803,7 +917,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
 /// stacking duplicates, and `stop()` cancels it on termination.
 @MainActor
 public final class CompanionHeartbeat {
-    public typealias Sample = @Sendable () -> LaunchAtLoginStatus
+    public typealias Sample = @MainActor @Sendable () -> LaunchAtLoginStatus
     public typealias SendReport = @Sendable (LaunchAtLoginStatus) async -> Void
 
     public nonisolated static let targetInterval: TimeInterval = 30

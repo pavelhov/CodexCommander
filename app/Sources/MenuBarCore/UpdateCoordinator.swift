@@ -25,12 +25,12 @@ public struct UpdateCoordinator: Equatable, Sendable {
     public var mayRunOrdinaryStartup: Bool { phase == .idle }
     public var mayRestoreAfterCancellation: Bool { phase == .cancelled && priorInstallerDisarmed }
 
-    /// An installing offer can belong to an earlier process. It is always guarded.
+    /// Downloaded or installing offers can belong to an earlier process and are always guarded.
     @discardableResult
     public mutating func receiveOffer(target: String, stage: InstallerStage) -> Bool {
         guard [.idle, .cancelled, .uncertain].contains(phase) else { return false }
         self.target = target
-        if stage == .installing { priorInstallerDisarmed = false }
+        if stage != .notDownloaded { priorInstallerDisarmed = false }
         phase = .offered
         generation &+= 1
         return true
