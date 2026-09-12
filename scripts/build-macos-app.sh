@@ -466,9 +466,11 @@ fi
 #                                component is ignored, so appending a build number to a
 #                                full semver produces no additional identity at all.
 #
-# So the short version is the numeric core, and when CI supplies a run number it becomes
-# the CFBundleVersion outright — a monotonically increasing single integer is both valid
-# and genuinely distinguishing, which "0.1.0.<run>" would not be.
+# The short version remains the numeric package core. Lifecycle reconciliation
+# requires a positive integer build even when updates are disabled. Unkeyed local
+# builds default to 1 solely as a development identity; source revision still
+# distinguishes checkouts. Keyed builds require an explicit build number, and the
+# release wrapper additionally verifies monotonic ordering against published builds.
 version_core="${version%%-*}"
 if [[ ! "$version_core" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Version core must be three integers for CFBundleShortVersionString: '$version_core'" >&2
@@ -481,11 +483,14 @@ if [[ -n "${MACOS_BUILD_NUMBER:-}" ]]; then
     exit 1
   fi
   build_version="$MACOS_BUILD_NUMBER"
+elif [[ -n "${MACOS_UPDATE_PUBLIC_KEY_FILE:-}" ]]; then
+  echo "Keyed builds require an explicit positive integer MACOS_BUILD_NUMBER." >&2
+  exit 1
 else
-  build_version="$version_core"
+  build_version="1"
 fi
-if [[ ! "$build_version" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
-  echo "CFBundleVersion must be one to three integers, got '$build_version'" >&2
+if [[ ! "$build_version" =~ ^[1-9][0-9]{0,14}$ ]]; then
+  echo "CFBundleVersion must be a positive integer, got '$build_version'" >&2
   exit 1
 fi
 

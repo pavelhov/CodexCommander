@@ -42,6 +42,24 @@ describe("macOS build script bundle contract", () => {
     expect(releaseScriptSource).toContain("package:macos requires a clean git working tree");
   });
 
+  test.skipIf(process.platform === "win32")("uses an integer development identity without allowing a keyed build fallback", () => {
+    const start = scriptSource.indexOf('if [[ -n "${MACOS_BUILD_NUMBER:-}" ]]; then');
+    const end = scriptSource.indexOf("# A development build without a trust anchor", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const selectVersion = scriptSource.slice(start, end);
+    const run = (build: string, key: string) => Bun.spawnSync(["bash", "-c", `set -euo pipefail\n${selectVersion}\nprintf '%s' "$build_version"`], {
+      env: { ...process.env, version_core: "0.1.6", MACOS_BUILD_NUMBER: build, MACOS_UPDATE_PUBLIC_KEY_FILE: key }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(run("", "").stdout.toString()).toBe("1");
+    expect(run("42", "").stdout.toString()).toBe("42");
+    expect(run("42", "configured-public-key").stdout.toString()).toBe("42");
+    expect(run("", "configured-public-key").exitCode).not.toBe(0);
+    expect(run("0", "").exitCode).not.toBe(0);
+    expect(scriptSource).toContain('CFBundleShortVersionString -string "$version_core"');
+    expect(scriptSource).toContain('source_revision="${CCX_BUILD_REVISION:-}"');
+  });
+
   test("requires the canonical delegation skill in staged and archived runtimes", () => {
     expect(scriptSource).toContain(
       'assert_safe_file "$runtime_root/src/skills/codexcommander-delegation/SKILL.md"',
