@@ -111,7 +111,7 @@ describe("the lock is on the production path", () => {
    * lock module while a real injection runs; the injection must report busy and
    * must not have written its candidate bytes.
    */
-  test("a held lock makes real injection report busy and write nothing", () => {
+  test("a held lock makes real injection report busy and write nothing", async () => {
     seedNative();
     // Establish the coordinator first: a clean home has no row, and the holder
     // needs one to contend over.
@@ -132,25 +132,21 @@ describe("the lock is on the production path", () => {
       stderr: "pipe",
     });
 
-    const deadline = Date.now() + 10_000;
-    while (!existsSync(holdMarker) && Date.now() < deadline) {
-      spawnSync(process.execPath, ["--eval", "Bun.sleepSync(20)"], { encoding: "utf8" });
+    try {
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(holdMarker) && Date.now() < deadline) await Bun.sleep(20);
+      expect(existsSync(holdMarker)).toBeTrue();
+
+      const contender = runInject(20200);
+      expect(contender.success).toBeFalse();
+      expect(contender.retryable).toBeTrue();
+      const finalConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
+      expect(finalConfig).not.toContain("20200");
+      expect(finalConfig).toBe(afterFirst);
+    } finally {
+      writeFileSync(releaseMarker, "go");
+      await holder.exited;
     }
-    expect(existsSync(holdMarker)).toBeTrue();
-
-    // PROCESS-UNIQUE bytes: a different port means different candidate bytes, so
-    // the loser's work is identifiable rather than assumed.
-    const contender = runInject(20200);
-
-    writeFileSync(releaseMarker, "go");
-    holder.exited.then(() => undefined);
-
-    expect(contender.success).toBeFalse();
-    expect(contender.retryable).toBeTrue();
-    // Its bytes are absent: the file still names the first winner's port.
-    const finalConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
-    expect(finalConfig).not.toContain("20200");
-    expect(finalConfig).toBe(afterFirst);
   }, 30_000);
 });
 

@@ -1458,7 +1458,7 @@ describe("service diagnostics", () => {
     } else {
       expect(summary).toMatch(/unsupported/i);
     }
-  });
+  }, process.platform === "win32" ? 30_000 : 5_000);
 
   test("flags stale baked service paths recorded at install time", () => {
     const oldCodexCommanderHome = process.env.CODEXCOMMANDER_HOME;

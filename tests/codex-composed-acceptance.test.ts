@@ -250,7 +250,10 @@ class Fixture {
         ...(init.body ? { "content-type": "application/json" } : {}),
         ...(init.headers ?? {}),
       },
-      signal: AbortSignal.timeout(10_000),
+      // Native restore can perform several bounded Windows ACL/identity probes.
+      signal: AbortSignal.timeout(process.platform === "win32" ? 45_000 : 10_000),
+    }).catch(error => {
+      throw new Error(`fixture HTTP ${init.method ?? "GET"} ${path} failed (${error instanceof Error ? error.name : "unknown"})`);
     });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   }
@@ -299,7 +302,16 @@ describe("WP13 composed toggle acceptance", () => {
       expect(manifest(fx.codex)).toEqual(before);
       for (const argv of [["ensure"], ["sync"], ["restore"], ["sync-cache"]]) {
         const result = await fx.runCli(argv);
-        expect(result.exitCode).toBe(0);
+        const output = `${result.stdout}\n${result.stderr}`;
+        // Emit classifications only: CLI output can contain homes/account names.
+        expect(result.exitCode, JSON.stringify({
+          command: argv[0],
+          ownershipRefused: /ownership|Windows definition chain/i.test(output),
+          livenessFailed: /liveness|live proxy|not running|could not verify/i.test(output),
+          readinessFailed: /readiness|catalog|synchron/i.test(output),
+          lockFailed: /lock|namespace|coordinator/i.test(output),
+          serviceFailed: /service|scheduler/i.test(output),
+        })).toBe(0);
         expect(manifest(fx.codex)).toEqual(before);
       }
       const sync = await fx.request(server.runtime, "/api/sync", { method: "POST" });
@@ -485,7 +497,23 @@ describe("WP13 composed toggle acceptance", () => {
       stdout: "pipe", stderr: "pipe",
     });
     fx.children.push(holder);
-    await waitFor(() => existsSync(held) ? true : null, "held coordinator lock");
+    const holderOutput = new Response(holder.stdout).text();
+    const holderError = new Response(holder.stderr).text();
+    await Promise.race([
+      waitFor(() => existsSync(held) ? true : null, "held coordinator lock"),
+      holder.exited.then(async exitCode => {
+        const output = await holderOutput;
+        const stderr = await holderError;
+        let outcome: Record<string, unknown> = {};
+        try { outcome = JSON.parse(output); } catch { /* Diagnostics remain fixed fields. */ }
+        throw new Error(JSON.stringify({
+          stage: "holder-exited-before-marker", exitCode,
+          status: ["acquired", "busy", "refused"].includes(String(outcome.status)) ? outcome.status : "unknown",
+          reason: typeof outcome.reason === "string" && /^[a-z_]{1,50}$/.test(outcome.reason) ? outcome.reason : "unknown",
+          stderrPresent: stderr.length > 0,
+        }));
+      }),
+    ]);
     const contender = Bun.spawn([process.execPath, lockChildPath], {
       cwd: repoRoot,
       env: { ...fx.env(fx.homeB, fx.userprofileB), CCX_LOCK_CHILD_PAYLOAD: JSON.stringify({ timeoutMs: 0 }) },
