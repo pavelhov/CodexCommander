@@ -210,7 +210,9 @@ public static class CodexCommanderKnownFolders {
       Guid folder = new Guid("F1B32785-6FBA-4FCF-9D55-7B8E7F157091");
       IntPtr path = IntPtr.Zero;
       try {
-        Marshal.ThrowExceptionForHR(SHGetKnownFolderPath(ref folder, 0, identity.Token, out path));
+        // KF_FLAG_DONT_VERIFY: resolve the registered location even when its
+        // directory is absent; the caller creates the namespace recursively.
+        Marshal.ThrowExceptionForHR(SHGetKnownFolderPath(ref folder, 0x4000, identity.Token, out path));
         return Marshal.PtrToStringUni(path);
       } finally {
         if (path != IntPtr.Zero) Marshal.FreeCoTaskMem(path);
