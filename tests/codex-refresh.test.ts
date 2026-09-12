@@ -1,5 +1,8 @@
 import nativeCatalogSource from "./fixtures/catalog/native-codex-2026-09-08.json";
-import { afterEach, describe, expect, test } from "bun:test";
+import { setDefaultTimeout, afterEach, describe, expect, test } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

@@ -1688,9 +1688,16 @@ func runCompanionHeartbeatTests(_ runner: TestRunner) {
         heartbeat.start()
         heartbeat.start()
         heartbeat.start()
+        // Hosted runners may delay the first timer delivery beyond 120ms.
+        // Wait for actual delivery, then measure a fixed window for duplicates.
+        let firstFireDeadline = Date().addingTimeInterval(3)
+        while recorder.count == 0 && Date() < firstFireDeadline {
+            spinMainRunLoop(seconds: 0.01)
+        }
+        runner.expect(recorder.count >= 1, "the repeating timer fires before the deadline")
+        let initialCount = recorder.count
         spinMainRunLoop(seconds: 0.12)
-        let during = recorder.count
-        runner.expect(during >= 1, "the repeating timer fires at least once (got \(during))")
+        let during = recorder.count - initialCount
         // One 20ms timer over 120ms fires ~6 times; stacked duplicates would fire ~18.
         runner.expect(during <= 9, "repeated start() must not duplicate the timer (got \(during))")
         runner.equal(recorder.statuses.first, .enabled, "the sampled status is what gets reported")

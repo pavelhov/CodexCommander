@@ -48,17 +48,30 @@ function powershellValue(expression: string): string {
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
-      "-Command",
-      expression,
+      "-EncodedCommand",
+      Buffer.from(
+        "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8;\n" + expression,
+        "utf16le",
+      ).toString("base64"),
     ], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      timeout: 10_000,
     });
   } catch (cause) {
     refuse("Windows effective-account lookup could not start.", cause);
   }
-  if (result.exitCode !== 0) refuse("Windows effective-account lookup failed.");
+  if (result.exitCode !== 0) {
+    // Only this fixed diagnostic grammar may cross the subprocess boundary.
+    // Compiler messages and native errors can contain paths or account details.
+    const diagnostic = new TextDecoder().decode(result.stderr).match(
+      /^CCX_IDENTITY_FAILURE:(compile|token-environment|registered-folder):([A-Za-z0-9_.]{1,80}):([0-9A-F]{8})\r?$/m,
+    );
+    refuse(diagnostic
+      ? `Windows effective-account lookup failed (${diagnostic[1]}, ${diagnostic[2]}, HRESULT 0x${diagnostic[3]}).`
+      : `Windows effective-account lookup failed (exit ${Number.isSafeInteger(result.exitCode) ? result.exitCode : "unknown"}).`);
+  }
   const value = new TextDecoder().decode(result.stdout).trim();
   if (!value) refuse("Windows effective-account lookup returned an empty value.");
   return value;
@@ -143,12 +156,94 @@ function resolvePosixRuntimeRoot(uid: number): string {
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(
-    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-  );
+  // Shell folder expansion can retain the launcher's ambient USERPROFILE.
+  // Expand the raw registered location against the OS token's environment,
+  // without consulting or mutating this process's environment.
+  const localAppData = powershellValue(String.raw`
+$stage = 'compile'
+try {
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Text.RegularExpressions;
+using Microsoft.Win32;
+public static class CodexCommanderKnownFolders {
+  public static string Stage = "token-environment";
+  [DllImport("userenv.dll", SetLastError = true, ExactSpelling = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool CreateEnvironmentBlock(out IntPtr block, IntPtr token, [MarshalAs(UnmanagedType.Bool)] bool inherit);
+  [DllImport("userenv.dll", ExactSpelling = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool DestroyEnvironmentBlock(IntPtr block);
+  public static string LocalAppData(string expectedSid) {
+    using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
+      if (!String.Equals(identity.User.Value, expectedSid, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException("Effective account changed during environment resolution.");
+      IntPtr block = IntPtr.Zero;
+      try {
+        if (!CreateEnvironmentBlock(out block, identity.Token, false))
+          throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        IntPtr cursor = block;
+        while (Marshal.ReadInt16(cursor) != 0) {
+          string entry = Marshal.PtrToStringUni(cursor);
+          int separator = entry.IndexOf('=');
+          if (separator > 0) values[entry.Substring(0, separator)] = entry.Substring(separator + 1);
+          cursor = IntPtr.Add(cursor, checked((entry.Length + 1) * 2));
+        }
+        Stage = "registered-folder";
+        string path;
+        bool expand;
+        using (RegistryKey users = RegistryKey.OpenBaseKey(RegistryHive.Users, RegistryView.Registry64))
+        using (RegistryKey key = users.OpenSubKey(identity.User.Value + @"\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders")) {
+          if (key == null) throw new InvalidOperationException("Registered folder key is unavailable.");
+          var kind = key.GetValueKind("Local AppData");
+          if (kind != RegistryValueKind.String && kind != RegistryValueKind.ExpandString)
+            throw new InvalidOperationException("Registered folder value is not a string.");
+          expand = kind == RegistryValueKind.ExpandString;
+          path = key.GetValue("Local AppData", null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
+        }
+        if (String.IsNullOrWhiteSpace(path)) throw new InvalidOperationException("Registered folder is empty.");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int depth = 0; expand && path.IndexOf('%') >= 0; depth++) {
+          if (depth >= 16 || path.Length > 32767 || !seen.Add(path))
+            throw new InvalidOperationException("Registered folder expansion did not converge.");
+          bool replaced = false;
+          path = Regex.Replace(path, @"%([^%]+)%", match => {
+            string value;
+            if (!values.TryGetValue(match.Groups[1].Value, out value))
+              throw new InvalidOperationException("Registered folder references an unavailable variable.");
+            replaced = true;
+            return value;
+          });
+          if (!replaced) throw new InvalidOperationException("Registered folder has an unresolved variable.");
+        }
+        string root = Path.GetPathRoot(path);
+        if (path.Length > 32767 || path.IndexOf('\0') >= 0 || String.IsNullOrEmpty(root) || root.Length < 3 || root.EndsWith(":"))
+          throw new InvalidOperationException("Registered folder is not an absolute path.");
+        return Path.GetFullPath(path);
+      } finally {
+        if (block != IntPtr.Zero) DestroyEnvironmentBlock(block);
+      }
+    }
+  }
+}
+'@
+$stage = 'token-environment'
+[CodexCommanderKnownFolders]::LocalAppData('${identity.sid}')
+} catch {
+  if ($stage -ne 'compile') { $stage = [CodexCommanderKnownFolders]::Stage }
+  $failure = $_.Exception.GetBaseException()
+  [Console]::Error.WriteLine('CCX_IDENTITY_FAILURE:' + $stage + ':' + $failure.GetType().FullName + ':' + $failure.HResult.ToString('X8'))
+  exit 1
+}
+`);
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
 
-  // The SID and known-folder values come from the effective token/.NET OS APIs,
+  // The SID and registered folder values come from the effective token/registry,
   // never USERPROFILE or LOCALAPPDATA. WP11 adds descriptor/reparse/ACL checks at
   // the stable-database open boundary where those checks can cover SQLite too.
   const root = resolve(localAppData, "CodexCommander", "Runtime", "v1", identity.sid.toUpperCase());

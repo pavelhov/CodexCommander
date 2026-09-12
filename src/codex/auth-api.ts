@@ -613,6 +613,12 @@ interface PoolQuotaRefreshFlight {
 
 const poolQuotaRefreshInFlight = new Map<string, Set<PoolQuotaRefreshFlight>>();
 const MAX_POOL_QUOTA_FLIGHTS = 16;
+let poolQuotaFlightJoinedForTests: (() => void) | null = null;
+
+/** Observe a real compatible-flight join without changing quota admission. */
+export function setPoolQuotaFlightJoinedForTests(observer: (() => void) | null): void {
+  poolQuotaFlightJoinedForTests = observer;
+}
 
 export class PoolQuotaProbeBusyError extends ResourceAdmissionError {
   constructor() {
@@ -803,7 +809,10 @@ async function fetchPoolAccountQuota(accountId: string, forceRefresh = false, co
       ?? flight.state.startCredentialGeneration;
     return generation !== undefined && isCodexAccountGenerationLive(accountId, generation);
   });
-  if (current) return current.promise;
+  if (current) {
+    poolQuotaFlightJoinedForTests?.();
+    return current.promise;
+  }
   if (poolQuotaFlightCount() >= MAX_POOL_QUOTA_FLIGHTS) throw new PoolQuotaProbeBusyError();
 
   const state: PoolQuotaRefreshFlight["state"] = {

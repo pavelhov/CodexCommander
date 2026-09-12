@@ -61,8 +61,12 @@ jobs:
         working-directory: gui
         run: bun run test
 
+      - name: Verify Windows account coordination and CLI lifecycle
+        if: matrix.platform == 'windows'
+        run: bun run test:parallel tests/codex-user-identity.test.ts tests/codex-inject-write-lock.test.ts tests/codex-composed-acceptance.test.ts
+
       - name: Test suite
-        run: bun run test
+        run: bun run test:parallel
 
       - name: CLI help smoke
         run: bun run src/cli/index.ts help

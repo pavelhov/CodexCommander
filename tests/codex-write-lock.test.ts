@@ -8,7 +8,8 @@
  * caller told to retry something that will fail identically forever is how a UI
  * spins on a problem only the user can fix.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import * as transitionState from "../src/codex/transition-state";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import {
   resolveCodexCoordinatorDatabasePath,
@@ -184,15 +185,17 @@ describe("refusals are not contention", () => {
     // A directory where the database belongs: openable never, busy never.
     mkdirSync(dbPath, { recursive: true });
 
-    const started = performance.now();
-    const result = await withCodexWriteLock(options({ timeoutMs: 2_000 }), () => "never");
-    const elapsed = performance.now() - started;
-
-    expect(result.status).toBe("refused");
-    expect(result.status === "refused" && result.retryable).toBe(false);
-    // It did not spend the deadline discovering that a permanent failure is
-    // permanent.
-    expect(elapsed).toBeLessThan(1_000);
+    const begin = spyOn(transitionState, "beginCodexCoordinatorTransaction");
+    try {
+      const result = await withCodexWriteLock(options({ timeoutMs: 2_000 }), () => "never");
+      expect(result.status).toBe("refused");
+      expect(result.status === "refused" && result.retryable).toBe(false);
+      // Count actual attempts, excluding the unrelated Windows account lookup
+      // from a wall-clock heuristic. A retry must make another transaction call.
+      expect(begin).toHaveBeenCalledTimes(1);
+    } finally {
+      begin.mockRestore();
+    }
   });
 
   test("an explicit home equal to the ambient one is accepted", async () => {
@@ -321,13 +324,16 @@ describe("two real processes contend for one lock", () => {
     const holder = spawnChild({ holdMarker, releaseMarker, timeoutMs: 0 });
     await waitFor(holdMarker);
 
-    // The lock is genuinely held by another process right now.
-    const blocked = await withCodexWriteLock(options({ timeoutMs: 0 }), publishing("parent"));
-    expect(blocked.status).toBe("busy");
-    expect(blocked.status === "busy" && blocked.reason).toBe("deadline");
-
-    writeFileSync(releaseMarker, "go");
-    const held = await childResult(holder);
+    let held: Awaited<ReturnType<typeof childResult>>;
+    try {
+      // The lock is genuinely held by another process right now.
+      const blocked = await withCodexWriteLock(options({ timeoutMs: 0 }), publishing("parent"));
+      expect(blocked.status).toBe("busy");
+      expect(blocked.status === "busy" && blocked.reason).toBe("deadline");
+    } finally {
+      writeFileSync(releaseMarker, "go");
+      held = await childResult(holder);
+    }
     expect(held.status).toBe("acquired");
 
     // And once it is released the same call succeeds — proving the earlier busy
@@ -427,13 +433,16 @@ describe("two real processes contend for one lock", () => {
 
       // Fail-fast: if the two environments produced different lock files this
       // would acquire instead of reporting contention.
-      const contender = await childResult(
-        spawnChildWithEnv({ timeoutMs: 0 }, { ...b }),
-      );
-      expect(contender.status).toBe("busy");
-
-      writeFileSync(releaseMarker, "go");
-      const held = await childResult(holder);
+      let held: Awaited<ReturnType<typeof childResult>>;
+      try {
+        const contender = await childResult(
+          spawnChildWithEnv({ timeoutMs: 0 }, { ...b }),
+        );
+        expect(contender.status).toBe("busy");
+      } finally {
+        writeFileSync(releaseMarker, "go");
+        held = await childResult(holder);
+      }
       expect(held.status).toBe("acquired");
 
       // And the identity is literally the same value, not merely a shared outcome.

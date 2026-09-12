@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertSafeBundledSymlinks, assertSafePackageFile, assertSafePackageTree } from "../scripts/package-tree-safety";
@@ -36,17 +36,21 @@ describe("package source-tree safety", () => {
     writeFileSync(asset, "export {};");
     chmodSync(index, 0o600);
     chmodSync(asset, 0o600);
+    // NTFS does not expose POSIX chmod bits; preservation uses the observed mode.
+    const indexMode = lstatSync(index).mode;
+    const assetMode = lstatSync(asset).mode;
 
     assertSafePackageTree(dist, "gui/dist", root);
 
-    expect(lstatSync(index).mode & 0o777).toBe(0o600);
-    expect(lstatSync(asset).mode & 0o777).toBe(0o600);
+    expect(lstatSync(index).mode).toBe(indexMode);
+    expect(lstatSync(asset).mode).toBe(assetMode);
   }));
 
   test("rejects a symbolic source root, file, and directory without mutating another tree", () => withTree((root, outside) => {
     const external = join(outside, "secret.txt");
     writeFileSync(external, "keep-this-external-content");
     chmodSync(external, 0o600);
+    const externalMode = lstatSync(external).mode;
     const dist = join(root, "gui", "dist");
     mkdirSync(dist, { recursive: true });
     writeFileSync(join(dist, "index.html"), "safe");
@@ -56,7 +60,7 @@ describe("package source-tree safety", () => {
 
     symlinkSync(external, join(dist, "external.txt"));
     expect(() => assertSafePackageTree(dist, "gui/dist", root)).toThrow("symbolic link");
-    expect(lstatSync(external).mode & 0o777).toBe(0o600);
+    expect(lstatSync(external).mode).toBe(externalMode);
     expect(readFileSync(external, "utf8")).toBe("keep-this-external-content");
   }));
 
@@ -66,20 +70,22 @@ describe("package source-tree safety", () => {
     const normal = join(dist, "index.html");
     writeFileSync(normal, "safe");
     chmodSync(normal, 0o600);
+    const normalMode = lstatSync(normal).mode;
     const externalDir = join(outside, "assets");
     mkdirSync(externalDir);
     writeFileSync(join(externalDir, "external.js"), "external");
     symlinkSync(externalDir, join(dist, "assets"));
     expect(() => assertSafePackageTree(dist, "gui/dist", root)).toThrow("symbolic link");
-    expect(lstatSync(normal).mode & 0o777).toBe(0o600);
-    rmSync(join(dist, "assets"));
+    expect(lstatSync(normal).mode).toBe(normalMode);
+    unlinkSync(join(dist, "assets"));
 
     const external = join(outside, "shared.txt");
     writeFileSync(external, "do-not-modify");
     chmodSync(external, 0o600);
+    const externalMode = lstatSync(external).mode;
     linkSync(external, join(dist, "shared.txt"));
     expect(() => assertSafePackageTree(dist, "gui/dist", root)).toThrow("multiply-linked");
-    expect(lstatSync(external).mode & 0o777).toBe(0o600);
+    expect(lstatSync(external).mode).toBe(externalMode);
     expect(readFileSync(external, "utf8")).toBe("do-not-modify");
   }));
 

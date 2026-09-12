@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { setDefaultTimeout, afterEach, beforeEach, expect, test } from "bun:test";
+// Windows exercises real ACL and identity subprocesses; bound the complete scenario.
+if (process.platform === "win32") setDefaultTimeout(60_000);
+
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -153,6 +156,7 @@ test("a native CAS with a matching generation but the wrong txId still conflicts
 });
 
 for (const generation of [1, 2, 4]) {
+  // This scenario performs multiple real process/ACL operations on Windows.
   test(`a native CAS at generation ${generation} never treats a null txId as a wildcard`, () => {
     let currentTxId: string | null = null;
     for (let nextGeneration = 1; nextGeneration <= generation; nextGeneration++) {
@@ -174,7 +178,7 @@ for (const generation of [1, 2, 4]) {
       kind: "ready",
       state: { nativeGeneration: generation, currentTxId },
     });
-  });
+  }, process.platform === "win32" ? 60_000 : 5_000);
 }
 
 test("a native CAS with a matching txId but the wrong generation still conflicts", () => {
@@ -201,6 +205,7 @@ test("a native CAS with a matching txId but the wrong generation still conflicts
   });
 });
 
+// This scenario performs multiple real process/ACL operations on Windows.
 test("the row validator refuses every whitespace-only txId", () => {
   expect(beginCodexTransition(
     { nativeGeneration: 0, currentTxId: null },
@@ -232,7 +237,7 @@ test("the row validator refuses every whitespace-only txId", () => {
 
     expect(readCodexTransitionState(), label).toEqual({ kind: "unavailable", reason: "database" });
   }
-});
+}, process.platform === "win32" ? 60_000 : 5_000);
 
 /**
  * A capability backed by a nominal transaction is not opaque if its caller can
@@ -375,7 +380,8 @@ test("a begin whose txId matches but whose generation does not is rejected", () 
  * read, the file is owner-only again. Removing the narrowing leaves it 0644 and
  * turns this red.
  */
-test("a coordinator found group-readable is narrowed back to owner-only", () => {
+// POSIX mode narrowing; Windows ACL hardening is covered by windows-secret-acl.test.ts.
+test.skipIf(process.platform === "win32")("a coordinator found group-readable is narrowed back to owner-only", () => {
   expect(readCodexTransitionState().kind).toBe("ready");
 
   chmodSync(coordinatorPath, 0o644);

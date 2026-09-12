@@ -9,6 +9,7 @@
  * It calls the PRODUCTION module, never a copy, and prints exactly one JSON
  * line so the parent can assert on a typed result rather than on log scraping.
  */
+import { writeFileSync, existsSync } from "node:fs";
 import { withCodexWriteLock } from "../../src/codex/codex-write-lock";
 import type { AdmissionSnapshot } from "../../src/codex/convergence-types";
 
@@ -31,10 +32,14 @@ const result = await withCodexWriteLock(
       // Tell the parent the lock is HELD, then block this thread so it stays
       // held. The callback is synchronous by contract, so a sleep here is a busy
       // wait on purpose: awaiting would release nothing and violate the contract.
-      Bun.write(payload.holdMarker, "held").catch(() => {});
-      const until = Date.now() + 3_000;
+      writeFileSync(payload.holdMarker, "held");
+      // Windows ACL checks in a contender can exceed the old three-second hold.
+      // Release is signaled explicitly; this deadline only bounds a failed parent.
+      const until = Date.now() + 30_000;
+      const waitWord = new Int32Array(new SharedArrayBuffer(4));
       while (Date.now() < until) {
-        if (payload.releaseMarker && Bun.file(payload.releaseMarker).size > 0) break;
+        if (payload.releaseMarker && existsSync(payload.releaseMarker)) break;
+        Atomics.wait(waitWord, 0, 0, 10);
       }
     }
     // ALWAYS publishes. The lock verifies the row before it will commit, so a
@@ -56,9 +61,29 @@ const result = await withCodexWriteLock(
   },
 );
 
+// Return only fixed diagnostic codes; refusal messages may otherwise contain paths.
+function namespaceFailureCode(message: string): string {
+  const detail = message.match(/^Windows effective-account lookup failed \((compile|token-environment|registered-folder), ([A-Za-z0-9_.]{1,80}), HRESULT 0x([0-9A-F]{8})\)\.$/);
+  if (detail) return `${detail[1]}:${detail[2]}:${detail[3]}`;
+  const exit = message.match(/^Windows effective-account lookup failed \(exit (unknown|-?\d{1,10})\)\.$/);
+  if (exit) return `exit-${exit[1]}`;
+  const known: Record<string, string> = {
+    "Windows effective-account lookup could not start.": "lookup-start",
+    "Windows effective-account lookup failed.": "lookup-failed",
+    "Windows effective-account lookup returned an empty value.": "lookup-empty",
+    "Windows LocalAppData resolution returned a relative path.": "folder-relative",
+    "The Windows coordinator namespace cannot be created.": "namespace-create",
+    "The Windows coordinator lock directory cannot be created.": "lock-directory-create",
+  };
+  return known[message] ?? "unknown";
+}
+
 console.log(JSON.stringify({
   status: result.status,
   ...(result.status === "acquired" ? { value: result.value, lockId: result.lockId } : {}),
   ...(result.status === "busy" ? { reason: result.reason, lockId: result.lockId } : {}),
-  ...(result.status === "refused" ? { reason: result.reason } : {}),
+  ...(result.status === "refused" ? {
+    reason: result.reason,
+    ...(result.reason === "namespace_unsafe" ? { namespaceFailure: namespaceFailureCode(result.message) } : {}),
+  } : {}),
 }));

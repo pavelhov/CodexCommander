@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { bundledBunPath } from "../src/lib/bun-runtime";
-import { killProxy } from "../src/lib/process-control";
+import { redactSecretString } from "../src/lib/redact";
 
 const BIN_CCX = join(import.meta.dir, "..", "bin", "ccx.mjs");
 const nodeAvailable = spawnSync("node", ["--version"], {
@@ -13,6 +13,27 @@ const nodeAvailable = spawnSync("node", ["--version"], {
   windowsHide: true,
 }).status === 0;
 const runnable = process.platform === "win32" && nodeAvailable;
+const STARTUP_STDERR_LIMIT = 16_384;
+
+function startupStderrDiagnostic(stderr: string, env: NodeJS.ProcessEnv): string {
+  let sanitized = stderr;
+  for (const [name, value] of Object.entries(env)) {
+    if (value && /token|secret|password|credential|api_?key/i.test(name)) {
+      sanitized = sanitized.replaceAll(value, "[REDACTED]");
+    }
+  }
+  return redactSecretString(sanitized).replace(/\x1b\[[0-9;]*m/g, "").trim() || "(empty)";
+}
+
+test("launcher startup diagnostics redact labelled and inherited credentials", () => {
+  const result = startupStderrDiagnostic(
+    "startup failed: fixture-private-value\nAuthorization: Bearer fixture-bearer-value\n",
+    { CUSTOM_SECRET: "fixture-private-value" },
+  );
+  expect(result).toContain("startup failed: [REDACTED]");
+  expect(result).not.toContain("fixture-private-value");
+  expect(result).not.toContain("fixture-bearer-value");
+});
 
 type Health = {
   status: string;
@@ -155,6 +176,22 @@ function inspectWindowsProcessIdentity(pid: number): WindowsProcessIdentity | nu
   throw lastError;
 }
 
+function stopOwnedWindowsProcessTree(identity: WindowsProcessIdentity): void {
+  const current = inspectWindowsProcessIdentity(identity.pid);
+  if (!current) return;
+  if (!sameProcess(current, identity)) throw new Error("owned test process identity changed before cleanup");
+  // This is a test-owned Node launcher (or its proven Bun child), not the
+  // current home's proxy. Production killProxy correctly refuses that target.
+  const result = spawnSync("taskkill.exe", ["/PID", String(identity.pid), "/T", "/F"], {
+    stdio: "ignore",
+    timeout: 10_000,
+    windowsHide: true,
+  });
+  if (result.status !== 0 && sameProcess(inspectWindowsProcessIdentity(identity.pid), identity)) {
+    throw new Error(`owned test process tree did not stop (taskkill exit=${result.status})`);
+  }
+}
+
 function removeTree(path: string): void {
   // Windows can retain the copied executable's image handle briefly after
   // taskkill returns. Retry only transient fixture-cleanup errors, with a cap.
@@ -187,17 +224,52 @@ async function effectiveRuntime(override: string): Promise<string> {
   let primaryError: unknown;
   try {
     port = await freePort();
+    const launcherEnv = isolatedLauncherEnv(root, override);
+    // Explicit start persists routing intent, so its isolated home needs an
+    // installed config. Use static models to keep discovery out of this test.
+    writeFileSync(join(launcherEnv.CODEXCOMMANDER_HOME!, "config.json"), JSON.stringify({
+      port,
+      hostname: "127.0.0.1",
+      multiAgentGuidanceEnabled: true,
+      defaultProvider: "mock",
+      providers: {
+        mock: {
+          adapter: "openai-chat",
+          baseUrl: "http://127.0.0.1:9/v1",
+          allowPrivateNetwork: true,
+          liveModels: false,
+          models: ["test-model"],
+          defaultModel: "test-model",
+        },
+      },
+    }), { mode: 0o600 });
+    let startupStderr = "";
     launcher = spawn("node", [BIN_CCX, "start", "--port", String(port)], {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
-      env: isolatedLauncherEnv(root, override),
+      env: launcherEnv,
+    });
+    launcher.stderr?.setEncoding("utf8");
+    launcher.stderr?.on("data", (chunk: string) => {
+      // Drain the pipe continuously, retaining only a bounded startup prefix.
+      startupStderr += chunk.slice(0, Math.max(0, STARTUP_STDERR_LIMIT - startupStderr.length));
     });
     if (!launcher.pid) throw new Error("Node launcher has no process id");
     launcherPid = launcher.pid;
     ownedLauncher = captureWindowsProcessIdentity(launcherPid);
 
     const health = await waitForHealth(port, 25_000, launcher);
-    if (!health) throw new Error("proxy did not become healthy");
+    if (!health) {
+      // Drop the last line if the capture filled, so truncation cannot expose a
+      // partial credential whose label/value boundary fell beyond the limit.
+      const stderr = startupStderr.length === STARTUP_STDERR_LIMIT
+        ? startupStderr.slice(0, Math.max(0, startupStderr.lastIndexOf("\n")))
+        : startupStderr;
+      throw new Error(
+        `proxy did not become healthy (exit=${launcher.exitCode}, signal=${launcher.signalCode}); `
+        + `startup stderr: ${startupStderrDiagnostic(stderr, launcherEnv)}`,
+      );
+    }
     const identity = windowsProcessIdentity(health.pid);
     if (!identity || identity.parentPid !== launcher.pid) {
       throw new Error("health PID is not the spawned Node launcher's direct Bun child");
@@ -218,16 +290,20 @@ async function effectiveRuntime(override: string): Promise<string> {
   if (ownedLauncher) {
     try {
       if (sameProcess(inspectWindowsProcessIdentity(ownedLauncher.pid), ownedLauncher)) {
-        killProxy(ownedLauncher.pid);
+        stopOwnedWindowsProcessTree(ownedLauncher);
         launcherTreeStopped = true;
       }
     } catch (error) {
       cleanupErrors.push(`launcher cleanup failed: ${String(error)}`);
     }
   }
-  if (!launcherTreeStopped && launcher && launcherPid && launcher.exitCode === null && launcher.signalCode === null) {
+  if (!ownedLauncher && !launcherTreeStopped && launcher && launcherPid && launcher.exitCode === null && launcher.signalCode === null) {
     try {
-      killProxy(launcherPid);
+      const identity = captureWindowsProcessIdentity(launcherPid);
+      if (launcher.exitCode !== null || launcher.signalCode !== null) {
+        throw new Error("test launcher exited before fallback cleanup identity was captured");
+      }
+      stopOwnedWindowsProcessTree(identity);
       launcherTreeStopped = true;
     } catch (error) {
       cleanupErrors.push(`launcher tree fallback failed: ${String(error)}`);
@@ -239,7 +315,7 @@ async function effectiveRuntime(override: string): Promise<string> {
   if (ownedProxy) {
     try {
       if (sameProcess(inspectWindowsProcessIdentity(ownedProxy.pid), ownedProxy)) {
-        killProxy(ownedProxy.pid);
+        stopOwnedWindowsProcessTree(ownedProxy);
       }
     } catch (error) {
       cleanupErrors.push(`proxy cleanup failed: ${String(error)}`);

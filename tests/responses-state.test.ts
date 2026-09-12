@@ -1185,9 +1185,13 @@ describe("Responses previous_response_id state", () => {
     const symlinkName = symlinkRef.fileName;
     unlinkSync(join(dir, symlinkName));
     symlinkSync(target, join(dir, symlinkName));
+    // Cleanup inspects owned names, file kind, and age, not spill payloads.
+    // Derive valid names from the durable seed without repeating publication
+    // and Windows ACL setup 520 times for an enumeration/cleanup boundary test.
     for (let i = 0; i < 520; i++) {
-      const ref = writeResponseSpillDurably(`orphan-${i}`, { createdAt: Date.now(), items: [i] });
-      const path = join(dir, ref.fileName);
+      const fileName = symlinkName.replace(/^symlink\./, `orphan-${i}.`);
+      const path = join(dir, fileName);
+      writeFileSync(path, "orphan");
       utimesSync(path, old, old);
     }
     let failedOnce = false;
@@ -1203,7 +1207,7 @@ describe("Responses previous_response_id state", () => {
     expect(result.scanned).toBeLessThanOrEqual(4_096);
     expect(result.failed).toBe(1);
     expect(existsSync(join(dir, symlinkName))).toBe(true);
-  }, BULK_DURABLE_IO_BUDGET_MS); // 521 fsync'd spill writes build the workload; Windows CI measured ~34s.
+  }, BULK_DURABLE_IO_BUDGET_MS);
 
   test("orphan scan cap stops enumeration at the limit with an injected directory", () => {
     // Prove RESPONSE_SPILL_SCAN_MAX itself binds: enumerate more entries than

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join, parse } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { windowsProfileProbe } from "./helpers/windows-profile-probe";
 
 import {
   resolveCodexCoordinatorDatabasePath,
@@ -88,6 +89,9 @@ test("the effective identity is uid/SID and does not follow HOME", () => {
 });
 
 test("the coordinator resolver returns the final database path", () => {
+  const profileEnvironment = () => ["HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA"]
+    .map(name => process.env[name]);
+  const environmentBefore = profileEnvironment();
   const canonicalHome = realpathSync.native(codexHome);
   const finalPath = resolveCodexCoordinatorDatabasePath(
     resolveEffectiveUserIdentity(),
@@ -101,6 +105,7 @@ test("the coordinator resolver returns the final database path", () => {
     resolveEffectiveUserIdentity(),
     canonicalHome,
   ));
+  expect(profileEnvironment()).toEqual(environmentBefore);
 });
 
 test("real processes resolve one identity and coordinator path across every home/runtime environment", async () => {
@@ -114,16 +119,23 @@ test("real processes resolve one identity and coordinator path across every home
       homePath: join(root, "path"),
       xdgRuntime: join(root, "runtime"),
       temp: join(root, "temp"),
+      missingProfile: join(root, "profile-that-does-not-exist"),
       codexHome: join(root, "ambient-codex"),
       codexCommanderHome: join(root, "ambient-codexcommander"),
       workingDirectory: join(root, "working-directory"),
     };
-    for (const path of Object.values(paths)) mkdirSync(path, { recursive: true });
+    for (const [name, path] of Object.entries(paths)) {
+      if (name !== "missingProfile") mkdirSync(path, { recursive: true });
+    }
     return { root, paths };
   });
 
   try {
-    const probes = await Promise.all(environmentRoots.map(({ paths }, index) => {
+    const baseline = await runIdentityProbe({
+      CCX_TEST_CANONICAL_CODEX_HOME: canonicalHome,
+    }, process.cwd());
+    // A failed probe must not let finally remove a sibling's active cwd/TEMP.
+    const outcomes = await Promise.allSettled(environmentRoots.map(({ paths }, index) => {
       const accountEnvironment = process.platform === "win32"
         ? {
             USERNAME: `fake-username-${index}`,
@@ -139,7 +151,7 @@ test("real processes resolve one identity and coordinator path across every home
           };
       return runIdentityProbe({
         HOME: paths.home,
-        USERPROFILE: paths.userProfile,
+        USERPROFILE: index === 0 ? paths.userProfile : paths.missingProfile,
         HOMEDRIVE: paths.homeDrive,
         HOMEPATH: paths.homePath,
         XDG_RUNTIME_DIR: paths.xdgRuntime,
@@ -147,18 +159,31 @@ test("real processes resolve one identity and coordinator path across every home
         TEMP: paths.temp,
         TMP: paths.temp,
         LOCALAPPDATA: paths.temp,
+        APPDATA: paths.temp,
         CODEX_HOME: paths.codexHome,
         CODEXCOMMANDER_HOME: paths.codexCommanderHome,
         CCX_TEST_CANONICAL_CODEX_HOME: canonicalHome,
         ...accountEnvironment,
       }, paths.workingDirectory);
     }));
+    const probes: IdentityProbeResult[] = [];
+    for (const outcome of outcomes) {
+      if (outcome.status === "rejected") throw outcome.reason;
+      probes.push(outcome.value);
+    }
 
     const osIdentity = resolveEffectiveUserIdentity();
     const osDatabasePath = resolveCodexCoordinatorDatabasePath(osIdentity, canonicalHome);
+    expect(baseline.identity).toEqual(osIdentity);
+    const profileDiagnostic = baseline.databasePath !== osDatabasePath
+      || probes.some(probe => probe.databasePath !== baseline.databasePath)
+      ? JSON.stringify(windowsProfileProbe())
+      : undefined;
+    expect(baseline.databasePath, profileDiagnostic).toBe(osDatabasePath);
     for (const probe of probes) {
-      expect(probe.identity).toEqual(osIdentity);
-      expect(probe.databasePath).toBe(osDatabasePath);
+      expect(probe.identity).toEqual(baseline.identity);
+      expect(probe.databasePath, profileDiagnostic).toBe(baseline.databasePath);
+      for (const { root } of environmentRoots) expect(probe.databasePath.startsWith(root)).toBe(false);
     }
     expect(probes[1]?.identity).toEqual(probes[0]?.identity);
     expect(probes[1]?.databasePath).toBe(probes[0]?.databasePath);
