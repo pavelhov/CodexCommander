@@ -92,12 +92,16 @@ this setup.
 
 The skill and global block are advisory and contain no roster or model ids. They consult the current
 collaboration tool contract and live CodexCommander guidance. Featured models are suggestions, not an
-exhaustive allowlist; a known exact compatible catalog ID may be passed to native `spawn_agent`.
-The global block records the
-selected `balanced` or `orchestrator` mode and is loaded once per Codex run. Start a new task after
-install, update, mode change, repair, or removal; current tasks are not reloaded. User and repository
-instructions can prohibit delegation. A nonempty `$CODEX_HOME/AGENTS.override.md` shadows the managed
-global block, while an empty override does not.
+exhaustive allowlist; a known exact compatible catalog ID may be passed to native `spawn_agent` as
+`model` when the live contract permits. Omitting `model` inherits the configured default or parent
+choice. Add `reasoning_effort` only when the target advertises supported values and the brief
+benefits from it. Match each spawn to task complexity, uncertainty, risk, and how tightly you can
+check the result. Prefer the configured preferred worker when it fits; escalate capability only when
+the brief needs it. Do not default to the cheapest model or spawn solely to delegate.
+The global block records the selected `balanced` or `orchestrator` mode and is loaded once per Codex
+run. Start a new task after install, update, mode change, repair, or removal; current tasks are not
+reloaded. User and repository instructions can prohibit delegation. A nonempty
+`$CODEX_HOME/AGENTS.override.md` shadows the managed global block, while an empty override does not.
 
 The managed wait lifecycle treats `wait_agent` timeout as a neutral subscription result, not child
 failure evidence. After one `list_agents` reconciliation, a coordinator should do useful local work or
@@ -106,7 +110,9 @@ checkpoint or conclude request—never authorizes `interrupt_agent`. Interruptio
 user cancellation, a confirmed error or blocked state, a hard deadline communicated to the child in
 advance, or deliberate replacement after available work is preserved. A bounded high-stakes gate can
 prospectively request one checkpoint or durable partial artifact; conclude delivery remains advisory
-and occurs at a model or tool boundary.
+and occurs at a model or tool boundary. The root reassesses model choice, scope, and delegation on
+failed evidence, scope expansion, uncertainty, or capability mismatch—not on `wait_agent` timeout
+alone.
 
 Uninstall removes only the owned `SKILL.md`, removes its directory only when empty, and removes only
 the bounded global block while preserving every other `AGENTS.md` byte. This setup never mutates
