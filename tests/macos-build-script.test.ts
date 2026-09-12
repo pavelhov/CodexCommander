@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -42,6 +42,24 @@ describe("macOS build script bundle contract", () => {
     expect(releaseScriptSource).toContain("package:macos requires a clean git working tree");
   });
 
+  test.skipIf(process.platform === "win32")("uses an integer development identity without allowing a keyed build fallback", () => {
+    const start = scriptSource.indexOf('if [[ -n "${MACOS_BUILD_NUMBER:-}" ]]; then');
+    const end = scriptSource.indexOf("# A development build without a trust anchor", start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const selectVersion = scriptSource.slice(start, end);
+    const run = (build: string, key: string) => Bun.spawnSync(["bash", "-c", `set -euo pipefail\n${selectVersion}\nprintf '%s' "$build_version"`], {
+      env: { ...process.env, version_core: "0.1.6", MACOS_BUILD_NUMBER: build, MACOS_UPDATE_PUBLIC_KEY_FILE: key }, stdout: "pipe", stderr: "pipe",
+    });
+    expect(run("", "").stdout.toString()).toBe("1");
+    expect(run("42", "").stdout.toString()).toBe("42");
+    expect(run("42", "configured-public-key").stdout.toString()).toBe("42");
+    expect(run("", "configured-public-key").exitCode).not.toBe(0);
+    expect(run("0", "").exitCode).not.toBe(0);
+    expect(scriptSource).toContain('CFBundleShortVersionString -string "$version_core"');
+    expect(scriptSource).toContain('source_revision="${CCX_BUILD_REVISION:-}"');
+  });
+
   test("requires the canonical delegation skill in staged and archived runtimes", () => {
     expect(scriptSource).toContain(
       'assert_safe_file "$runtime_root/src/skills/codexcommander-delegation/SKILL.md"',
@@ -55,8 +73,8 @@ describe("macOS build script bundle contract", () => {
   });
 });
 
-async function runScript(outputDir: string, cwd: string = repoRoot) {
-  const proc = Bun.spawn(["bash", script], {
+async function runScript(outputDir: string, cwd: string = repoRoot, scriptPath: string = script) {
+  const proc = Bun.spawn(["bash", scriptPath], {
     cwd,
     env: { ...process.env, OUTPUT_DIR: outputDir },
     stdout: "pipe",
@@ -83,44 +101,68 @@ async function withSandbox<T>(body: (sandbox: string) => Promise<T>): Promise<T>
   }
 }
 
+// Source mutation probes must never alter the shared checkout used by sibling
+// test workers. Git checks out physical files here; --no-hardlinks also keeps
+// the clone object store independent. Only the current owning script is overlaid.
+async function withSourceProbe(body: (checkout: string, sandbox: string) => Promise<void>): Promise<void> {
+  const canonical = join(repoRoot, "src", "identity.ts");
+  const original = readFileSync(canonical);
+  const originalStat = lstatSync(canonical);
+  await withSandbox(async sandbox => {
+    const checkout = join(sandbox, "checkout");
+    const revision = Bun.spawnSync(["git", "-C", repoRoot, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" });
+    expect(revision.exitCode).toBe(0);
+    for (const args of [
+      ["clone", "--quiet", "--no-hardlinks", "--no-checkout", repoRoot, checkout],
+      ["-C", checkout, "checkout", "--quiet", "--detach", revision.stdout.toString().trim()],
+    ]) {
+      const child = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+      const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      if (exitCode !== 0) throw new Error(`Isolated source fixture setup failed: ${stderr}`);
+    }
+    writeFileSync(join(checkout, "scripts", "build-macos-app.sh"), scriptSource);
+    const copied = lstatSync(join(checkout, "src", "identity.ts"));
+    expect(copied.nlink).toBe(1);
+    expect(copied.dev === originalStat.dev && copied.ino === originalStat.ino).toBe(false);
+    try { await body(checkout, sandbox); }
+    finally {
+      expect(readFileSync(canonical)).toEqual(original);
+      const after = lstatSync(canonical);
+      expect(after.ino).toBe(originalStat.ino);
+      expect(after.nlink).toBe(originalStat.nlink);
+      expect(after.isSymbolicLink()).toBe(false);
+    }
+  });
+}
+
 describe.skipIf(!isMacOS)("macOS build script containment", () => {
   test("fails closed on a tracked source path that became a symlink", async () => {
-    await withSandbox(async sandbox => {
-      const tracked = join(repoRoot, "src", "identity.ts");
-      const original = readFileSync(tracked);
+    await withSourceProbe(async (checkout, sandbox) => {
+      const tracked = join(checkout, "src", "identity.ts");
       const external = join(sandbox, "external.txt");
       writeFileSync(external, "external content must not be copied or chmodded");
       chmodSync(external, 0o600);
       rmSync(tracked);
       symlinkSync(external, tracked);
-      try {
-        const { stderr, exitCode } = await runScript(join(sandbox, "output"));
-        expect(exitCode).not.toBe(0);
-        expect(stderr).toContain("Refusing unsafe packaging source");
-        expect(stderr).toContain("symbolic link");
-        expect(readFileSync(external, "utf8")).toBe("external content must not be copied or chmodded");
-      } finally {
-        rmSync(tracked, { force: true });
-        writeFileSync(tracked, original);
-      }
+      const { stderr, exitCode } = await runScript(join(sandbox, "output"), checkout, join(checkout, "scripts", "build-macos-app.sh"));
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Refusing unsafe packaging source");
+      expect(stderr).toContain("symbolic link");
+      expect(readFileSync(external, "utf8")).toBe("external content must not be copied or chmodded");
     });
   }, 120_000);
 
   test("rejects a multiply-linked tracked source file without modifying the external inode", async () => {
-    await withSandbox(async sandbox => {
-      const tracked = join(repoRoot, "src", "identity.ts");
+    await withSourceProbe(async (checkout, sandbox) => {
+      const tracked = join(checkout, "src", "identity.ts");
       const original = readFileSync(tracked, "utf8");
       const extraLink = join(sandbox, "identity-hardlink.ts");
       linkSync(tracked, extraLink);
-      try {
-        const result = await runScript(join(sandbox, "hardlink-output"));
-        expect(result.exitCode).not.toBe(0);
-        expect(result.stderr).toContain("multiply linked");
-        expect(readFileSync(tracked, "utf8")).toBe(original);
-        expect(readFileSync(extraLink, "utf8")).toBe(original);
-      } finally {
-        rmSync(extraLink, { force: true });
-      }
+      const result = await runScript(join(sandbox, "hardlink-output"), checkout, join(checkout, "scripts", "build-macos-app.sh"));
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("multiply linked");
+      expect(readFileSync(tracked, "utf8")).toBe(original);
+      expect(readFileSync(extraLink, "utf8")).toBe(original);
     });
   }, 120_000);
 
@@ -255,6 +297,13 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(stderr).not.toContain("Refusing to build into");
       const resources = join(inside, "CodexCommander.app", "Contents", "Resources");
       const runtime = join(resources, "runtime");
+      const framework = join(inside, "CodexCommander.app", "Contents", "Frameworks", "Sparkle.framework");
+      expect(existsSync(join(framework, "Versions", "B", "Autoupdate"))).toBe(true);
+      expect(existsSync(join(framework, "XPCServices", "Installer.xpc", "Contents", "MacOS", "Installer"))).toBe(true);
+      expect(Bun.spawnSync(["codesign", "--verify", "--deep", "--strict", join(inside, "CodexCommander.app")]).exitCode).toBe(0);
+      const loads = Bun.spawnSync(["otool", "-l", join(inside, "CodexCommander.app", "Contents", "MacOS", "CodexCommanderMenuBar")]);
+      expect(loads.stdout.toString()).toContain("@executable_path/../Frameworks");
+
       expect(existsSync(join(resources, "CodexCommander.png"))).toBe(true);
       expect(existsSync(join(resources, "LICENSE.txt"))).toBe(true);
       expect(existsSync(join(resources, "THIRD_PARTY_NOTICES.md"))).toBe(true);
@@ -294,6 +343,9 @@ describe.skipIf(!isMacOS)("macOS build script containment", () => {
       expect(versionOutput).toMatch(/codexcommander/i);
       const info = readFileSync(join(inside, "CodexCommander.app", "Contents", "Info.plist"), "utf8");
       expect(info).toContain("<key>CodexCommanderSourceRevision</key>");
+      expect(info).toContain("<key>SURequireSignedFeed</key>");
+      expect(info).toContain("<key>SUVerifyUpdateBeforeExtraction</key>");
+      expect(info).toContain("<key>SUSignedFeedFailureExpirationInterval</key>");
       expect(info).toMatch(/[0-9a-f]{40}(?:-dirty)?/);
     } finally {
       rmSync(untracked, { force: true });

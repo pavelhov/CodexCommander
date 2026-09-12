@@ -11,13 +11,57 @@ the CodexCommander instance running on the same Mac.
 
 Open [GitHub Releases](https://github.com/pavelhov/CodexCommander/releases) and download the current
 universal macOS preview for Intel and Apple silicon. Choose the
-`CodexCommander-<version>-macos-universal.zip` file and its matching `.sha256` checksum file.
+`CodexCommander-0.1.6-macos-universal.zip` file and its matching `.sha256` checksum file
+for v0.1.6. Updater-enabled releases will use
+`CodexCommander-<version>-<build>-macos-universal.zip` and the matching `.zip.sha256` file.
 
 This preview is ad-hoc signed and not notarized. Unzip it, move `CodexCommander.app` to Applications,
-then Control-click the app and choose **Open** on first launch. If macOS still blocks it, choose
-**System Settings → Privacy & Security → Open Anyway**. Do not disable Gatekeeper.
+then follow macOS's first-launch prompts. Depending on your macOS version, you may need
+**System Settings → Privacy & Security → Open Anyway**, or Control-click the app and choose **Open**.
+These prompts still apply to manual installation; update signatures do not provide Apple notarization.
+Do not disable Gatekeeper.
 
 To build from source instead, follow [Build from source](#build-from-source) below.
+
+## App updates (upcoming)
+
+v0.1.6 shipped before the in-app updater. Once the first updater-enabled release is published,
+install that release manually once using the steps above. The behavior below describes that upcoming
+release; it is not available in v0.1.6.
+
+![Upcoming macOS menu with an update action](/macos-updates.png)
+
+The app checks for compatible stable releases quietly in the background. When it finds one,
+the menu shows **Update Available…**. Select it to review the version and release notes.
+You can also choose **Check for Updates…** to check manually. Checking, including a failed or
+offline background check, leaves the proxy running and does not open an unsolicited update window.
+
+Downloads and installation require an explicit choice. When you choose to install, a confirmation
+explains that CodexCommander pauses **before the download begins**, through installation and relaunch,
+and that active requests may fail. Choose **Update Anyway** to proceed or **Later** to keep working.
+The warning appears in that confirmation, rather than permanently in the menu. There is no countdown
+or wait for requests to finish. Interrupted requests may need a retry, and remote provider work may
+continue. CodexCommander never automatically replays interrupted work.
+
+![Installation confirmation with Update Anyway and Later](/macos-update-confirmation.png)
+
+After verified installation and recovery, the app restores your previous proxy, routing, and
+supervision choices: a stopped proxy stays stopped, and native routing stays native. It preserves
+independently selected external routing and Launch at Login preferences, subject to macOS approval.
+A newer explicit stop, routing, or service choice takes precedence over the state captured for the
+update. **Stop CodexCommander and Quit…**, including **⌘Q**, remains the single normal quit action.
+
+If preparation, download, installation, or recovery is interrupted, use **Finish Update…** in the
+panel. Recovery uses the release captured by the pending update rather than switching to a newer
+release. While recovery is unresolved, Start stays blocked. If installation may already be armed, the
+owned proxy remains stopped with safe routing. Follow the visible recovery guidance; do not delete update transaction
+files or force-start the proxy. A cancellation or an old-version relaunch is not proof of a successful
+update or permission to restart. If Finish Update cannot complete, open **Logs** and retain the
+recovery state for diagnosis.
+
+Updater-enabled previews authenticate both the update feed and archives with Sparkle EdDSA
+signatures. They remain ad-hoc signed, **unnotarized previews**; Apple Developer ID signing and
+notarization are deferred.
 
 ## First run and app location
 
@@ -261,6 +305,12 @@ bun run build:macos
 open dist/macos/CodexCommander.app
 ```
 
+Without a release public key, a development build shows **Updates unavailable in this build**;
+normal Start still works. Its default integer build identifier is `1`. Keyed builds require an
+explicit positive-integer `MACOS_BUILD_NUMBER`; release packaging also requires the signing public
+key and a build number above the published inventory. These are maintainer release prerequisites,
+not required for ordinary source development.
+
 The development app is exactly `dist/macos/CodexCommander.app`. Every build embeds the Bun runtime and
 CodexCommander server resources inside the app bundle; the running app never executes `src/` from the
 checkout. Rebuild the app to pick up source changes. Double-clicking it to launch a new app process
@@ -320,7 +370,8 @@ relocatable and are not moved automatically.
 
 ## Uninstall
 
-Turn off **Launch at Login**, quit the companion, and move <code>CodexCommander.app</code> to the Trash.
-It stores no provider credentials and creates no Keychain entries. Uninstalling the companion does
-not stop or uninstall the CodexCommander proxy; run <code>ccx service uninstall</code> separately only if
-you also want to remove the headless service.
+Turn off **Launch at Login**, use **Stop CodexCommander and Quit…**, and move
+<code>CodexCommander.app</code> to the Trash after the stop completes. The quit action stops the proxy
+and service; deleting the app does not uninstall an independently installed headless service. Run
+<code>ccx service uninstall</code> separately if you also want to remove that service. The companion
+stores no provider credentials and creates no Keychain entries.
