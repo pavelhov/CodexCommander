@@ -74,7 +74,9 @@ updating, changing mode, or removing the setup does not reload a current task, s
 start a new Codex task to consume the new policy.
 
 This setup is advisory only. The skill tells Codex to inspect the live collaboration roster and tool
-contract and contains no roster or model ids. Live tool guidance plus user and repository
+contract, match each spawn to task complexity, uncertainty, risk, and how tightly the result can be
+checked, and contains no
+roster or model ids. Live tool guidance plus user and repository
 instructions remain authoritative, including instructions that prohibit delegation. The setup does
 not mutate `config.toml`, `subagentDeveloperInstructions`, native `[agents]` defaults, roster
 injection, or catalog state, and it does not restart a worker or replace the proxy. Those existing
@@ -93,7 +95,9 @@ available work is preserved. Release pressure cannot create a deadline retroacti
 When a bounded high-stakes gate needs evidence, the coordinator may prospectively request one
 explicit checkpoint or durable partial artifact with `send_message`; private child commentary does
 not wake the parent mailbox. A conclude message is advisory, delivered at a model or tool boundary,
-and is not proof that the child stopped.
+and is not proof that the child stopped. The root reassesses model choice, scope, and delegation only
+on failed evidence, scope expansion, uncertainty, or capability mismatch—not on `wait_agent` timeout
+alone.
 
 The source of truth is `src/skills/codexcommander-delegation/SKILL.md`. The delegation renderer reads
 those exact bytes, adds the concise marker-owned `AGENTS.md` block, and supplies both artifacts to the

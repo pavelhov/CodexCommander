@@ -26,7 +26,13 @@ Give every child a self-contained brief with its goal, paths or inputs, owned fi
 
 ## Model and effort
 
-Live featured models are featured suggestions, not an exhaustive allowlist. Prefer the current preferred worker when it fits. If you already know an exact compatible catalog ID, pass that known exact ID to native spawn_agent with a supported effort and, on V2, fork_turns "none" or a positive partial count. Omit overrides when the catalog is stale, unknown, or uncertain. Native validation remains authoritative. Do not invent IDs, substitute another family, or remember IDs.
+Match each spawn to task fit: complexity, uncertainty, risk, and how tightly you can check the result. Live featured models are suggestions, not an exhaustive allowlist. Prefer the configured preferred worker when it fits. Escalate capability only when the brief needs it; do not default to the cheapest or smallest model, and do not spawn solely to delegate.
+
+Omitting `model` inherits the configured default or parent choice. When the live contract permits a deliberate override and you know an exact compatible catalog ID that is fresh, routable, and compatible with this surface and task delivery, pass that known exact ID as `model`. Add `reasoning_effort` only when the target advertises supported values and the brief benefits from it. On V2, set `fork_turns` to `"none"` or a positive partial count when passing `model` or `reasoning_effort`; full-history forks reject overrides. Omit overrides when the catalog is stale, unknown, or uncertain. Native validation remains authoritative. Do not invent IDs, substitute another family, or remember IDs.
+
+## Root review and reassessment
+
+The root owns integration: verify concrete diffs, tests, and other task-relevant evidence before closing. Reassess model choice, scope, and delegation on failed evidence, scope expansion, uncertainty, or capability mismatch—not on `wait_agent` timeout alone.
 
 ## Coordination
 

@@ -40,7 +40,7 @@ function agentsBlock(mode: CodexDelegationMode): string {
     "## CodexCommander delegation",
     `Mode: ${mode}`,
     "Before spawning subagents, use $codexcommander-delegation and reread its SKILL.md if its details were compacted.",
-    "Consult the active collaboration roster and spawn-tool contract. Never hardcode model IDs. Give workers self-contained tasks.",
+    "Consult the active collaboration roster and spawn-tool contract. Never hardcode model IDs. Match each spawn to task complexity, uncertainty, risk, and how tightly you can check the result; reassess on failed evidence, scope expansion, uncertainty, or capability mismatch—not on timeout alone. Give workers self-contained tasks.",
     "A wait_agent timeout is neutral; never interrupt solely because one or more waits timed out. Use the managed skill for reconciliation and interruption gates.",
     delegationSentence,
     "This guidance is advisory and does not create collaboration tools. User and repository instructions outrank it for whether to spawn.",

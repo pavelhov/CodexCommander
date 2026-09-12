@@ -72,7 +72,14 @@ $CODEX_HOME/AGENTS.md
 
 The skill is advisory and deliberately contains no roster or model ids. Before a spawn it reads the
 current collaboration tool contract and live injected guidance. Featured models are suggestions, not
-an exhaustive allowlist; a known exact compatible catalog ID may be passed to native `spawn_agent`.
+an exhaustive allowlist; a known exact compatible catalog ID may be passed to native `spawn_agent` as
+`model` when the live contract permits. Omitting `model` inherits the configured default or parent
+choice. Add `reasoning_effort` only when the target advertises supported values and the brief
+benefits from it. Match each spawn to task complexity, uncertainty, risk, and how tightly you can
+check the result. Prefer the configured preferred worker when it fits; escalate capability only when
+the brief needs it. Do not default to the cheapest model or spawn solely to delegate. Reassess model
+choice on failed evidence, scope expansion, uncertainty, or capability mismatch—not on `wait_agent`
+timeout alone.
 A roster can change independently without making the installed skill stale.
 
 For V2 coordination, a `wait_agent` timeout means only that no qualifying mailbox or final event
