@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   canonicalizeCodexHome,
@@ -296,7 +297,62 @@ afterEach(async () => {
   while (roots.length) await roots.pop()!.cleanup();
 });
 
+type WindowsProbeResult = { variant: string; stage: string; exit: number | null; elapsedMs: number; stdoutPresent: boolean; stderrPresent: boolean; killed: boolean };
+
+async function diagnoseWindowsFixtureEnvironment(fx: Fixture): Promise<void> {
+  const strict = fx.env();
+  // These children execute only fixed OS identity/compiler probes, never the
+  // CLI, profiles, network requests, or application credential readers.
+  const inherited = { ...process.env, ...strict };
+  const groups: Record<string, RegExp> = {
+    powershell: /^(PSModulePath|PSExecutionPolicyPreference)$/i,
+    programLocations: /^(ProgramFiles(?:\(x86\))?|ProgramW6432|CommonProgramFiles(?:\(x86\))?|CommonProgramW6432|ProgramData|ALLUSERSPROFILE)$/i,
+    system: /^(SystemDrive|OS|PROCESSOR_ARCHITECTURE|PROCESSOR_ARCHITEW6432|PROCESSOR_IDENTIFIER|PROCESSOR_LEVEL|PROCESSOR_REVISION|NUMBER_OF_PROCESSORS|COMPUTERNAME|LOGONSERVER|PUBLIC|HOMEDRIVE|HOMEPATH)$/i,
+  };
+  const expressions = {
+    sid: "$ErrorActionPreference='Stop'; $null=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    compiler: "$ErrorActionPreference='Stop'; Add-Type -TypeDefinition 'public static class CcxProbe { public static int Value() { return 1; } }'; $null=[CcxProbe]::Value()",
+  };
+  const results: WindowsProbeResult[] = [];
+  const probe = async (variant: string, stage: string, env: Record<string, string | undefined>): Promise<WindowsProbeResult> => {
+    const command = stage === "resolver"
+      ? [process.execPath, "--eval", [
+        `const { resolveEffectiveUserIdentity, resolveCodexCoordinatorDatabasePath } = await import(${JSON.stringify(pathToFileURL(resolve(repoRoot, "src/codex/user-identity.ts")).href)});`,
+        "try { resolveCodexCoordinatorDatabasePath(resolveEffectiveUserIdentity(), process.env.CODEX_HOME); } catch { process.exitCode = 1; }",
+      ].join("\n")]
+      : ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(expressions[stage as keyof typeof expressions], "utf16le").toString("base64")];
+    const started = Date.now();
+    const child = Bun.spawn(command, { cwd: fx.root, env, stdout: "pipe", stderr: "pipe" });
+    fx.children.push(child);
+    let killed = false;
+    const timer = setTimeout(() => { killed = true; child.kill(); }, stage === "resolver" ? 25_000 : 12_000);
+    try {
+      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      const result = { variant, stage, exit, elapsedMs: Date.now() - started, stdoutPresent: !!stdout, stderrPresent: !!stderr, killed };
+      results.push(result);
+      return result;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  for (const stage of ["sid", "compiler", "resolver"]) {
+    const baseline = await probe("strict", stage, strict);
+    const contrast = await probe("inherited", stage, inherited);
+    if (baseline.exit !== 0 && contrast.exit === 0) {
+      for (const [name, pattern] of Object.entries(groups)) {
+        const group = Object.fromEntries(Object.entries(process.env).filter(([key]) => pattern.test(key)));
+        await probe(name, stage, { ...strict, ...group });
+      }
+    }
+  }
+  console.log(`CCX_WINDOWS_FIXTURE_PROBES ${JSON.stringify(results)}`);
+}
+
 describe("WP13 composed toggle acceptance", () => {
+  test.skipIf(process.platform !== "win32")("Windows fixture OS environment diagnostic", async () => {
+    await diagnoseWindowsFixtureEnvironment(fixture());
+  }, 300_000);
+
   /** RED: remove `shouldSyncCodexOnStart` or the under-lock desired-state read; an OFF row writes native bytes. */
   test("A-reduced: real CLI and HTTP entry points preserve an OFF Codex home", async () => {
     const fx = fixture();
