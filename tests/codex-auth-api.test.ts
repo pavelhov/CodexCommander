@@ -16,7 +16,7 @@ import {
   clearMainAccountInfoCache, maskEmail,
   clearCodexQuotaPrimeState, primeCodexPoolQuotas, seedCodexAuthAdmissionForTests,
   type CodexAuthAccountDto,
-  listCodexAuthAccounts,
+  listCodexAuthAccounts, setPoolQuotaFlightJoinedForTests,
 } from "../src/codex/auth-api";
 import {
   getCodexAccountCredential,
@@ -1362,6 +1362,9 @@ describe("codex-auth API", () => {
     let releaseFetch!: () => void;
     let markFetchStarted!: () => void;
     const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+    let markFlightJoined!: () => void;
+    const flightJoined = new Promise<void>(resolve => { markFlightJoined = resolve; });
+    setPoolQuotaFlightJoinedForTests(markFlightJoined);
     const fetchGate = new Promise<void>(resolve => { releaseFetch = resolve; });
     globalThis.fetch = (async input => {
       if (String(input) === "https://auth.openai.com/oauth/token") {
@@ -1381,18 +1384,25 @@ describe("codex-auth API", () => {
       });
     }) as typeof fetch;
 
+    const pending: Array<ReturnType<typeof handleCodexAuthAPI>> = [];
+    let joinDeadline: ReturnType<typeof setTimeout> | undefined;
     try {
       const request = () => {
         const req = new Request("http://localhost/api/codex-auth/accounts?refresh=1", { method: "GET" });
         return handleCodexAuthAPI(req, new URL(req.url), config);
       };
-      const first = request();
-      const second = request();
-      await fetchStarted;
-      await new Promise<void>(resolve => queueMicrotask(resolve));
+      pending.push(request(), request());
+      // Windows claim setup awaits ACL I/O. A microtask does not prove the
+      // second caller reached the compatible quota flight.
+      await Promise.race([
+        Promise.all([flightJoined, fetchStarted]),
+        new Promise<never>((_, reject) => {
+          joinDeadline = setTimeout(() => reject(new Error("Pool quota refresh did not join the active flight")), 20_000);
+        }),
+      ]);
       expect(calls).toBe(1);
       releaseFetch();
-      const responses = await Promise.all([first, second]);
+      const responses = await Promise.all(pending);
       const payloads = await Promise.all(responses.map(response => response!.json())) as Array<{
         accounts: Array<{ id: string; plan?: string }>;
       }>;
@@ -1403,9 +1413,13 @@ describe("codex-auth API", () => {
       expect(calls).toBe(1);
       expect(configCommits).toBe(1);
     } finally {
+      if (joinDeadline !== undefined) clearTimeout(joinDeadline);
+      releaseFetch();
+      await Promise.allSettled(pending);
+      setPoolQuotaFlightJoinedForTests(null);
       setPersistedConfigMutationBeforeCommitForTests(null);
     }
-  });
+  }, 30_000);
 
   test("pool plan persistence preserves an unrelated edit from the latest disk config", async () => {
     const config = makeConfig({

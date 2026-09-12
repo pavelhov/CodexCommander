@@ -66,7 +66,7 @@ function powershellValue(expression: string): string {
     // Only this fixed diagnostic grammar may cross the subprocess boundary.
     // Compiler messages and native errors can contain paths or account details.
     const diagnostic = new TextDecoder().decode(result.stderr).match(
-      /^CCX_IDENTITY_FAILURE:(compile|known-folder):([A-Za-z0-9_.]{1,80}):([0-9A-F]{8})\r?$/m,
+      /^CCX_IDENTITY_FAILURE:(compile|token-environment|known-folder):([A-Za-z0-9_.]{1,80}):([0-9A-F]{8})\r?$/m,
     );
     refuse(diagnostic
       ? `Windows effective-account lookup failed (${diagnostic[1]}, ${diagnostic[2]}, HRESULT 0x${diagnostic[3]}).`
@@ -156,19 +156,53 @@ function resolvePosixRuntimeRoot(uid: number): string {
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  // An implicit-current-user folder lookup expands the caller's USERPROFILE.
-  // Pass the effective token explicitly so every launcher uses the OS account's
-  // registered (possibly redirected) LocalAppData, including under isolated HOME.
+  // Known-folder expansion can read USERPROFILE even with an explicit token.
+  // Rebuild only this disposable helper's environment from the OS token before
+  // resolving the registered (possibly redirected) LocalAppData folder.
   const localAppData = powershellValue(`
 $stage = 'compile'
 try {
 Add-Type -TypeDefinition @'
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 public static class CodexCommanderKnownFolders {
+  [DllImport("userenv.dll", SetLastError = true, ExactSpelling = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool CreateEnvironmentBlock(out IntPtr block, IntPtr token, [MarshalAs(UnmanagedType.Bool)] bool inherit);
+  [DllImport("userenv.dll", ExactSpelling = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool DestroyEnvironmentBlock(IntPtr block);
   [DllImport("shell32.dll", ExactSpelling = true)]
   private static extern int SHGetKnownFolderPath(ref Guid folder, uint flags, IntPtr token, out IntPtr path);
+  public static void UseTokenEnvironment(string expectedSid) {
+    using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
+      if (!String.Equals(identity.User.Value, expectedSid, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException("Effective account changed during environment resolution.");
+      IntPtr block = IntPtr.Zero;
+      try {
+        if (!CreateEnvironmentBlock(out block, identity.Token, false))
+          throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        IntPtr cursor = block;
+        while (Marshal.ReadInt16(cursor) != 0) {
+          string entry = Marshal.PtrToStringUni(cursor);
+          int separator = entry.IndexOf('=');
+          if (separator > 0) values[entry.Substring(0, separator)] = entry.Substring(separator + 1);
+          cursor = IntPtr.Add(cursor, checked((entry.Length + 1) * 2));
+        }
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
+          string name = (string)entry.Key;
+          if (!name.StartsWith("=")) Environment.SetEnvironmentVariable(name, null);
+        }
+        foreach (var entry in values) Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+      } finally {
+        if (block != IntPtr.Zero) DestroyEnvironmentBlock(block);
+      }
+    }
+  }
   public static string LocalAppData(string expectedSid) {
     using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) {
       if (!String.Equals(identity.User.Value, expectedSid, StringComparison.OrdinalIgnoreCase))
@@ -185,6 +219,8 @@ public static class CodexCommanderKnownFolders {
   }
 }
 '@
+$stage = 'token-environment'
+[CodexCommanderKnownFolders]::UseTokenEnvironment('${identity.sid}')
 $stage = 'known-folder'
 [CodexCommanderKnownFolders]::LocalAppData('${identity.sid}')
 } catch {

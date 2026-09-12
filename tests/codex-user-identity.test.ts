@@ -126,6 +126,9 @@ test("real processes resolve one identity and coordinator path across every home
   });
 
   try {
+    const baseline = await runIdentityProbe({
+      CCX_TEST_CANONICAL_CODEX_HOME: canonicalHome,
+    }, process.cwd());
     // A failed probe must not let finally remove a sibling's active cwd/TEMP.
     const outcomes = await Promise.allSettled(environmentRoots.map(({ paths }, index) => {
       const accountEnvironment = process.platform === "win32"
@@ -166,9 +169,11 @@ test("real processes resolve one identity and coordinator path across every home
 
     const osIdentity = resolveEffectiveUserIdentity();
     const osDatabasePath = resolveCodexCoordinatorDatabasePath(osIdentity, canonicalHome);
+    expect(baseline.identity).toEqual(osIdentity);
+    expect(baseline.databasePath).toBe(osDatabasePath);
     for (const probe of probes) {
-      expect(probe.identity).toEqual(osIdentity);
-      expect(probe.databasePath).toBe(osDatabasePath);
+      expect(probe.identity).toEqual(baseline.identity);
+      expect(probe.databasePath).toBe(baseline.databasePath);
       for (const { root } of environmentRoots) expect(probe.databasePath.startsWith(root)).toBe(false);
     }
     expect(probes[1]?.identity).toEqual(probes[0]?.identity);
