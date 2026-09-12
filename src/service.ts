@@ -1,4 +1,4 @@
-import { assertMacosUpdateAllowsMutation } from "./server/macos-update-transaction";
+import { assertMacosUpdateAllowsMutation, MacosUpdateTransactionStore, MacosUpdateBlockedError } from "./server/macos-update-transaction";
 /**
  * `ccx service` — run the proxy as a background service that auto-starts on login and
  * auto-restarts on crash. macOS → launchd; Windows → Task Scheduler; Linux → systemd user unit.
@@ -2112,7 +2112,7 @@ export function startLaunchd(deps: {
   installedPort?: () => number;
   assertOwned?: (path: string) => void;
 } = {}): void {
-  assertMacosUpdateAllowsMutation();
+  assertMacosUpdateAllowsServiceStart();
   const entry = cliEntry();
   const run = deps.launchctl ?? runLaunchctl;
   const p = plistPath();
@@ -2923,7 +2923,7 @@ export async function stopTrackedProxyForServiceCommand(
  * fail closed instead of being bypassed by an unmanaged proxy.
  */
 export function startServiceIfInstalled(): boolean {
-  assertMacosUpdateAllowsMutation();
+  assertMacosUpdateAllowsServiceStart();
   assertServiceEnvironmentMatchesInstall();
   const diagnostic = diagnoseService();
   if (!diagnostic.installed) return false;
@@ -3372,7 +3372,8 @@ export function inspectMacosUpdateServiceProvenance(bundlePath: string, io: {
   if (states.length === 0 || states.some(state => JSON.stringify(state) !== JSON.stringify(states[0]))) throw new Error("Service provenance is missing or disagrees.");
   const state = states[0]!;
   const physical = io.realpath ?? realpathSync;
-  const bundle = String(physical(bundlePath));
+  // The trusted transaction path survives the installer rename gap; only execution targets must still resolve.
+  const bundle = resolve(bundlePath);
   const cli = String(physical(state.cliPath));
   const bun = String(physical(state.bunPath));
   const prefix = `${bundle}/Contents/Resources/`;
@@ -3387,4 +3388,18 @@ export function inspectMacosUpdateServiceProvenance(bundlePath: string, io: {
   }))()) throw new Error("Service registration differs from its captured runtime.");
   const fingerprint = createHash("sha256").update(JSON.stringify({cli,bun,backend:state.backend,codexHome:state.codexHome,codexCommanderHome:state.codexCommanderHome})).digest("hex");
   return {kind:bundledCli ? "bundle" : "independent",fingerprint,active:diagnostic.supervisorState === "active"};
+}
+
+/** Validate the installed execution target, never the CLI caller, before manager start. */
+export function assertMacosUpdateAllowsServiceStart(
+  store = new MacosUpdateTransactionStore(),
+  io: Parameters<typeof inspectMacosUpdateServiceProvenance>[1] = {},
+): "ordinary" | "independent" {
+  const record = store.read();
+  if (!record) return "ordinary";
+  try { assertMacosUpdateAllowsMutation(store); return "ordinary"; } catch (error) {
+    if (!(error instanceof MacosUpdateBlockedError)) throw error;
+  }
+  if (inspectMacosUpdateServiceProvenance(record.source.bundlePath, io).kind !== "independent") throw new MacosUpdateBlockedError();
+  return "independent";
 }

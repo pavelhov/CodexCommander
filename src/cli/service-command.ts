@@ -1,3 +1,4 @@
+import { assertMacosUpdateAllowsServiceStart } from "../service";
 import { assertMacosUpdateAllowsMutation, MacosUpdateTransactionStore } from "../server/macos-update-transaction";
 import { existsSync, unlinkSync } from "node:fs";
 
@@ -124,6 +125,7 @@ type ServingVerb = "installed" | "started" | "repaired";
 
 export interface ServiceCommandDependencies {
   platform: NodeJS.Platform;
+  updateStartDisposition?: typeof assertMacosUpdateAllowsServiceStart;
   acquireAuthority(includeStart: boolean): Promise<ProxyLifecycleAuthority>;
   assertEnvironment(): void;
   assertAuthEnvironment(): void;
@@ -232,6 +234,9 @@ async function refuseFailedServiceConvergence(
   deps: ServiceCommandDependencies,
   detail: string,
 ): Promise<false> {
+  try { assertMacosUpdateAllowsMutation(); } catch {
+    return refusal(deps, `Service ${command} did not converge; shared routing was preserved during the update: ${detail}`);
+  }
   try {
     const restored = deps.prepareTermination();
     return refusal(
@@ -266,6 +271,7 @@ async function convergeStartedServiceRouting(
     );
   }
   try {
+    if (command === "start" && (deps.updateStartDisposition ?? assertMacosUpdateAllowsServiceStart)() === "independent") return true;
     const prepared = deps.prepareStart();
     if (!prepared.success) {
       await refuseFailedServiceConvergence(command, deps, prepared.message);
@@ -316,8 +322,12 @@ async function prepareServiceManagerMutation(
     refusal(deps, `❌ service ${command} refused because start authority is unavailable.`);
     return null;
   }
-  try { assertMacosUpdateAllowsMutation(); } catch (error) { refusal(deps, (error as Error).message); return null; }
-  const native = deps.prepareTermination();
+  let independent = false;
+  try {
+    if (command === "start") independent = (deps.updateStartDisposition ?? assertMacosUpdateAllowsServiceStart)() === "independent";
+    else assertMacosUpdateAllowsMutation();
+  } catch (error) { refusal(deps, (error as Error).message); return null; }
+  const native = independent ? { success: true, message: "Independent start preserves shared routing." } : deps.prepareTermination();
   if (native.success) {
     try {
       // Publish the one-shot child proof while E + S are both held. Keep E

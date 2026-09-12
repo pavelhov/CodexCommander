@@ -1,4 +1,4 @@
-import { assertMacosUpdateAllowsMutation, MacosUpdateTransactionStore, currentMacosUpdateRecoveryId } from "../server/macos-update-transaction";
+import { assertMacosUpdateAllowsMutation, assertMacosUpdateAllowsRuntimeStart, MacosUpdateTransactionStore, currentMacosUpdateRecoveryId } from "../server/macos-update-transaction";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -34,6 +34,7 @@ import {
 } from "../lib/process-control";
 import {
   diagnoseService,
+  assertMacosUpdateAllowsServiceStart,
   isServiceOwnershipError,
   serviceStartableFromTray,
   startServiceIfInstalled,
@@ -168,6 +169,7 @@ export interface EnsureProxyLifecycleIo extends ExplicitProxyStartIo {
   findLive?: () => Promise<LiveProxy | null>;
   loadConfig?: () => CodexCommanderConfig;
   diagnoseService?: typeof diagnoseService;
+  updateServiceStartDisposition?: typeof assertMacosUpdateAllowsServiceStart;
   startService?: () => boolean;
   armServiceStartDelegation?: (ensureToken: string) => ProxyServiceStartDelegation;
   clearServiceStartDelegation?: (delegation: ProxyServiceStartDelegation) => void;
@@ -295,7 +297,9 @@ async function failExplicitProxyStartWithoutLive(
     >;
   },
 ): Promise<ProxyLifecycleResult> {
-  if (action === "ensure" && !io.rollbackNativeOnFailure) {
+  let sharedMutationAllowed = true;
+  try { assertMacosUpdateAllowsMutation(); } catch { sharedMutationAllowed = false; }
+  if (!sharedMutationAllowed || (action === "ensure" && !io.rollbackNativeOnFailure)) {
     return lifecycleResult(action, failure.state, {
       ok: failure.errorCode === "AUTOSTART_DISABLED",
       changed: preparedChanged,
@@ -914,7 +918,7 @@ export async function ensureProxyLifecycle(
   } finally {
     authority.releaseAll();
   }
-  if (result.state === "running" && options.ensureCompanion !== false) {
+  if (result.state === "running" && options.ensureCompanion !== false && !new MacosUpdateTransactionStore().read()) {
     await (io.ensureCompanion ?? ensureMacOSCompanionApp)().catch(() => false);
   }
   return result;
@@ -925,14 +929,18 @@ export async function ensureProxyLifecycleUnderLock(
   options: EnsureProxyLifecycleOptions = {},
   authority: ProxyLifecycleAuthority,
 ): Promise<ProxyLifecycleResult> {
-  try { assertMacosUpdateAllowsMutation(); } catch (error) {
+  let independentDuringUpdate = false;
+  try { independentDuringUpdate = assertMacosUpdateAllowsRuntimeStart() === "independent"; } catch (error) {
     return lifecycleResult(options.action ?? "ensure", "blocked", { ok: false, message: String(error instanceof Error ? error.message : error), errorCode: "START_FAILED" });
   }
   const action = options.action ?? "ensure";
   const logger = options.logger ?? quietLogger;
   let io = options.io ?? {};
   const findLive = io.findLive ?? findLiveProxy;
-  const startPreparation: ProxyStartPreparation = action === "start"
+  if (independentDuringUpdate) options = { ...options, replaceStaleRuntime: false };
+  const startPreparation: ProxyStartPreparation = independentDuringUpdate
+    ? { ok: true, changed: false, enableCodexRouting: false }
+    : action === "start"
     ? io.prepareStart?.() ?? { ok: true, changed: false, enableCodexRouting: true }
     : { ok: true, changed: false, enableCodexRouting: action === "restart" };
   if (!startPreparation.ok) {
@@ -1032,7 +1040,7 @@ export async function ensureProxyLifecycleUnderLock(
   // Automatic ensure must preserve an intentional native/OFF state, including its
   // inert stale journal. Explicit Start has just cleaned that residue and enabled
   // integration, so it may reconcile even when the pre-mutation snapshot was OFF.
-  if (action !== "start" && codexIntegrationEnabled(config)) {
+  if (!independentDuringUpdate && action !== "start" && codexIntegrationEnabled(config)) {
     try {
       if (io.reconcile) io.reconcile();
       else if (!currentExternalCodexModelProvider()) reconcileJournal();
@@ -1143,6 +1151,7 @@ export async function ensureProxyLifecycleUnderLock(
       }
       try {
         if (service?.installed) {
+          (io.updateServiceStartDisposition ?? assertMacosUpdateAllowsServiceStart)();
           await authority.acquireStart();
           serviceStartDelegation = (
             io.armServiceStartDelegation ?? armProxyServiceStartDelegation
@@ -1240,10 +1249,16 @@ export async function ensureProxyLifecycleUnderLock(
           errorCode: "START_FAILED",
         });
       }
+      if (readiness !== "ready" && independentDuringUpdate) {
+        return lifecycleResult(action, "failed", { ok: false, changed: startedHere, live, message: "Independent proxy did not become ready; shared routing was preserved.", errorCode: "START_FAILED" });
+      }
       if (readiness !== "ready") {
         logger.warn(`Startup catalog readiness was ${readiness}; retrying through the live proxy.`);
       }
     }
+  if (independentDuringUpdate) {
+    return lifecycleResult(action, "running", { ok: true, changed: startedHere, live, message: "Independent proxy is running; shared routing remains unchanged during the update." });
+  }
   try {
     await authority.acquireStart();
   } catch {

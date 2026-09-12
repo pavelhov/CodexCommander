@@ -1,4 +1,4 @@
-import { assertMacosUpdateAllowsMutation } from "./macos-update-transaction";
+import { assertMacosUpdateAllowsRuntimeStart } from "./macos-update-transaction";
 import { sendLiveInferenceFrame, closeLiveInferenceObservation } from "../usage/dispatch-live";
 import { markActivity } from "../lib/sidecar-tracker";
 import { darwinPlaintextEagerRuntimeWarning } from "../lib/bun-stream-caps";
@@ -486,7 +486,7 @@ export interface StartServerDeps {
 }
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
-  assertMacosUpdateAllowsMutation();
+  assertMacosUpdateAllowsRuntimeStart();
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   const config = loadConfig();
   const eagerRuntimeWarning = darwinPlaintextEagerRuntimeWarning(

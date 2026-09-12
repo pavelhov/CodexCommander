@@ -1,3 +1,4 @@
+import { inspectMacosRuntimeBundleProvenance } from "./macos-update-provenance";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -248,12 +249,23 @@ export class MacosUpdateTransactionStore {
     }
   }
 }
-/** Call under E or delegated S before any physical start/service/routing mutation. */
+/** Shared configuration/routing mutations remain excluded even for independent runtimes. */
 const recoveryScope = new AsyncLocalStorage<string>();
 export function assertMacosUpdateAllowsMutation(store = new MacosUpdateTransactionStore()): void {
   const record = store.read();
   if (record && !(record.phase === "recovering" && recoveryScope.getStore() === record.transactionId))
     throw new MacosUpdateBlockedError();
+}
+/** Physical start only. Callers receiving independent must suppress shared routing mutations. */
+export function assertMacosUpdateAllowsRuntimeStart(
+  store = new MacosUpdateTransactionStore(),
+  paths: { modulePath?: string; executablePath?: string } = {},
+): "ordinary" | "independent" {
+  const record = store.read();
+  if (!record || (record.phase === "recovering" && recoveryScope.getStore() === record.transactionId)) return "ordinary";
+  const provenance = inspectMacosRuntimeBundleProvenance(paths.modulePath, paths.executablePath);
+  if (provenance.kind === "independent" || (provenance.kind === "bundle" && provenance.bundlePath !== record.source.bundlePath)) return "independent";
+  throw new MacosUpdateBlockedError();
 }
 /** Only after verified installer recovery, while E owns the complete resume operation. */
 export function withMacosUpdateRecovery<T>(authority: ProxyLifecycleAuthority, id: string, work: () => T, store = new MacosUpdateTransactionStore()): T {

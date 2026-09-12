@@ -164,24 +164,14 @@ test("recovery scope is explicit and retry never forgets prior installer arm", a
   expect(f.store.read()?.latestIntent?.running).toBeNull();
   expect(f.store.read()?.original.running).toBe(true);
 });
-test("a new CLI process refuses startup after helper exit", async () => {
+test("shared mutations remain excluded after helper exit", async () => {
   const f = await fixture();
   f.store.begin(f.authority, f.request, f.snapshot);
-  const root = roots.at(-1)!;
-  writeFileSync(join(root, "macos-update-transaction.json"), JSON.stringify(f.store.read()), { mode: 0o600 });
   f.authority.releaseAll();
-  const child = Bun.spawn([process.execPath, "src/cli/index.ts", "start"], {
-    cwd: join(import.meta.dir, ".."),
-    env: {
-      ...process.env, HOME: root, CODEX_HOME: root, CODEXCOMMANDER_HOME: root
-    },
-    stdout: "pipe", stderr: "pipe",
-  });
-  const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-  expect(code).toBe(1);
-  expect(stderr).toContain("Finish Update");
+  expect(() => assertMacosUpdateAllowsMutation(f.store)).toThrow("Finish Update");
   expect(f.store.read()?.phase).toBe("preparing");
 });
+
 test("seal success followed by failed stop preserves durable recovery and closed admission", async () => {
   const f = await fixture();
   const result = await prepareMacosUpdate(f.store, f.authority, f.request, {
