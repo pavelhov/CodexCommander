@@ -79,12 +79,21 @@ describe("confirmed GUI launch", () => {
     })).rejects.toThrow("invalid dashboard launch confirmation");
   });
 
-  test("POSIX handoff is private and never places the bearer in launcher argv", () => {
+  test.skipIf(process.platform === "win32")("POSIX handoff has private directory and file modes", () => {
     const url = buildConfirmedGuiLaunchUrl(ticket);
     const handoff = createGuiLaunchHandoff(url, { platform: "linux", temporaryRoot });
     try {
       expect(statSync(handoff.directory).mode & 0o777).toBe(0o700);
       expect(statSync(handoff.file).mode & 0o777).toBe(0o600);
+    } finally {
+      handoff.cleanup();
+    }
+  });
+
+  test("handoff never places the bearer in launcher argv", () => {
+    const url = buildConfirmedGuiLaunchUrl(ticket);
+    const handoff = createGuiLaunchHandoff(url, { platform: "linux", temporaryRoot });
+    try {
       expect(readFileSync(handoff.file, "utf8")).toContain(ticket.ticket);
       expect([handoff.command, ...handoff.args].join(" ")).not.toContain(ticket.ticket);
       expect([handoff.command, ...handoff.args].join(" ")).not.toContain(url);
