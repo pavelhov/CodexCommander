@@ -50,14 +50,19 @@ export function trustedMacOSUpdateSource(modulePath = import.meta.path, executab
   if (realpathSync(binary) !== binary || !lstatSync(binary).isFile()) throw new MacosUpdateBlockedError();
   return {bundlePath,build,fingerprint:metadataFingerprint([bundlePath,plist,binary])};
 }
-function metadataFingerprint(paths: string[]): string {
+function metadataFingerprint(paths: string[], includeChangeTime = true): string {
   return createHash("sha256").update(JSON.stringify(paths.map(path => {
-    try { const s = lstatSync(path,{bigint:true}); if (s.isSymbolicLink()) throw new MacosUpdateBlockedError(); return [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs].map(String); }
+    try { const s = lstatSync(path,{bigint:true}); if (s.isSymbolicLink()) throw new MacosUpdateBlockedError(); return [s.dev,s.ino,s.size,s.mtimeNs,...(includeChangeTime ? [s.ctimeNs] : [])].map(String); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   }))).digest("hex");
 }
 /** No settings or secrets are serialized, including hashed settings contents. */
-export function macOSUpdateIntentFingerprint(): string { return metadataFingerprint([getConfigPath(),CODEX_CONFIG_PATH]); }
+export function macOSUpdateIntentFingerprint(paths = [getConfigPath(),CODEX_CONFIG_PATH]): string {
+  // loadConfig hardens permissions on every read, changing ctime even when the
+  // user's settings are untouched. Only content-write/replacement metadata is
+  // intent evidence; bundle replacement identity still includes ctime above.
+  return metadataFingerprint(paths,false);
+}
 function currentRouting(): "owned" | "native" | "external" {
   let content: string;
   try { content = readFileSync(CODEX_CONFIG_PATH,"utf8"); }

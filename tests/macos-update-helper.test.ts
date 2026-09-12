@@ -14,7 +14,7 @@ test("replacement recovery requires exact bundle/build and changed physical sour
 });
 
 import { afterEach } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, cpSync, copyFileSync, symlinkSync, constants, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, cpSync, copyFileSync, symlinkSync, constants, realpathSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performMacOSUpdateCommand, trustedMacOSUpdateSource, type MacOSUpdateHelperIo } from "../src/cli/macos-update";
@@ -116,4 +116,15 @@ test("newer OFF stops a recovery child or active bundle supervisor before cleari
   expect(stops).toBe(1);
   expect(await resumeProduction(f.store.read()!,authority,false,{service:()=>({kind:"bundle",fingerprint:null,active:true}),live:async()=>null,stop})).toBe(true);
   expect(stops).toBe(2);authority.releaseAll();
+});
+
+import { macOSUpdateIntentFingerprint } from "../src/cli/macos-update";
+test("permission hardening reads do not supersede routing intent but user writes do",async()=>{
+  const root=mkdtempSync(join(tmpdir(),"ccx-update-intent-"));temporary.push(root);
+  const config=join(root,"config.json");writeFileSync(config,'{"enabled":true}');
+  const before=macOSUpdateIntentFingerprint([config]);
+  await Bun.sleep(2);chmodSync(config,0o600);
+  expect(macOSUpdateIntentFingerprint([config])).toBe(before);
+  await Bun.sleep(2);writeFileSync(config,'{"enabled":false}');
+  expect(macOSUpdateIntentFingerprint([config])).not.toBe(before);
 });
