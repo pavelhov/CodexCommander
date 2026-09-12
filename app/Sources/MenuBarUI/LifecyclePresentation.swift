@@ -197,8 +197,7 @@ package struct CatalogUpdateConfirmation {
 
 package enum CompanionShortcut {
     package static let keyEquivalent = "q"
-    package static let quitModifiers: NSEvent.ModifierFlags = [.command]
-    package static let stopAndQuitModifiers: NSEvent.ModifierFlags = [.command, .option]
+    package static let stopAndQuitModifiers: NSEvent.ModifierFlags = [.command]
 }
 
 package enum LifecycleActionAvailability {
@@ -208,8 +207,8 @@ package enum LifecycleActionAvailability {
     ) -> Bool {
         guard controlsAllowed, let state else { return false }
         switch state {
-        case .running, .unauthorized, .degraded: return true
-        case .loading, .unreachable: return false
+        case .running, .unauthorized, .degraded, .unreachable: return true
+        case .loading: return false
         }
     }
 }
@@ -224,12 +223,11 @@ package enum CatalogUpdateActionAvailability {
     }
 }
 
-/// Registers both exit contracts with standard macOS key equivalents while the
-/// companion is active, and preserves responder-chain editing commands.
+/// Registers the confirmed stop-and-quit action with Command-Q and preserves
+/// responder-chain editing commands.
 package enum ApplicationMenuFactory {
     package static func make(
         target: AnyObject,
-        quitAction: Selector,
         stopAndQuitAction: Selector
     ) -> NSMenu {
         let applicationMenu = NSMenu(title: "CodexCommander")
@@ -243,18 +241,6 @@ package enum ApplicationMenuFactory {
         stopAndQuit.keyEquivalentModifierMask = CompanionShortcut.stopAndQuitModifiers
         stopAndQuit.isEnabled = false
         applicationMenu.addItem(stopAndQuit)
-        applicationMenu.addItem(.separator())
-
-        // Keep the conventional last application-menu item and ⌘Q behavior safe:
-        // quitting the companion never silently stops the independently running proxy.
-        let quitMenuBar = NSMenuItem(
-            title: "Quit Menu Bar",
-            action: quitAction,
-            keyEquivalent: CompanionShortcut.keyEquivalent
-        )
-        quitMenuBar.target = target
-        quitMenuBar.keyEquivalentModifierMask = CompanionShortcut.quitModifiers
-        applicationMenu.addItem(quitMenuBar)
 
         let root = NSMenu(title: "Main")
         let applicationItem = NSMenuItem(title: "CodexCommander", action: nil, keyEquivalent: "")

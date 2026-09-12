@@ -301,14 +301,14 @@ enum LaunchAtLoginSuite {
                     loginStatus: .enabled,
                     serviceManaged: true
                 ),
-                "Desktop · Quit Menu Bar leaves proxy running"
+                "Desktop · starts CodexCommander at login"
             )
             t.equal(
                 DesktopStartupMode.summary(
                     loginStatus: .enabled,
                     serviceManaged: false
                 ),
-                "Desktop · Quit Menu Bar leaves proxy running"
+                "Desktop · starts CodexCommander at login"
             )
             t.equal(
                 DesktopStartupMode.summary(

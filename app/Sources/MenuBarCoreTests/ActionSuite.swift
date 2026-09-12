@@ -85,6 +85,18 @@ enum ActionSuite {
             )
         }
 
+        t.test("lifecycle: stop confirms cleanup when the proxy is already stopped") {
+            let lifecycle = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(
+                    action: .stop, ok: true, state: .stopped,
+                    changed: false, message: "already stopped"
+                ),
+            ])
+            let coordinator = ActionCoordinator(lifecycle: lifecycle)
+            t.equal(sync { await coordinator.stop() }, .stopped)
+            t.equal(sync { await lifecycle.recordedActions() }, [.stop])
+        }
+
         t.test("lifecycle: direct companion launch starts routing; passive CLI launch only ensures") {
             let lifecycle = FakeLifecycleRunner(results: [
                 LifecycleCommandResult(

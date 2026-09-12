@@ -11,7 +11,6 @@ app.setActivationPolicy(.prohibited)
 let runner = TestRunner()
 
 final class ApplicationMenuTarget: NSObject {
-    @objc func quitMenuBar(_ sender: Any?) {}
     @objc func stopCodexCommanderAndQuit(_ sender: Any?) {}
 }
 
@@ -204,7 +203,7 @@ runner.test("ui: running proxy keeps the terminal glyph regardless of service pr
     runner.equal(Set(symbols).count, states.count, "every other operational state stays distinct")
 }
 
-runner.test("ui: footer exposes navigation, lifecycle, Codex routing, and both exits") {
+runner.test("ui: footer exposes navigation, lifecycle, Codex routing, and a single exit") {
     let controller = PopoverViewController()
     _ = controller.view
     let titles = controller.footerTitles
@@ -213,7 +212,7 @@ runner.test("ui: footer exposes navigation, lifecycle, Codex routing, and both e
         [
             "Dashboard", "Logs", "Refresh", "Start Proxy", "Restart Proxy…",
             "Restore Native Codex", "Route Codex Through Proxy",
-            "Quit Menu Bar", "Stop CodexCommander and Quit…",
+            "Stop CodexCommander and Quit…",
         ],
         "footer titles"
     )
@@ -263,7 +262,7 @@ runner.test("ui: catalog update presents manual ChatGPT restart outside the prox
     runner.equal(controller.catalogUpdateButtonEnabled, false)
     controller.hideCatalogUpdate()
     runner.equal(controller.catalogUpdateVisible, false)
-    runner.equal(controller.footerTitles.count, 9, "catalog action stays outside footer indexing")
+    runner.equal(controller.footerTitles.count, 8, "catalog action stays outside footer indexing")
 }
 
 runner.test("ui: startup control exposes desktop, headless, off, and approval states") {
@@ -282,7 +281,7 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
     )))
     runner.equal(
         controller.startupModeView.modeText,
-        "Desktop · Quit Menu Bar leaves proxy running"
+        "Desktop · starts CodexCommander at login"
     )
     runner.equal(controller.startupModeView.isLaunchAtLoginOn, true)
 
@@ -1096,19 +1095,18 @@ runner.test("ui: running footer invokes proxy, Codex route, and exit actions ind
     controller.onRestart = { calls.append("restart") }
     controller.onRestoreNativeCodex = { calls.append("restore-native") }
     controller.onRouteCodexThroughProxy = { calls.append("restore-back") }
-    controller.onQuitMenuBar = { calls.append("quit-menu") }
     controller.onStopAndQuit = { calls.append("stop-and-quit") }
-    for index in 0..<9 { controller.activateFooterForTesting(index) }
+    for index in 0..<8 { controller.activateFooterForTesting(index) }
     runner.equal(
         calls,
         [
             "dashboard", "logs", "refresh", "stop", "restart",
-            "restore-native", "restore-back", "quit-menu", "stop-and-quit",
+            "restore-native", "restore-back", "stop-and-quit",
         ]
     )
 }
 
-runner.test("ui: stopped footer offers Start and safe Quit without destructive exit") {
+runner.test("ui: stopped footer offers Start and confirmed stop-and-quit cleanup") {
     let controller = PopoverViewController()
     _ = controller.view
     controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
@@ -1116,26 +1114,22 @@ runner.test("ui: stopped footer offers Start and safe Quit without destructive e
     var restarted = false
     var restoredNative = false
     var routedThroughProxy = false
-    var quitMenuBar = false
     var stoppedAndQuit = false
     controller.onStart = { started = true }
     controller.onRestart = { restarted = true }
     controller.onRestoreNativeCodex = { restoredNative = true }
     controller.onRouteCodexThroughProxy = { routedThroughProxy = true }
-    controller.onQuitMenuBar = { quitMenuBar = true }
     controller.onStopAndQuit = { stoppedAndQuit = true }
     controller.activateFooterForTesting(3)
     controller.activateFooterForTesting(4)
     controller.activateFooterForTesting(5)
     controller.activateFooterForTesting(6)
     controller.activateFooterForTesting(7)
-    controller.activateFooterForTesting(8)
     runner.equal(started, true)
     runner.equal(restarted, false)
     runner.equal(restoredNative, true)
     runner.equal(routedThroughProxy, false)
-    runner.equal(quitMenuBar, true)
-    runner.equal(stoppedAndQuit, false)
+    runner.equal(stoppedAndQuit, true)
 }
 
 runner.test("ui: stopped proxy keeps native escape available but blocks proxy routing") {
@@ -1179,10 +1173,12 @@ runner.test("ui: degraded and unauthorized states offer Stop without enabling Re
 runner.test("ui: polling cannot re-enable lifecycle controls during an action") {
     let controller = PopoverViewController()
     _ = controller.view
+    var stoppedAndQuit = false
     var stopped = false
     var restarted = false
     var restoredNative = false
     var routedThroughProxy = false
+    controller.onStopAndQuit = { stoppedAndQuit = true }
     controller.onStop = { stopped = true }
     controller.onRestart = { restarted = true }
     controller.onRestoreNativeCodex = { restoredNative = true }
@@ -1196,6 +1192,9 @@ runner.test("ui: polling cannot re-enable lifecycle controls during an action") 
     controller.activateFooterForTesting(4)
     controller.activateFooterForTesting(5)
     controller.activateFooterForTesting(6)
+    controller.activateFooterForTesting(7)
+    runner.equal(stoppedAndQuit, false, "quit remains disabled after polling")
+    runner.equal(controller.footerEnabledStates[7], false)
     runner.equal(stopped, false, "stop remains disabled")
     runner.equal(restarted, false, "restart remains disabled")
     runner.equal(restoredNative, false, "native restore remains disabled")
@@ -1204,9 +1203,11 @@ runner.test("ui: polling cannot re-enable lifecycle controls during an action") 
     controller.setLifecycleControlsEnabled(true)
     controller.activateFooterForTesting(3)
     runner.equal(stopped, true, "controls recover after the action completes")
+    controller.activateFooterForTesting(7)
+    runner.equal(stoppedAndQuit, true, "quit recovers after the action completes")
 }
 
-runner.test("ui: exit actions expose clear labels, accessibility, and distinct shortcuts") {
+runner.test("ui: single exit explains proxy shutdown and uses Command-Q") {
     let controller = PopoverViewController()
     _ = controller.view
     controller.apply(makeSnapshot())
@@ -1221,21 +1222,15 @@ runner.test("ui: exit actions expose clear labels, accessibility, and distinct s
         "proxy route names its destination"
     )
     runner.expect(
-        labels[7]?.contains("leave the proxy running") == true,
-        "safe quit explains proxy persistence"
-    )
-    runner.expect(
-        labels[8]?.contains("Stop the CodexCommander proxy") == true,
-        "destructive exit explains proxy stop"
+        labels[7]?.contains("Stop the CodexCommander proxy") == true,
+        "exit explains proxy stop"
     )
 
     let shortcuts = controller.footerKeyEquivalents
-    runner.equal(shortcuts[7].0, "q", "safe quit key")
-    runner.equal(shortcuts[7].1, [.command], "safe quit modifiers")
-    runner.equal(shortcuts[8].0, "q", "destructive quit key")
-    runner.equal(shortcuts[8].1, [.command, .option], "destructive quit modifiers")
-    runner.equal(controller.footerEnabledStates[7], true, "safe quit enabled")
-    runner.equal(controller.footerEnabledStates[8], true, "destructive exit enabled")
+    runner.equal(shortcuts.filter { $0.0 == "q" }.count, 1, "only one quit shortcut")
+    runner.equal(shortcuts[7].0, "q", "quit key")
+    runner.equal(shortcuts[7].1, [.command], "quit modifiers")
+    runner.equal(controller.footerEnabledStates[7], true, "exit enabled")
 }
 
 runner.test("ui: lifecycle confirmations default to Cancel and mark stop actions destructive") {
@@ -1352,20 +1347,19 @@ runner.test("ui: catalog confirmation is activity-aware and defaults to Later") 
     runner.equal(unknown.buttons[0].hasDestructiveAction, true)
 }
 
-runner.test("ui: application menu keeps Command-Q safe and provides explicit destructive exit") {
+runner.test("ui: application menu routes Command-Q to its single confirmed exit") {
     let target = ApplicationMenuTarget()
     let menu = ApplicationMenuFactory.make(
         target: target,
-        quitAction: #selector(ApplicationMenuTarget.quitMenuBar(_:)),
         stopAndQuitAction: #selector(ApplicationMenuTarget.stopCodexCommanderAndQuit(_:))
     )
     let items = menu.items.first?.submenu?.items.filter { !$0.isSeparatorItem } ?? []
     runner.equal(menu.items.map(\.title), ["CodexCommander", "Edit"])
-    runner.equal(items.map(\.title), ["Stop CodexCommander and Quit…", "Quit Menu Bar"])
+    runner.equal(items.map(\.title), ["Stop CodexCommander and Quit…"])
     runner.equal(items[0].keyEquivalent, "q")
-    runner.equal(items[0].keyEquivalentModifierMask, [.command, .option])
-    runner.equal(items[1].keyEquivalent, "q")
-    runner.equal(items[1].keyEquivalentModifierMask, [.command])
+    runner.equal(items[0].keyEquivalentModifierMask, [.command])
+    runner.equal(items[0].action, #selector(ApplicationMenuTarget.stopCodexCommanderAndQuit(_:)))
+    runner.expect(items[0].target === target, "Command-Q invokes the confirmed shutdown target")
 
     let editItems = menu.items[1].submenu?.items.filter { !$0.isSeparatorItem } ?? []
     runner.equal(editItems.map(\.title), ["Cut", "Copy", "Paste", "Select All"])
@@ -1394,7 +1388,7 @@ runner.test("ui: destructive menu availability follows proxy and in-flight state
     )
     runner.equal(
         LifecycleActionAvailability.canStopAndQuit(state: .unreachable, controlsAllowed: true),
-        false
+        true
     )
     runner.equal(
         LifecycleActionAvailability.canStopAndQuit(state: .loading, controlsAllowed: true),
@@ -1455,20 +1449,18 @@ runner.test("ui: catalog apply requires readiness and a confirmed running proxy"
     )
 }
 
-runner.test("ui: app menu starts with destructive exit disabled and safe quit enabled") {
+runner.test("ui: app menu starts with its single exit disabled until initial state arrives") {
     let delegate = AppDelegate()
     let menu = ApplicationMenuFactory.make(
         target: delegate,
-        quitAction: NSSelectorFromString("quitMenuBar:"),
         stopAndQuitAction: NSSelectorFromString("stopCodexCommanderAndQuit:")
     )
     let appMenu = menu.items[0].submenu
     appMenu?.update()
     let items = appMenu?.items.filter { !$0.isSeparatorItem } ?? []
     runner.equal(delegate.validateMenuItem(items[0]), false, "no confirmed live proxy")
-    runner.equal(delegate.validateMenuItem(items[1]), true, "safe quit")
     runner.equal(items[0].isEnabled, false, "AppKit applies destructive validation")
-    runner.equal(items[1].isEnabled, true, "AppKit keeps safe quit enabled")
+    runner.equal(items.count, 1, "single exit action")
 }
 
 runner.test("ui: stop-and-quit exits only after a confirmed stopped outcome") {

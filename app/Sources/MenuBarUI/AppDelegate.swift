@@ -148,7 +148,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         }
         controller.onApplyCodexCatalog = { [weak self] in self?.applyCodexCatalog() }
         controller.onOpenStartupOptions = { [weak self] in self?.openStartupOptions() }
-        controller.onQuitMenuBar = { [weak self] in self?.quitMenuBar(nil) }
         controller.onStopAndQuit = { [weak self] in self?.stopCodexCommanderAndQuit(nil) }
         controller.onLaunchAtLoginChange = { [weak self] enabled in
             self?.setLaunchAtLogin(enabled)
@@ -378,7 +377,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private func installApplicationMenu() {
         NSApp.mainMenu = ApplicationMenuFactory.make(
             target: self,
-            quitAction: #selector(quitMenuBar(_:)),
             stopAndQuitAction: #selector(stopCodexCommanderAndQuit(_:))
         )
         updateApplicationMenu()
@@ -386,12 +384,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
 
     private func updateApplicationMenu() {
         NSApp.mainMenu?.items.first?.submenu?.update()
-    }
-
-    /// Safe default: close only the companion. The proxy is an independent process and
-    /// remains available to connected clients.
-    @objc private func quitMenuBar(_ sender: Any?) {
-        NSApp.terminate(nil)
     }
 
     public func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

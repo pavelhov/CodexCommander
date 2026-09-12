@@ -59,8 +59,7 @@ Throughout this guide, **restore native** means removing CodexCommander-owned ro
 user-managed Codex provider is left unchanged.
 
 The visible app and background server remain separate internally. With the CodexCommander panel active,
-**Quit Menu Bar** (`⌘Q`) closes only the companion UI and deliberately leaves routing active.
-**Stop CodexCommander and Quit…** (`⌥⌘Q`) is the explicit destructive exit: after confirmation, it
+**Stop CodexCommander and Quit…** (`⌘Q`) is the single quit action: after confirmation, it
 restores native Codex routing, stops the proxy and service, and closes the companion only after the
 stop is verified. macOS may
 therefore list CodexCommander under both **Open at Login** and **Allow in the Background**; those are two
@@ -122,12 +121,10 @@ override it.
 - **Restore Native Codex** — switches Codex back to native OpenAI routing without stopping the proxy.
 - **Route Codex Through Proxy** — points Codex at an already-running CodexCommander proxy without
   restarting it.
-- **Quit Menu Bar** — closes the companion UI only. It does not stop the proxy, service, or client
-  routing. With the panel active, this is the safe `⌘Q` action.
 - **Stop CodexCommander and Quit…** — confirms the interruption, first restores native Codex routing,
   then stops the background proxy and service and quits only after the stopped state is confirmed. If
   stopping fails, the companion stays open and reports the error. With the panel active, its shortcut
-  is `⌥⌘Q`.
+  is `⌘Q`.
 
 When the companion finds an older bundled CodexCommander runtime that can no longer read the current
 configuration, automatic ensure, **Start Proxy**, **Restart Proxy**, and **Route Codex Through Proxy**

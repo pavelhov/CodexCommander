@@ -67,9 +67,7 @@ public enum DesktopStartupMode: String, Equatable, Sendable {
         }
         switch mode {
         case .desktop:
-            // Both startup paths outlive the companion: services are launchd-owned,
-            // while the app fallback uses spawnDetachedProxyStart() and unref().
-            return "Desktop · Quit Menu Bar leaves proxy running"
+            return "Desktop · starts CodexCommander at login"
         case .headless:
             return "Headless · proxy runs without the menu bar"
         case .off:
