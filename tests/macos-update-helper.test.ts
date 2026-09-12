@@ -112,9 +112,9 @@ test("newer OFF stops a recovery child or active bundle supervisor before cleari
   const f=fixture();await performMacOSUpdateCommand(prepare,f.io);await performMacOSUpdateCommand({action:"record-off"},f.io);
   const authority=await f.io.authority!({includeStart:true});let stops=0;
   const stop=async()=>{stops++;return {schemaVersion:1 as const,action:"stop" as const,ok:true,state:"stopped" as const,changed:true,pid:null,port:null,message:"stopped"};};
-  expect(await resumeProduction(f.store.read()!,authority,false,{service:()=>({kind:"absent",fingerprint:null,active:false}),live:async()=>({pid:123,port:1234,source:"runtime"}),inspect:async()=>({pid:123,bundlePath:"/Applications/Test.app",fingerprint:"child"}),stop})).toBe(true);
+  expect(await resumeProduction(f.store.read()!,authority,false,{restoreNative:()=>({success:true,changed:false,desiredChanged:false,configChanged:false,message:"native"}),service:()=>({kind:"absent",fingerprint:null,active:false}),live:async()=>({pid:123,port:1234,source:"runtime"}),inspect:async()=>({pid:123,bundlePath:"/Applications/Test.app",fingerprint:"child"}),stop})).toBe(true);
   expect(stops).toBe(1);
-  expect(await resumeProduction(f.store.read()!,authority,false,{service:()=>({kind:"bundle",fingerprint:null,active:true}),live:async()=>null,stop})).toBe(true);
+  expect(await resumeProduction(f.store.read()!,authority,false,{restoreNative:()=>({success:true,changed:false,desiredChanged:false,configChanged:false,message:"native"}),service:()=>({kind:"bundle",fingerprint:null,active:true}),live:async()=>null,stop})).toBe(true);
   expect(stops).toBe(2);authority.releaseAll();
 });
 
@@ -128,3 +128,52 @@ test("permission hardening reads do not supersede routing intent but user writes
   await Bun.sleep(2);writeFileSync(config,'{"enabled":false}');
   expect(macOSUpdateIntentFingerprint([config])).not.toBe(before);
 });
+
+test("deferred native routing applies before independent service/runtime returns and retains exclusion on failure",async()=>{
+  for (const independentService of [false,true]) for (const success of [false,true]) {
+    const f=fixture({running:false});await performMacOSUpdateCommand(prepare,f.io);
+    const a=await f.io.authority!({includeStart:true});f.store.recordNative(a);a.releaseAll();f.replace();
+    const order:string[]=[];
+    f.io.resume=(transaction,authority,owned)=>resumeProduction(transaction,authority,owned,{
+      restoreNative:()=>{expect(authority.delegatedLease()).toBeDefined();expect(f.store.read()?.phase).toBe("recovering");order.push("native");return {success,changed:success,desiredChanged:success,configChanged:success,message:"fixture"};},
+      service:()=>{order.push("service");return {kind:independentService?"independent":"absent",fingerprint:null,active:independentService};},
+      live:async()=>{order.push("live");return {pid:123,port:10100,source:"runtime"};},
+      inspect:async()=>({pid:123,bundlePath:null,fingerprint:"independent"}),
+      stop:async()=>{throw Error("Independent runtime must not be stopped");},
+    });
+    const result=await performMacOSUpdateCommand({action:"reconcile"},f.io);
+    expect(result.status).toBe(success?"recovered":"blocked");
+    expect(order[0]).toBe("native");
+    if(success)expect(f.store.read()).toBeNull();else {expect(order).toEqual(["native"]);expect(f.store.read()?.phase).toBe("recovering");}
+  }
+});
+
+test("deferred native recovery publishes OFF and preserves a newer external route in an isolated home",async()=>{
+  for (const external of [false,true]) {
+    const root=mkdtempSync(join(tmpdir(),"ccx-update-native-recovery-"));temporary.push(root);
+    for(const directory of ["home","codex","state","tmp"])mkdirSync(join(root,directory));
+    const script=`
+      const {getDefaultConfig,getConfigPath}=await import(${JSON.stringify(resolve("src/config.ts"))});
+      const {CODEX_CONFIG_PATH}=await import(${JSON.stringify(resolve("src/codex/paths.ts"))});
+      const {MacosUpdateTransactionStore}=await import(${JSON.stringify(resolve("src/server/macos-update-transaction.ts"))});
+      const {acquireProxyLifecycleAuthority}=await import(${JSON.stringify(resolve("src/server/proxy-lifecycle-authority.ts"))});
+      const {performMacOSUpdateCommand,resumeProduction}=await import(${JSON.stringify(resolve("src/cli/macos-update.ts"))});
+      const {writeFileSync,readFileSync}=await import('node:fs');
+      writeFileSync(getConfigPath(),JSON.stringify({...getDefaultConfig(),clientIntegrations:{codex:true,grok:false}}));
+      const owned=${JSON.stringify(['# Auto-injected by CodexCommander','openai_base_url = "http://127.0.0.1:10100/v1"',''].join(String.fromCharCode(10)))};
+      const foreign=${JSON.stringify(['model_provider = "external"','[model_providers.external]','base_url = "https://example.invalid/v1"',''].join(String.fromCharCode(10)))};
+      writeFileSync(CODEX_CONFIG_PATH,${external} ? foreign : owned);
+      const acquire=options=>acquireProxyLifecycleAuthority({...options,acquireEnsureLock:async()=>({token:'E',release(){}}),acquireStartLock:async()=>({token:'S',release(){}})});
+      const a=await acquire({includeStart:true}),store=new MacosUpdateTransactionStore(),id=${JSON.stringify(id)};
+      store.begin(a,{transactionId:id,source:{bundlePath:'/Applications/Test.app',build:'100'},target:{bundlePath:'/Applications/Test.app',build:'101'}},{running:false,routing:'owned',supervision:'none',process:null,supervisorFingerprint:null,sourceFingerprint:'old'});
+      store.transition(a,id,'prepared','prepared');store.transition(a,id,'armed');store.recordNative(a);a.releaseAll();
+      const result=await performMacOSUpdateCommand({action:'reconcile'},{store,source:()=>({bundlePath:'/Applications/Test.app',build:'101',fingerprint:'new'}),authority:acquire,intentFingerprint:()=>'prepared',resume:(t,a,r)=>resumeProduction(t,a,r,{service:()=>({kind:'absent',fingerprint:null,active:false}),live:async()=>({pid:424242,port:10100,source:'runtime'}),inspect:async()=>({pid:424242,bundlePath:null,fingerprint:'independent'}),stop:async()=>{throw Error('Independent runtime must not stop');}})});
+      console.log(JSON.stringify({status:result.status,pending:store.read()!==null,on:JSON.parse(readFileSync(getConfigPath(),'utf8')).clientIntegrations?.codex!==false,route:readFileSync(CODEX_CONFIG_PATH,'utf8'),foreign}));
+    `;
+    const child=Bun.spawn([process.execPath,"--eval",script],{env:{...process.env,HOME:join(root,"home"),CODEX_HOME:join(root,"codex"),CODEXCOMMANDER_HOME:join(root,"state"),TMPDIR:join(root,"tmp")},stdout:"pipe",stderr:"pipe"});
+    const [code,stdout]=await Promise.all([child.exited,new Response(child.stdout).text()]);
+    expect(code).toBe(0);const output=JSON.parse(stdout);
+    expect(output.status).toBe("recovered");expect(output.pending).toBe(false);expect(output.on).toBe(false);
+    if(external)expect(output.route).toBe(output.foreign);else expect(output.route).not.toContain("openai_base_url");
+  }
+},60000);

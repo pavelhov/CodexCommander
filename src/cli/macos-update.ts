@@ -3,7 +3,7 @@ import { lstatSync, realpathSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigPath, readPid } from "../config";
 import { CODEX_CONFIG_PATH } from "../codex/paths";
-import { currentExternalCodexModelProvider } from "../codex/routing-transition";
+import { currentExternalCodexModelProvider, restoreNativeCodexRoutingForStop } from "../codex/routing-transition";
 import { observeCodexRoutingDocument } from "../codex/routing-document";
 import { acquireProxyLifecycleAuthority, type ProxyLifecycleAuthority } from "../server/proxy-lifecycle-authority";
 import { proxyLifecycleLockLeaseHeaders } from "../server/proxy-lifecycle-protocol";
@@ -183,11 +183,21 @@ export interface MacOSUpdateHelperIo {
   resume?: (transaction:MacosUpdateTransaction, authority:ProxyLifecycleAuthority, restoreOwned:boolean) => Promise<boolean>;
 }
 export async function resumeProduction(transaction:MacosUpdateTransaction, authority:ProxyLifecycleAuthority, restoreOwned:boolean, io: {
+  restoreNative?: typeof restoreNativeCodexRoutingForStop;
   service?: () => ReturnType<typeof inspectMacosUpdateServiceProvenance>;
   live?: typeof findLiveProxy;
   inspect?: (pid:number) => Promise<Record<string,unknown>>;
   stop?: typeof stopProxyLifecycleUnderAuthority;
 } = {}): Promise<boolean> {
+  // Preparation does not touch an independent runtime's routes. A later native
+  // choice is deferred until recovery, and must be published before any early
+  // return that preserves that runtime or its service. This primitive changes
+  // only owned routing and desired state, without reacquiring lifecycle locks.
+  if (transaction.latestIntent?.routing === "native") {
+    try {
+      if (!(io.restoreNative ?? restoreNativeCodexRoutingForStop)().success) return false;
+    } catch { return false; }
+  }
   const service = (io.service ?? (() => inspectMacosUpdateServiceProvenance(transaction.target.bundlePath)))();
   // A newer verified service choice supersedes the snapshot; never recreate or
   // take over that service merely to restore the previous update state.
