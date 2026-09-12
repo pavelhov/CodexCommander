@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join, parse } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
+import { windowsProfileProbe } from "./helpers/windows-profile-probe";
 
 import {
   resolveCodexCoordinatorDatabasePath,
@@ -170,10 +171,14 @@ test("real processes resolve one identity and coordinator path across every home
     const osIdentity = resolveEffectiveUserIdentity();
     const osDatabasePath = resolveCodexCoordinatorDatabasePath(osIdentity, canonicalHome);
     expect(baseline.identity).toEqual(osIdentity);
-    expect(baseline.databasePath).toBe(osDatabasePath);
+    const profileDiagnostic = baseline.databasePath !== osDatabasePath
+      || probes.some(probe => probe.databasePath !== baseline.databasePath)
+      ? JSON.stringify(windowsProfileProbe())
+      : undefined;
+    expect(baseline.databasePath, profileDiagnostic).toBe(osDatabasePath);
     for (const probe of probes) {
       expect(probe.identity).toEqual(baseline.identity);
-      expect(probe.databasePath).toBe(baseline.databasePath);
+      expect(probe.databasePath, profileDiagnostic).toBe(baseline.databasePath);
       for (const { root } of environmentRoots) expect(probe.databasePath.startsWith(root)).toBe(false);
     }
     expect(probes[1]?.identity).toEqual(probes[0]?.identity);
