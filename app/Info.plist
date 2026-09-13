@@ -34,6 +34,8 @@
   <integer>0</integer>
   <key>SUAllowsAutomaticUpdates</key>
   <false/>
+  <key>SUScheduledCheckInterval</key>
+  <integer>21600</integer>
   <key>SUEnableAutomaticChecks</key>
   <true/>
   <key>LSUIElement</key>

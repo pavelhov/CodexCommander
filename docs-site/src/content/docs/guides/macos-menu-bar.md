@@ -31,8 +31,10 @@ once using the steps above.
 
 ![macOS menu with an update action](/macos-updates.png)
 
-The app checks for compatible stable releases quietly in the background. When it finds one,
-the menu shows **Update Available…**. Select it to review the version and release notes.
+The app checks for compatible stable releases quietly in the background. Starting with v0.1.8, it checks
+on launch and every six hours while running. When it finds an update, the menu shows
+**Update Available…**. Closing the update window or choosing **Later** keeps that reminder available
+so you can return to it. Select it to review the version and release notes.
 You can also choose **Check for Updates…** to check manually. Checking, including a failed or
 offline background check, leaves the proxy running and does not open an unsolicited update window.
 

@@ -124,6 +124,14 @@ public final class UpdateSession {
     }
 }
 
+/// The startup boundary is testable without starting a live network update session.
+@MainActor
+package protocol UpdateDiscoveryStarting: AnyObject {
+    func start() throws
+    func checkForUpdatesInBackground()
+}
+extension SPUUpdater: UpdateDiscoveryStarting {}
+
 /// Owns Sparkle only in explicitly enabled, keyed distribution bundles.
 @MainActor
 package final class AppUpdater: NSObject, SPUUpdaterDelegate {
@@ -171,13 +179,20 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
         updater.automaticallyChecksForUpdates = true
         updater.automaticallyDownloadsUpdates = false
         do {
-            try updater.start()
+            try Self.startDiscovery(updater)
             self.updater = updater
         } catch {
             unavailableReason = "Updates could not start. Reopen the app to retry."
         }
         changed?()
         return ordinaryStartup
+    }
+
+    package static func startDiscovery(_ updater: any UpdateDiscoveryStarting) throws {
+        try updater.start()
+        // Sparkle explicitly supports forcing a launch check before the next runloop.
+        // Its scheduler owns subsequent checks; no competing app timer is needed.
+        updater.checkForUpdatesInBackground()
     }
 
     func check() {
@@ -195,6 +210,11 @@ package final class AppUpdater: NSObject, SPUUpdaterDelegate {
     }
 
     package func updaterShouldPromptForPermissionToCheck(forUpdates updater: SPUUpdater) -> Bool { false }
+
+    package func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        // Background checks may skip the user driver's no-update presentation.
+        driver?.didNotFindEligibleUpdate()
+    }
 
     package func bestValidUpdate(in appcast: SUAppcast, for updater: SPUUpdater) -> SUAppcastItem? {
         bestValidUpdate(in: appcast.items)
