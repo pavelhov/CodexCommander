@@ -11,6 +11,17 @@ app.setActivationPolicy(.prohibited)
 
 let runner = TestRunner()
 
+@MainActor
+final class RecordingDiscovery: UpdateDiscoveryStarting {
+    var calls: [String] = []
+    var failStart = false
+    func start() throws {
+        calls.append("start")
+        if failStart { throw NSError(domain: "test.discovery", code: 1) }
+    }
+    func checkForUpdatesInBackground() { calls.append("background") }
+}
+
 final class ApplicationMenuTarget: NSObject {
     @objc func stopCodexCommanderAndQuit(_ sender: Any?) {}
 }
@@ -1890,7 +1901,7 @@ MainActor.assumeIsolated {
         decide?(.install)
         runner.equal(disclosures, 1, "retained reply consumed once")
         driver.dismissUpdateInstallation()
-        runner.equal(driver.updateAvailable, false)
+        runner.equal(driver.updateAvailable, true, "dismissal preserves the known release")
     }
 
     runner.test("updater UI: Sparkle scheduled offers stay hidden, including critical releases; manual offers open") {
@@ -1923,8 +1934,89 @@ MainActor.assumeIsolated {
                         "user action focuses the retained scheduled offer")
                 }
                 driver.dismissUpdateInstallation()
-                runner.equal(driver.updateAvailable, false)
+                runner.equal(driver.updateAvailable, true, "dismissal preserves the known release")
             }
+        }
+    }
+
+    runner.test("updater UI: launch discovery starts quietly only after successful updater startup") {
+        let updater = RecordingDiscovery()
+        try! AppUpdater.startDiscovery(updater)
+        runner.equal(updater.calls, ["start", "background"])
+        let failed = RecordingDiscovery()
+        failed.failStart = true
+        do { try AppUpdater.startDiscovery(failed); runner.expect(false, "start must fail") } catch {}
+        runner.equal(failed.calls, ["start"])
+        let source = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Info.plist")
+        let info = try! PropertyListSerialization.propertyList(from: Data(contentsOf: source), format: nil) as! [String: Any]
+        runner.equal(info["SUScheduledCheckInterval"] as? Int, 21600)
+        runner.equal(info["SUEnableAutomaticChecks"] as? Bool, true)
+    }
+
+    runner.test("updater UI: known release survives network errors but authoritative no-update clears it") {
+        let driver = UpdateController(hostBundle: .main, boundary: .init(
+            prepare: { _ in false }, persistArmed: { _ in }, cancelPreparation: { true },
+            stateChanged: { _ in }), confirmInstallation: { false })
+        driver.reconcileStartup(installerDisarmed: true)
+        driver.handleOffer(target: "2", stage: .notDownloaded, present: { $0(.dismiss) }, reply: { _ in })
+        driver.dismissUpdateInstallation()
+        driver.showUpdaterError(NSError(domain: "test.offline", code: 1)) {}
+        runner.equal(driver.availableVersion, "2")
+        driver.didNotFindEligibleUpdate()
+        runner.equal(driver.updateAvailable, false, "background no-update result clears without UI")
+        driver.handleOffer(target: "2", stage: .notDownloaded, present: { $0(.dismiss) }, reply: { _ in })
+        driver.dismissUpdateInstallation()
+        driver.showUpdateNotFoundWithError(NSError(domain: "test.no-update", code: 1)) {}
+        runner.equal(driver.updateAvailable, false)
+    }
+
+    runner.test("updater UI: installed and older builds do not advertise availability") {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".app")
+        let contents = folder.appendingPathComponent("Contents")
+        try! FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let info: [String: Any] = ["CFBundleIdentifier": "test.reminder." + UUID().uuidString,
+                                  "CFBundleName": "Reminder test", "CFBundleVersion": "20"]
+        try! PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: contents.appendingPathComponent("Info.plist"))
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let driver = UpdateController(hostBundle: Bundle(url: folder)!, boundary: .init(
+            prepare: { _ in false }, persistArmed: { _ in }, cancelPreparation: { true }, stateChanged: { _ in }))
+        driver.reconcileStartup(installerDisarmed: true)
+        for (version, available) in [("21", true), ("20", false), ("9", false)] {
+            driver.handleOffer(target: version, stage: .notDownloaded, present: { $0(.dismiss) }, reply: { _ in })
+            driver.dismissUpdateInstallation()
+            runner.equal(driver.updateAvailable, available)
+        }
+    }
+
+    runner.test("updater UI: real Sparkle Later and close preserve reminder while Skip clears it") {
+        for action in ["remindMeLater:", "close", "skipThisVersion:"] {
+            let driver = UpdateController(hostBundle: .main, boundary: .init(
+                prepare: { _ in fatalError("unsolicited preparation") }, persistArmed: { _ in },
+                cancelPreparation: { true }, stateChanged: { _ in }), confirmInstallation: { false })
+            driver.reconcileStartup(installerDisarmed: true)
+            let archive = NSKeyedArchiver(requiringSecureCoding: true)
+            archive.encode(0, forKey: "SPUUserUpdateStateStage")
+            archive.encode(true, forKey: "SPUUserUpdateStateUserInitiated")
+            archive.finishEncoding()
+            let decoder = try! NSKeyedUnarchiver(forReadingFrom: archive.encodedData)
+            let state = SPUUserUpdateState(coder: decoder)!
+            decoder.finishDecoding()
+            let item = SUAppcastItem(dictionary: ["enclosure": ["url": "https://example.test/2.zip", "sparkle:version": "2"]])!
+            let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
+            var choice: SPUUserUpdateChoice?
+            driver.showUpdateFound(with: item, state: state) { choice = $0 }
+            let window = NSApp.windows.first { !existing.contains(ObjectIdentifier($0)) && $0.isVisible }
+            runner.expect(window != nil, "real Sparkle offer is visible")
+            if action == "close" { window?.performClose(nil) }
+            else {
+                // Invoke Sparkle's actual button action even if this test host hides Later.
+                let target = window?.windowController
+                runner.expect(target?.responds(to: NSSelectorFromString(action)) == true, "Sparkle action exists")
+                _ = target?.perform(NSSelectorFromString(action), with: nil)
+            }
+            runner.equal(choice, action == "skipThisVersion:" ? .skip : .dismiss)
+            driver.dismissUpdateInstallation()
+            runner.equal(driver.updateAvailable, action != "skipThisVersion:")
         }
     }
 

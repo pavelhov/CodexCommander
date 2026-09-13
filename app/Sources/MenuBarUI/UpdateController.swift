@@ -27,7 +27,19 @@ public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDri
     private lazy var standard = SPUStandardUserDriver(hostBundle: hostBundle, delegate: self)
     private let hostBundle: Bundle
     private let confirmInstallation: () -> Bool
-    package private(set) var updateAvailable = false
+    // A known eligible release outlives the window/installer session. Revalidate
+    // through Sparkle on every launch rather than persisting stale appcast data.
+    package private(set) var availableVersion: String?
+    package var updateAvailable: Bool { availableVersion != nil }
+
+    private func rememberAvailableVersion(_ version: String) {
+        if let installed = hostBundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
+           SUStandardVersionComparator.default.compareVersion(version, toVersion: installed) != .orderedDescending {
+            availableVersion = nil
+        } else {
+            availableVersion = version
+        }
+    }
     private var userInitiated = false
     private let boundary: Boundary
 
@@ -58,11 +70,11 @@ public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDri
     public var supportsGentleScheduledUpdateReminders: Bool { true }
     public func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool { false }
     public func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
-        updateAvailable = true
+        rememberAvailableVersion(update.versionString)
         changed()
     }
     public func standardUserDriverWillFinishUpdateSession() {
-        updateAvailable = false
+        // Ending a presentation does not mean the release stopped being available.
         changed()
     }
 
@@ -72,6 +84,11 @@ public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDri
     }
 
     private func changed() { boundary.stateChanged(coordinator) }
+
+    package func didNotFindEligibleUpdate() {
+        availableVersion = nil
+        changed()
+    }
 
     public func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState,
                                 reply: @escaping (SPUUserUpdateChoice) -> Void) {
@@ -92,7 +109,7 @@ public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDri
             reply(.dismiss)
             return
         }
-        updateAvailable = true
+        rememberAvailableVersion(target)
         changed()
         let offerGeneration = coordinator.generation
         var replied = false
@@ -108,6 +125,7 @@ public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDri
                 return
             }
             guard choice == .install else {
+                if choice == .skip { self.availableVersion = nil }
                 self.coordinator.cancel()
                 self.changed()
                 respond(choice)
@@ -156,8 +174,8 @@ public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDri
     public func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) { userInitiated = true; standard.showUserInitiatedUpdateCheck(cancellation: cancellation) }
     public func showUpdateReleaseNotes(with downloadData: SPUDownloadData) { standard.showUpdateReleaseNotes(with: downloadData) }
     public func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) { standard.showUpdateReleaseNotesFailedToDownloadWithError(error) }
-    public func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) { updateAvailable = false; changed(); if userInitiated { standard.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement) } else { acknowledgement() } }
-    public func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) { let showError = userInitiated || [.preparing, .prepared, .armed].contains(coordinator.phase); coordinator.installerSessionEnded(); updateAvailable = false; changed(); if showError { standard.showUpdaterError(error, acknowledgement: acknowledgement) } else { acknowledgement() } }
+    public func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) { didNotFindEligibleUpdate(); if userInitiated { standard.showUpdateNotFoundWithError(error, acknowledgement: acknowledgement) } else { acknowledgement() } }
+    public func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) { let showError = userInitiated || [.preparing, .prepared, .armed].contains(coordinator.phase); coordinator.installerSessionEnded(); changed(); if showError { standard.showUpdaterError(error, acknowledgement: acknowledgement) } else { acknowledgement() } }
     public func showDownloadInitiated(cancellation: @escaping () -> Void) {
         standard.showDownloadInitiated { [weak self] in
             self?.coordinator.cancel(); self?.changed(); cancellation()
@@ -179,7 +197,7 @@ public final class UpdateController: NSObject, SPUUserDriver, SPUStandardUserDri
         reply(.install)
     }
     public func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) { standard.showInstallingUpdate(withApplicationTerminated: applicationTerminated, retryTerminatingApplication: retryTerminatingApplication) }
-    public func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { coordinator.installerSessionEnded(); changed(); standard.showUpdateInstalledAndRelaunched(relaunched, acknowledgement: acknowledgement) }
-    public func dismissUpdateInstallation() { if coordinator.phase == .offered { coordinator.cancel() }; coordinator.installerSessionEnded(); updateAvailable = false; userInitiated = false; changed(); standard.dismissUpdateInstallation() }
+    public func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) { coordinator.installerSessionEnded(); availableVersion = nil; changed(); standard.showUpdateInstalledAndRelaunched(relaunched, acknowledgement: acknowledgement) }
+    public func dismissUpdateInstallation() { if coordinator.phase == .offered { coordinator.cancel() }; coordinator.installerSessionEnded(); userInitiated = false; changed(); standard.dismissUpdateInstallation() }
     public func showUpdateInFocus() { userInitiated = true; standard.showUpdateInFocus() }
 }
