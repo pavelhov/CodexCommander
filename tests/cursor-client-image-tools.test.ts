@@ -26,6 +26,17 @@ describe("Cursor client image tools", () => {
     expect(cursorMcpToolsEncodedSize(budget.tools)).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
   });
 
+  test("retains the bare executor wait tool ahead of search-loaded catalog filler", () => {
+    const filler: CodexCommanderTool[] = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT }, (_, index) => ({
+      name: `loaded_${index}`, namespace: "mcp__filler", description: "Discovered tool", parameters: {}, loadedFromToolSearch: true,
+    }));
+    const bareWait = { ...wait, namespace: undefined };
+    const budget = applyCursorToolBudget([...filler, exec, bareWait], "auto");
+    expect(budget.tools).toContain(exec);
+    expect(budget.tools).toContain(bareWait);
+    expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
+  });
+
   test("guidance names the registered client tools and distinguishes native GenerateImage", () => {
     const note = buildCursorToolGuidanceSystemNote([imagegen, viewImage]);
     expect(note).toContain("For image generation or editing, call `image_gen__imagegen`");

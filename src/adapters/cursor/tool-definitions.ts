@@ -141,7 +141,7 @@ function isClientCodeExecutor(tool: ClientToolIdentity): boolean {
 /** Keep the client's image route and code-mode gateway ahead of unrelated catalog filler. */
 export function isCursorClientImageRouteTool(tool: ClientToolIdentity): boolean {
   return isClientImageGenerationTool(tool) || isClientViewImageTool(tool) || isClientCodeExecutor(tool)
-    || (tool.namespace === "functions" && tool.name === "wait");
+    || ((!tool.namespace || tool.namespace === "functions") && tool.name === "wait");
 }
 
 export function cursorRequestHasShellAlias(tools: readonly Pick<CodexCommanderTool, "namespace" | "name">[] | undefined): boolean {
@@ -419,14 +419,9 @@ export function buildCursorToolGuidanceSystemNote(
   toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): string | undefined {
   if (!tools?.length) return undefined;
-  const wireNames = [...new Set(
-    tools
-      .filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools))
-      .map(tool => cursorToolWireName(tool)),
-  )];
-  if (wireNames.length === 0) return undefined;
-
   const admittedTools = tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools));
+  const wireNames = [...new Set(admittedTools.map(cursorToolWireName))];
+  if (wireNames.length === 0) return undefined;
   const imageNames = admittedTools.filter(isClientImageGenerationTool).map(cursorToolWireName);
   const viewNames = admittedTools.filter(isClientViewImageTool).map(cursorToolWireName);
   const executorNames = admittedTools.filter(isClientCodeExecutor).map(cursorToolWireName);
