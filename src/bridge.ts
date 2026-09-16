@@ -628,6 +628,7 @@ export function bridgeToResponsesSSE(
           : currentToolCall.freeform
           ? {
               type: "custom_tool_call", id: currentToolCall.itemId,
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
               call_id: currentToolCall.callId, name: currentToolCall.name,
               input: freeformInput(currentToolCall.args), status: "completed",
             }
@@ -683,6 +684,7 @@ export function bridgeToResponsesSSE(
           : currentToolCall.freeform
           ? {
               type: "custom_tool_call", id: currentToolCall.itemId,
+              ...(currentToolCall.namespace ? { namespace: currentToolCall.namespace } : {}),
               call_id: currentToolCall.callId, name: currentToolCall.name,
               input: freeformInput(currentToolCall.args), status: "incomplete",
             }
@@ -1031,12 +1033,12 @@ export function bridgeToResponsesSSE(
               const realName = mapped?.name ?? event.name;
               const ns = mapped?.namespace;
               const toolSearch = toolSearchToolNames?.has(realName) ?? false;
-              const freeform = !toolSearch && (freeformToolNames?.has(realName) ?? false);
+              const freeform = !toolSearch && (freeformToolNames?.has(event.name) ?? false);
               const itemId = `${toolSearch ? "tsc" : freeform ? "ctc" : "fc"}_${uuid()}`;
               const item = toolSearch
                 ? { type: "tool_search_call", id: itemId, call_id: event.id, execution: "client", arguments: {}, status: "in_progress" }
                 : freeform
-                ? { type: "custom_tool_call", id: itemId, call_id: event.id, name: realName, input: "", status: "in_progress" }
+                ? { type: "custom_tool_call", ...(ns ? { namespace: ns } : {}), id: itemId, call_id: event.id, name: realName, input: "", status: "in_progress" }
                 : {
                     type: "function_call", id: itemId, call_id: event.id, name: realName,
                     arguments: "", status: "in_progress", ...(ns ? { namespace: ns } : {}),
@@ -1602,7 +1604,7 @@ function buildResponseJSONWithBudget(
     const realName = mapped?.name ?? currentToolCallName;
     const ns = mapped?.namespace;
     const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
-    const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
+    const freeform = !toolSearch && (options?.freeformToolNames?.has(currentToolCallName) ?? false);
     if (toolSearch && status === "completed") {
       pushOutput({
         type: "tool_search_call", id: `tsc_${uuid()}`,
@@ -1622,6 +1624,7 @@ function buildResponseJSONWithBudget(
     } else if (freeform) {
       pushOutput({
         type: "custom_tool_call", id: `ctc_${uuid()}`,
+        ...(ns ? { namespace: ns } : {}),
         call_id: currentToolCallId, name: realName,
         input: freeformInput(currentToolCallArgs), status,
       });
@@ -1758,7 +1761,7 @@ function buildResponseJSONWithBudget(
           const mapped = options?.toolNsMap?.get(currentToolCallName);
           const realName = mapped?.name ?? currentToolCallName;
           const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
-          const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
+          const freeform = !toolSearch && (options?.freeformToolNames?.has(currentToolCallName) ?? false);
           if (!freeform && !toolSearch) {
             flushToolCall("incomplete");
             errorEvent = {

@@ -75,6 +75,19 @@ call again when later history is replayed upstream. This keeps client-side image
 on public-compatible upstreams that reserve the namespace or reject dotted function names. ChatGPT
 forward mode remains untouched and keeps its native Responses Lite shape.
 
+### Images with a Cursor model
+
+Selecting a Cursor model changes the chat provider. Codex's client image-generation tools still
+run in Codex and use the Images routing described above. Cursor's own `GenerateImage` is a different
+tool and is not a substitute for Codex `image_gen`; a Cursor workspace error does not establish that
+Codex image generation is unavailable.
+
+CodexCommander prioritizes the supplied client execution and image tools when a large tool catalog
+exceeds Cursor's transport limits. If Codex exposes image generation through its JavaScript `exec`
+tool, use that tool with the documented `tools.image_gen__imagegen` binding. The wrapper and binding
+must be present in the current client tool instructions; CodexCommander does not create missing
+image capabilities. Directly registered image tools remain callable through the bridge.
+
 For an OpenAI-compatible custom gateway, configure a dedicated provider and select it only for
 standalone Images requests:
 

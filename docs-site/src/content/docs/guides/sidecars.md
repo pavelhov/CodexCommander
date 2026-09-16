@@ -70,9 +70,9 @@ failures after response headers have started are delivered as `response.failed` 
 ## Vision sidecar
 
 When the routed model is listed in its provider's `noVisionModels` and a request carries an image,
-CodexCommander describes each image **before** the main call and replaces it with text. The Dashboard and
-management API present `gpt-5.6-luna` as the current default. If the `visionSidecar.model` field is
-entirely absent, the vision execution path still has a `gpt-5.4-mini` code fallback.
+CodexCommander describes each image **before** the main call and replaces it with text. The OpenAI
+vision helper defaults to `gpt-5.6-luna`, matching the Dashboard and management API, including when
+`visionSidecar.model` is absent. An explicitly configured model remains unchanged.
 
 - Images can come from user, developer, and tool-result messages, including Codex's `view_image`.
 - Each image is sent to the configured native vision model with `reasoning.effort: "low"`; its

@@ -123,6 +123,27 @@ export function isBareCodexShellBridgeTool(tool: Pick<CodexCommanderTool, "names
   return !tool.namespace && isCodexShellBridgeToolName(tool.name);
 }
 
+type ClientToolIdentity = Pick<CodexCommanderTool, "namespace" | "name" | "freeform">;
+
+function isClientImageGenerationTool(tool: ClientToolIdentity): boolean {
+  return (tool.namespace === "image_gen" && tool.name === "imagegen")
+    || (!tool.namespace && tool.name === "image_gen__imagegen");
+}
+
+function isClientViewImageTool(tool: ClientToolIdentity): boolean {
+  return (!tool.namespace || tool.namespace === "functions") && tool.name === "view_image";
+}
+
+function isClientCodeExecutor(tool: ClientToolIdentity): boolean {
+  return (!tool.namespace || tool.namespace === "functions") && tool.name === "exec" && tool.freeform === true;
+}
+
+/** Keep the client's image route and code-mode gateway ahead of unrelated catalog filler. */
+export function isCursorClientImageRouteTool(tool: ClientToolIdentity): boolean {
+  return isClientImageGenerationTool(tool) || isClientViewImageTool(tool) || isClientCodeExecutor(tool)
+    || ((!tool.namespace || tool.namespace === "functions") && tool.name === "wait");
+}
+
 export function cursorRequestHasShellAlias(tools: readonly Pick<CodexCommanderTool, "namespace" | "name">[] | undefined): boolean {
   return tools?.some(isBareCodexShellBridgeTool) ?? false;
 }
@@ -398,13 +419,12 @@ export function buildCursorToolGuidanceSystemNote(
   toolChoice?: CodexCommanderRequestOptions["toolChoice"],
 ): string | undefined {
   if (!tools?.length) return undefined;
-  const wireNames = [...new Set(
-    tools
-      .filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools))
-      .map(tool => cursorToolWireName(tool)),
-  )];
+  const admittedTools = tools.filter(tool => cursorToolAllowedByChoice(tool, toolChoice, tools));
+  const wireNames = [...new Set(admittedTools.map(cursorToolWireName))];
   if (wireNames.length === 0) return undefined;
-
+  const imageNames = admittedTools.filter(isClientImageGenerationTool).map(cursorToolWireName);
+  const viewNames = admittedTools.filter(isClientViewImageTool).map(cursorToolWireName);
+  const executorNames = admittedTools.filter(isClientCodeExecutor).map(cursorToolWireName);
   const listedNames = quotedNames(wireNames);
   const shellBridgeNames = wireNames.filter(isCodexShellBridgeToolName);
   const hasBareExec = shellBridgeNames.length > 0;
@@ -420,6 +440,16 @@ export function buildCursorToolGuidanceSystemNote(
   const notes = [
     `Cursor tool calls: available tool names are exactly ${listedNames}.`,
     "Use the current tool catalog as ground truth and call only those exact names with their listed argument keys.",
+    "Cursor-native `GenerateImage` is not a client image tool and is unsupported by this bridge. Do not use it, retry it with workspace paths, or substitute shell commands or SDK scripts for the client's image tools.",
+    imageNames.length > 0
+      ? `For image generation or editing, call ${quotedNames(imageNames)} with the advertised schema. This executes in the Codex client; Cursor's workspace is not needed.`
+      : undefined,
+    viewNames.length > 0
+      ? `For local image inspection, call ${quotedNames(viewNames)} with the advertised schema.`
+      : undefined,
+    executorNames.length > 0
+      ? `${quotedNames(executorNames)} is the client JavaScript tool executor. Pass JavaScript as the JSON \`input\` string required by its bridge schema. It can invoke nested tools only when the client instructions list them; follow those instructions for exact tools.* names, result display, and waiting. A nested tool need not appear as a separate Cursor tool. The executor is not a shell or an SDK script; do not replace it with either. Its presence alone does not establish that image generation is available.`
+      : undefined,
     unavailableNeighborNames.length > 0
       ? `This turn does not expose neighboring-agent tool names ${quotedNames(unavailableNeighborNames)}; do not call or suggest them unless the catalog lists them.`
       : undefined,

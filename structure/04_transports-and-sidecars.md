@@ -613,7 +613,7 @@ sidecar authority exists. Both have two possible backends, but they select diffe
 | Sidecar | Backend selection | Default model | Activation |
 | --- | --- | --- | --- |
 | `web-search/` | Explicit configuration only: unset always resolves to the OpenAI forward path. Anthropic is never auto-selected from credential availability — doing so once sent OpenAI model ids to the Anthropic API. | `gpt-5.6-luna` (OpenAI), `claude-sonnet-5` (Anthropic) | Hosted `web_search` requested by a non-passthrough routed model. |
-| `vision/` | Explicit configuration wins for both backends. Only an unset backend auto-selects: Anthropic when a usable Anthropic OAuth provider exists, otherwise the OpenAI forward authority. An explicitly selected backend whose authority is unavailable produces no plan rather than falling back. | `claude-sonnet-5` (Anthropic), `gpt-5.4-mini` (OpenAI) | Input contains images for a model listed in `noVisionModels`. |
+| `vision/` | Explicit configuration wins for both backends. Only an unset backend auto-selects: Anthropic when a usable Anthropic OAuth provider exists, otherwise the OpenAI forward authority. An explicitly selected backend whose authority is unavailable produces no plan rather than falling back. | `claude-sonnet-5` (Anthropic), `gpt-5.6-luna` (OpenAI) | Input contains images for a model listed in `noVisionModels`. |
 
 The asymmetry is in the unset case only: vision may describe an image with whichever model can see
 it, while a hosted search tool is tied to a provider-specific tool contract, so search never infers
