@@ -19,6 +19,7 @@ import {
   cursorToolWireName,
   cursorToolsForActivePrompt,
   isBareCodexShellBridgeTool,
+  isCursorClientImageRouteTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
 
@@ -41,14 +42,15 @@ function toolPriority(tool: CodexCommanderTool, selectedNames: ReadonlySet<strin
   // selected filler cannot starve the Codex execution path during truncation (#399).
   if (isBareCodexShellBridgeTool(tool)) return 0;
   if (!tool.namespace && tool.name === "apply_patch") return 1;
-  if (cursorToolChoiceAliases(tool).some(name => selectedNames.has(name))) return 2;
-  if (tool.loadedFromToolSearch) return 3;
-  if (!tool.namespace) return 4;
-  return 5;
+  if (isCursorClientImageRouteTool(tool)) return 2;
+  if (cursorToolChoiceAliases(tool).some(name => selectedNames.has(name))) return 3;
+  if (tool.loadedFromToolSearch) return 4;
+  if (!tool.namespace) return 5;
+  return 6;
 }
 
 function isPinnedCursorTool(tool: CodexCommanderTool, selectedNames: ReadonlySet<string>): boolean {
-  return toolPriority(tool, selectedNames) <= 2;
+  return toolPriority(tool, selectedNames) <= 3;
 }
 
 /**
@@ -87,7 +89,7 @@ export function applyCursorToolBudget(
     return true;
   };
 
-  // Phase 1: selected tools + shell bridge + apply_patch (priority <= 2).
+  // Phase 1: shell bridge, apply_patch, client image/code tools, and selected tools.
   // Pins are admitted before filler so a crowded catalog cannot drop the Codex execution path (#399).
   for (const candidate of candidates) {
     if (!isPinnedCursorTool(candidate.tool, selectedNames)) continue;
