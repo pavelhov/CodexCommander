@@ -14,7 +14,7 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 export { describeImage } from "./describe";
 export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-describe";
 
-const DEFAULT_VISION_MODEL = "gpt-5.4-mini";
+const DEFAULT_VISION_MODEL = "gpt-5.6-luna";
 const DEFAULT_ANTHROPIC_VISION_MODEL = "claude-sonnet-5";
 const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;

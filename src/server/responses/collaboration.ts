@@ -120,8 +120,9 @@ export function buildToolBridgeMaps(parsed: CodexCommanderParsedRequest, budget?
       toolNsMap.set(wireName, { namespace: t.namespace, name: t.name });
     }
     if (t.freeform) {
-      budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });
-      freeformToolNames.add(t.name);
+      const wireName = namespacedToolName(t.namespace, t.name);
+      budget?.chargeRetained(new TextEncoder().encode(wireName).byteLength, { kind: "retained_collectors" });
+      freeformToolNames.add(wireName);
     }
     if (t.toolSearch) {
       budget?.chargeRetained(new TextEncoder().encode(t.name).byteLength, { kind: "retained_collectors" });

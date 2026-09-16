@@ -150,28 +150,34 @@ function buildTools(tools: unknown[] | undefined): CodexCommanderTool[] | undefi
     if (namespace) tool.namespace = namespace;
     out.push(tool);
   };
+  const pushCustom = (t: Record<string, unknown>, namespace?: string) => {
+    // Freeform custom tool (e.g. apply_patch). Chat models can't emit a lark grammar, so expose a
+    // function with a single string `input` carrying the raw tool body; the bridge relays the model's
+    // call back as a custom_tool_call (Codex's freeform handler rejects a function_call → fatal abort).
+    out.push({
+      name: t.name as string,
+      description: (t.description as string) ?? "",
+      parameters: { type: "object", properties: { input: { type: "string", description: "Raw tool input. For apply_patch, begin exactly with `*** Begin Patch` (no trailing `***`), then use its standard patch envelope." } }, required: ["input"] },
+      freeform: true,
+      ...(namespace ? { namespace } : {}),
+    });
+  };
   for (const t of tools) {
     if (!isObj(t)) continue;
     if (t.type === "function" && typeof t.name === "string") {
       pushFn(t);
     } else if (t.type === "namespace" && Array.isArray(t.tools)) {
-      // MCP tools arrive grouped under a namespace tool; flatten the inner function tools so
+      // MCP tools arrive grouped under a namespace tool; flatten the inner tools so
       // chat-completions models receive them (round-trip restores the namespace in the bridge).
       const ns = typeof t.name === "string" ? t.name : undefined;
       for (const inner of t.tools as unknown[]) {
-        if (isObj(inner) && inner.type === "function" && typeof inner.name === "string") pushFn(inner, ns);
+        if (!isObj(inner) || typeof inner.name !== "string") continue;
+        if (inner.type === "function") pushFn(inner, ns);
+        else if (inner.type === "custom") pushCustom(inner, ns);
       }
     }
     else if (t.type === "custom" && typeof t.name === "string") {
-      // Freeform custom tool (e.g. apply_patch). Chat models can't emit a lark grammar, so expose a
-      // function with a single string `input` carrying the raw tool body; the bridge relays the model's
-      // call back as a custom_tool_call (Codex's freeform handler rejects a function_call → fatal abort).
-      out.push({
-        name: t.name,
-        description: (t.description as string) ?? "",
-        parameters: { type: "object", properties: { input: { type: "string", description: "Raw tool input. For apply_patch, begin exactly with `*** Begin Patch` (no trailing `***`), then use its standard patch envelope." } }, required: ["input"] },
-        freeform: true,
-      });
+      pushCustom(t);
     }
     else if (t.type === "tool_search") {
       // Client-executed tool discovery — the gateway to deferred tools (subagents, extra MCP tools).
@@ -507,11 +513,12 @@ export function parseRequest(body: unknown): CodexCommanderParsedRequest {
       }
 
       if (effectiveType === "custom_tool_call") {
-        const call = item as { id?: string; call_id: string; name: string; input: string };
+        const call = item as { id?: string; call_id: string; name: string; input: string; namespace?: string };
         const toolCall: CodexCommanderToolCall = {
           type: "toolCall", id: call.call_id, name: call.name,
           arguments: { input: call.input ?? "" },
           customWireName: call.name,
+          ...(call.namespace ? { namespace: call.namespace } : {}),
         };
         assistantHolderWithReasoning().content.push(toolCall);
         continue;

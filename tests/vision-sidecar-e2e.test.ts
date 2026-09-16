@@ -157,6 +157,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
 
       // Activation evidence: the sidecar actually ran, got the image + OAuth passthrough.
       expect(sidecarHits).toBe(1);
+      expect(JSON.parse(sidecarBody).model).toBe("gpt-5.6-luna");
       expect(sidecarAuth).toBe(`Bearer ${token}`);
       expect(sidecarAccount).toBe("acct-vision-sidecar");
       expect(sidecarBody).toContain("input_image");
