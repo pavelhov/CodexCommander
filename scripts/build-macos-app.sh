@@ -287,7 +287,9 @@ for payload in "$framework/Versions/B/Sparkle" "$framework/Versions/B/Autoupdate
   "$framework/Versions/B/Updater.app/Contents/MacOS/Updater" \
   "$framework/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader" \
   "$framework/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"; do
-  lipo "$payload" -verify_arch arm64 x86_64
+  # Xcode 27+/macOS 26 lipo accepts only one arch per -verify_arch invocation.
+  lipo "$payload" -verify_arch arm64
+  lipo "$payload" -verify_arch x86_64
 done
 if [[ -n "${MACOS_PREVIOUS_BUILD_NUMBER:-}" ]]; then
   # Verify the release ordering with the actual pinned updater comparator as well
