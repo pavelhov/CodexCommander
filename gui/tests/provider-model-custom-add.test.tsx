@@ -263,7 +263,7 @@ test("quick-add waits for custom-model duplicate knowledge", async () => {
 
   expect(addButton.disabled).toBe(true);
   await act(async () => {
-    resolveLookup(Response.json([{ provider: "AiCodeWith", modelId: "already-custom" }]));
+    resolveLookup(Response.json([{ id: "custom-dup", provider: "AiCodeWith", modelId: "already-custom" }]));
     await lookup;
     await Promise.resolve();
   });
@@ -287,6 +287,97 @@ test("quick-add stays blocked when custom-model lookup fails", async () => {
 
   expect(addButton.disabled).toBe(true);
   expect(posts).toBe(0);
+
+  await act(async () => { root.unmount(); });
+});
+
+
+test("custom model chips expose a delete control that removes only that entry", async () => {
+  const requests: Array<{ url: string; method: string }> = [];
+  globalThis.fetch = (async (input, init) => {
+    const method = init?.method ?? "GET";
+    const url = String(input);
+    if (method === "GET") {
+      return Response.json([
+        { id: "custom-keep", provider: "AiCodeWith", modelId: "keep-custom" },
+        { id: "custom-remove", provider: "AiCodeWith", modelId: "remove-custom" },
+      ]);
+    }
+    requests.push({ url, method });
+    if (method === "DELETE" && url.endsWith("/api/custom-models/custom-remove")) {
+      return Response.json({ ok: true });
+    }
+    return Response.json({ error: "unexpected" }, { status: 500 });
+  }) as typeof fetch;
+
+  let refreshes = 0;
+  const emptyItem = { ...item, models: [], defaultModel: undefined } as WorkspaceItem;
+  const { root, container } = await mountProviderModels([], () => { refreshes += 1; }, emptyItem);
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const modelIdsBefore = [...container.querySelectorAll(".pws-model-id")].map(node => node.textContent);
+  expect(modelIdsBefore).toEqual(["keep-custom", "remove-custom"]);
+
+  const removeButton = container.querySelector('button[aria-label="Delete"]') as HTMLButtonElement | null;
+  // Both custom chips have a Delete control; click the one on remove-custom.
+  const removeChip = [...container.querySelectorAll(".pws-model-chip")]
+    .find(chip => chip.querySelector(".pws-model-id")?.textContent === "remove-custom")!;
+  const chipDelete = removeChip.querySelector('button[aria-label="Delete"]') as HTMLButtonElement;
+  expect(chipDelete).toBeDefined();
+  expect(removeButton).toBeDefined();
+
+  const previousConfirm = testWindow.confirm;
+  testWindow.confirm = (() => true) as typeof testWindow.confirm;
+  try {
+    await act(async () => {
+      chipDelete.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  } finally {
+    testWindow.confirm = previousConfirm;
+  }
+
+  expect(requests).toEqual([{
+    url: "http://localhost:10100/api/custom-models/custom-remove",
+    method: "DELETE",
+  }]);
+  expect(refreshes).toBe(1);
+  const modelIdsAfter = [...container.querySelectorAll(".pws-model-id")].map(node => node.textContent);
+  expect(modelIdsAfter).toEqual(["keep-custom"]);
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Custom model deleted");
+
+  await act(async () => { root.unmount(); });
+});
+
+test("custom model delete stays put when confirmation is cancelled", async () => {
+  let deletes = 0;
+  globalThis.fetch = (async (_input, init) => {
+    if (!init?.method || init.method === "GET") {
+      return Response.json([{ id: "custom-1", provider: "AiCodeWith", modelId: "accidental-custom" }]);
+    }
+    deletes += 1;
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+
+  const emptyItem = { ...item, models: [], defaultModel: undefined } as WorkspaceItem;
+  const { root, container } = await mountProviderModels([], undefined, emptyItem);
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+  const chipDelete = container.querySelector('button[aria-label="Delete"]') as HTMLButtonElement;
+  const previousConfirm = testWindow.confirm;
+  testWindow.confirm = (() => false) as typeof testWindow.confirm;
+  try {
+    await act(async () => {
+      chipDelete.click();
+      await Promise.resolve();
+    });
+  } finally {
+    testWindow.confirm = previousConfirm;
+  }
+
+  expect(deletes).toBe(0);
+  expect(container.querySelector(".pws-model-id")?.textContent).toBe("accidental-custom");
 
   await act(async () => { root.unmount(); });
 });

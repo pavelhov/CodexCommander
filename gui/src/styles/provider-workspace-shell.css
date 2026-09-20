@@ -988,6 +988,18 @@
   flex-shrink: 0;
 }
 
+.pws-model-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+
+.pws-model-remove:hover,
+.pws-model-remove:focus-visible {
+  color: var(--red);
+}
+
 .pws-inline-error {
   display: flex;
   align-items: center;
