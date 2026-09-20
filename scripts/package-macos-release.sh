@@ -213,8 +213,11 @@ ditto -x -k "$staged_archive" "$verification_root"
 verified_app="$verification_root/CodexCommander.app"
 bun "$script_dir/macos-update-packaging.ts" framework "$verified_app/Contents/Frameworks/Sparkle.framework"
 codesign --verify --deep --strict "$verified_app"
-lipo "$verified_app/Contents/MacOS/CodexCommanderMenuBar" -verify_arch arm64 x86_64
-lipo "$verified_app/Contents/Resources/runtime/node_modules/bun/bin/bun.exe" -verify_arch arm64 x86_64
+# Xcode 27+/macOS 26 lipo accepts only one arch per -verify_arch invocation.
+lipo "$verified_app/Contents/MacOS/CodexCommanderMenuBar" -verify_arch arm64
+lipo "$verified_app/Contents/MacOS/CodexCommanderMenuBar" -verify_arch x86_64
+lipo "$verified_app/Contents/Resources/runtime/node_modules/bun/bin/bun.exe" -verify_arch arm64
+lipo "$verified_app/Contents/Resources/runtime/node_modules/bun/bin/bun.exe" -verify_arch x86_64
 
 (
   cd "$release_stage"
