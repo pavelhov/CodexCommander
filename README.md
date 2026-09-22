@@ -128,6 +128,24 @@ UNIVERSAL=1 bun run package:macos
 
 `package:macos` requires a clean git working tree so a release archive cannot include uncommitted files. Use `bun run build:macos` for a local development build from a dirty checkout.
 
+#### Back up the macOS updater signing key
+
+Maintainers must keep the **existing** Sparkle Ed25519 private key: losing it prevents signing updates
+for installations that trust its public key. The release scripts read the mode-`0600` file named by
+`SPARKLE_PRIVATE_KEY_FILE`; keep that working file outside the repository and release assets.
+
+For a simple recovery copy, use Finder to **copy** that file into a dedicated iCloud Drive folder such
+as `iCloud Drive/CodexCommander Signing Backup/private-key`. Do not move the working file. Wait for
+Finder to finish uploading, then confirm the copy appears on another trusted device before relying
+on it. This is an ordinary synced file, so its cloud protection depends on your iCloud settings;
+local mode `0600` does not by itself encrypt the cloud copy. Keep the backup out of the repository,
+GitHub, and release assets.
+
+On a replacement Mac, copy the backed-up file into a private local path outside the repository,
+restrict it to mode `0600`, and set `SPARKLE_PRIVATE_KEY_FILE` to that path. Verify that it derives
+the public key already embedded in released apps before signing anything. Do not generate a
+replacement key. An additional offline backup helps if you lose access to your Apple Account.
+
 Every built app launches only the Bun runtime and server resources embedded in its own
 `Contents/Resources/runtime`; it never executes checkout `src/` or an ambient `ccx`. Rebuild the app
 to pick up source changes. If startup fails, the menu app stays open so its diagnostics and **Start**
