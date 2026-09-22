@@ -205,11 +205,9 @@ package enum LifecycleActionAvailability {
         state: ProxyState?,
         controlsAllowed: Bool
     ) -> Bool {
-        guard controlsAllowed, let state else { return false }
-        switch state {
-        case .running, .unauthorized, .degraded, .unreachable: return true
-        case .loading: return false
-        }
+        // A missing or loading snapshot must not trap the user in the menu app.
+        // The stop helper still decides whether a proxy is safely stopped.
+        controlsAllowed
     }
 }
 
@@ -275,8 +273,8 @@ package enum ApplicationMenuFactory {
     }
 }
 
-/// The companion exits only after the lifecycle helper proves the proxy is stopped.
-/// A failed or ambiguous stop leaves the UI alive so the user can see and recover.
+/// Normal exit requires a verified stop. A failed or ambiguous stop needs a
+/// separate, explicit app-only quit choice so the result is never misreported.
 package enum StopAndQuitPolicy {
     package static func shouldTerminate(after outcome: ProxyControlOutcome) -> Bool {
         switch outcome {
