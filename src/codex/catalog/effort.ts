@@ -33,6 +33,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { readCatalog, readCodexCatalogPath } from "./parsing";
 import type { CatalogModel, RawEntry } from "./parsing";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
+import { peekNativeLiveCatalog } from "./native-live";
 import { loadBundledCodexCatalog } from "./bundled";
 import type { BundledCatalogDeps } from "./bundled";
 import { deriveEntry } from "./sync";
@@ -48,7 +49,8 @@ import {
 export function nativeEffortClamp(slug: string, effort: string | undefined): string | null {
   if (!effort || (effort !== "max" && effort !== "ultra")) return null;
   if (slug.includes("/")) return null; // routed models map efforts in their adapters
-  const entry = UPSTREAM_NATIVE_ENTRIES.get(slug);
+  const entry = peekNativeLiveCatalog().catalog?.models?.find(row => row.slug === slug)
+    ?? UPSTREAM_NATIVE_ENTRIES.get(slug);
   const levels = Array.isArray(entry?.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
     : [];

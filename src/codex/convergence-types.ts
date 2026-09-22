@@ -292,6 +292,7 @@ export type CatalogConditionalSourceRole =
   | "models-cache-fallback"
   | "retained-routed-fallback"
   | "native-catalog-selection"
+  | "native-live-snapshot"
   | "runtime-selection"
   | "provider-auth-selection";
 

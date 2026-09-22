@@ -74,6 +74,7 @@ import {
   shouldIncludeNativeOpenAi,
 } from "./catalog/metadata";
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./catalog/account-models";
+import { nativeLiveCatalogSnapshotPath, peekNativeLiveCatalog } from "./catalog/native-live";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { isMultiAgentV2Enabled } from "./features";
 import {
@@ -178,6 +179,7 @@ interface CandidateState {
   readonly authority: CatalogGatherAuthorityIdentity;
   readonly sourceEvidence: CatalogSourceEvidence;
   readonly processLocal: CatalogProcessLocalEvidence;
+  readonly nativeLiveIdentity: string | null;
   readonly home: string;
   readonly targets: CatalogAdmissionSnapshot["targets"];
   readonly catalog: PreparedCatalogFileWrite;
@@ -214,6 +216,22 @@ function targetPath(identity: string): string {
 
 function catalogFrom(bytes: Uint8Array | null): RawCatalog | null {
   return bytes === null ? null : parseCatalogJson(Buffer.from(bytes).toString("utf8"));
+}
+
+function nativeLiveCatalogFrom(
+  bytes: Uint8Array | null,
+  current: ReturnType<typeof peekNativeLiveCatalog>,
+): RawCatalog | null {
+  if (bytes === null || current.identity === null || current.catalog === null) return null;
+  try {
+    const envelope = JSON.parse(Buffer.from(bytes).toString("utf8")) as Record<string, unknown>;
+    if (envelope.version !== 1 || envelope.identity !== current.identity
+      || envelope.fetchedAt !== current.fetchedAt) return null;
+    const observed = parseCatalogJson(JSON.stringify(envelope.catalog));
+    return observed && same(observed, current.catalog) ? observed : null;
+  } catch {
+    return null;
+  }
 }
 
 function catalogBytes(catalog: RawCatalog): string {
@@ -374,6 +392,7 @@ function bindGatherPaths(
   acceptCatalogGatherSourcePath(session, "hashed-backup-fallback", keyedBackup);
   acceptCatalogGatherSourcePath(session, "models-cache-fallback", cache);
   acceptCatalogGatherSourcePath(session, "retained-routed-fallback", retained);
+  acceptCatalogGatherSourcePath(session, "native-live-snapshot", nativeLiveCatalogSnapshotPath());
   acceptCatalogGatherSourcePath(session, "runtime-selection", codexRuntimeStatePath(getConfigDir()));
   acceptCatalogGatherSourcePath(session, "provider-auth-selection", getAuthStorePath());
   acceptCatalogGatherSourcePath(session, "native-catalog-selection", catalog);
@@ -386,6 +405,7 @@ function prepareCatalog(
   active: RawCatalog | null,
   routedModels: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>,
   retainedCatalog: RawCatalog | null,
+  liveNativeCatalog: RawCatalog | null,
   nativeRecoverySources: readonly (readonly RawEntry[])[] = [],
 ): {
   catalog: RawCatalog;
@@ -397,6 +417,7 @@ function prepareCatalog(
 } {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
+  const nativeSourceEntries = [...(liveNativeCatalog?.models ?? []), ...(source.catalog.models ?? [])];
   const enabled = filterCatalogVisibleModels(routedModels, config);
   const featured = subagentRosterModels(config.subagentModels);
   const ordered = orderForSubagents(enabled, featured);
@@ -414,12 +435,12 @@ function prepareCatalog(
   const disabledNative = disabledNativeSlugs(config);
   const catalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
-    [catalog.models ?? [], ...nativeRecoverySources],
+    [nativeSourceEntries, ...nativeRecoverySources],
   );
   const routedEntries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
     [], ordered, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
-    accountSelectors, suppressedBareNativeSlugs, new Set(), source.catalog.models ?? [],
+    accountSelectors, suppressedBareNativeSlugs, new Set(), nativeSourceEntries,
   );
   const accountBoundEntries = accountSelectors.length === 0
     ? []
@@ -434,9 +455,9 @@ function prepareCatalog(
       accountSelectors,
       suppressedBareNativeSlugs,
       new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
-      source.catalog.models ?? [],
+      nativeSourceEntries,
     ).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
-  const baseline = new Map<string, number>((catalog.models ?? []).flatMap(entry => (
+  const baseline = new Map<string, number>(nativeSourceEntries.flatMap(entry => (
     typeof entry.slug === "string" && typeof entry.priority === "number"
       ? [[entry.slug, entry.priority] as const]
       : []
@@ -467,11 +488,11 @@ function prepareCatalog(
     accountBoundEntries,
     nativeOpenAiSlugs(),
     suppressedBareNativeSlugs,
-    source.catalog.models ?? [],
+    nativeSourceEntries,
   );
   clampCatalogModelsToSupportedEfforts(
     catalog.models,
-    catalogSupportedReasoningEfforts(source.catalog),
+    catalogSupportedReasoningEfforts({ models: nativeSourceEntries }),
   );
   const ccxAuthoredRouted = catalog.models.filter(isCodexCommanderAuthoredRoutedEntry);
   const retainedSlugs = new Set(retainedMerge.retainedRows.flatMap(entry => (
@@ -524,6 +545,9 @@ export async function gatherCodexCatalogCandidate(
     const cacheBytes = readCatalogGatherSource(session, "models-cache-fallback");
     const keyedBackupBytes = readCatalogGatherSource(session, "hashed-backup-fallback");
     const retainedBytes = readCatalogGatherSource(session, "retained-routed-fallback");
+    const nativeLiveBytes = readCatalogGatherSource(session, "native-live-snapshot");
+    const nativeLiveStatus = peekNativeLiveCatalog();
+    const nativeLiveCatalog = nativeLiveCatalogFrom(nativeLiveBytes, nativeLiveStatus);
     if (Object.keys(snapshot.config.combos ?? {}).length > 0) {
       readCatalogGatherSource(session, "native-catalog-selection");
     }
@@ -588,7 +612,7 @@ export async function gatherCodexCatalogCandidate(
     }
 
     const active = catalogFrom(activeBytes);
-    const prepared = prepareCatalog(snapshot.config, source, active, routedModels, catalogFrom(retainedBytes), [
+    const prepared = prepareCatalog(snapshot.config, source, active, routedModels, catalogFrom(retainedBytes), nativeLiveCatalog, [
       catalogFrom(keyedBackupBytes)?.models ?? [],
       catalogFrom(cacheBytes)?.models ?? [],
     ]);
@@ -632,6 +656,7 @@ export async function gatherCodexCatalogCandidate(
       ),
       sourceEvidence,
       processLocal,
+      nativeLiveIdentity: nativeLiveStatus.identity,
       home: home.canonicalCodexHome,
       targets: snapshot.targets,
       catalog: { path: paths.catalog, content: preparedCatalogBytes },
@@ -666,6 +691,9 @@ export async function gatherCodexCatalogCandidate(
 }
 
 function revalidateCandidate(state: CandidateState): CodexCatalogCommitResult | null {
+  if (peekNativeLiveCatalog().identity !== state.nativeLiveIdentity) {
+    return { kind: "stale", reason: "source-observation" };
+  }
   if (state.requiresManagedRouting
     && !nonDisruptiveCodexManagementWritePolicy(state.config).allowed) {
     return { kind: "refused", reason: "source-ambiguous" };

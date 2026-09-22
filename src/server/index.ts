@@ -21,6 +21,7 @@ import {
   websocketsEnabled,
 } from "../config";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
+import { peekNativeLiveCatalog } from "../codex/catalog/native-live";
 import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
 import { startMemoryWatchdog } from "./memory-watchdog";
@@ -922,7 +923,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const catalogNativeSlugs = accountSelectors.length > 0
             ? nativeOpenAiSlugs()
             : nativeSlugs;
-          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs, new Set(), loadBundledCodexCatalog()?.models ?? []);
+          const nativeSourceEntries = [
+            ...(peekNativeLiveCatalog().catalog?.models ?? []),
+            ...(loadBundledCodexCatalog()?.models ?? []),
+          ];
+          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs, new Set(), nativeSourceEntries);
           return jsonResponse({
             models: applyNativeVisibility(
               entries,
