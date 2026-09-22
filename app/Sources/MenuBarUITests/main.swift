@@ -1409,7 +1409,11 @@ runner.test("ui: destructive menu availability follows proxy and in-flight state
     )
     runner.equal(
         LifecycleActionAvailability.canStopAndQuit(state: .loading, controlsAllowed: true),
-        false
+        true
+    )
+    runner.equal(
+        LifecycleActionAvailability.canStopAndQuit(state: nil, controlsAllowed: true),
+        true
     )
     runner.equal(
         LifecycleActionAvailability.canStopAndQuit(
@@ -1467,7 +1471,7 @@ runner.test("ui: catalog apply requires readiness and a confirmed running proxy"
 }
 
 MainActor.assumeIsolated {
-runner.test("ui: app menu starts with its single exit disabled until initial state arrives") {
+runner.test("ui: app menu keeps its single exit available before initial state arrives") {
     let delegate = AppDelegate()
     let menu = ApplicationMenuFactory.make(
         target: delegate,
@@ -1476,8 +1480,8 @@ runner.test("ui: app menu starts with its single exit disabled until initial sta
     let appMenu = menu.items[0].submenu
     appMenu?.update()
     let items = appMenu?.items.filter { !$0.isSeparatorItem } ?? []
-    runner.equal(delegate.validateMenuItem(items[0]), false, "no confirmed live proxy")
-    runner.equal(items[0].isEnabled, false, "AppKit applies destructive validation")
+    runner.equal(delegate.validateMenuItem(items[0]), true, "loading never traps the app")
+    runner.equal(items[0].isEnabled, true, "AppKit keeps the exit action available")
     runner.equal(items.count, 1, "single exit action")
 }
 
@@ -1493,6 +1497,30 @@ runner.test("ui: stop-and-quit exits only after a confirmed stopped outcome") {
         StopAndQuitPolicy.shouldTerminate(after: .failed("still running")),
         false
     )
+}
+
+runner.test("ui: failed stop offers an explicit app-only exit") {
+    for quitAnyway in [false, true] {
+        let lifecycle = RecordingLifecycleRunner(resultState: .running)
+        var offeredExit = false
+        var terminated = false
+        let delegate = AppDelegate(
+            appBundleLocation: .stable,
+            actions: ActionCoordinator(lifecycle: lifecycle),
+            lifecycleConfirmation: { _ in true },
+            quitAfterFailedStopConfirmation: {
+                offeredExit = true
+                return quitAnyway
+            },
+            terminateApplication: { terminated = true }
+        )
+        runner.equal(delegate.applicationShouldTerminate(app), .terminateCancel)
+        let deadline = Date().addingTimeInterval(2)
+        while !offeredExit && Date() < deadline { spinMainRunLoop(seconds: 0.01) }
+        runner.equal(lifecycle.recordedActions, [.stop])
+        runner.equal(offeredExit, true)
+        runner.equal(terminated, quitAnyway)
+    }
 }
 
 runner.test("ui: translocated automatic launch shows move guidance without starting lifecycle") {

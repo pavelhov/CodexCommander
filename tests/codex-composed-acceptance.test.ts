@@ -125,6 +125,8 @@ class Fixture {
       // `/api/*` is the management plane, distinct from the data-plane token.
       // A fixed fixture value avoids reading the generated credential file.
       CODEXCOMMANDER_ADMIN_AUTH_TOKEN: this.managementToken,
+      // CLI lifecycle tests must not open a real menu bar app outside the fixture.
+      CCX_DISABLE_COMPANION: "1",
       NO_PROXY: "127.0.0.1,localhost",
       ...this.serviceManagerEnv,
     };

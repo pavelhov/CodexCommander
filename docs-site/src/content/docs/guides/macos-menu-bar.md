@@ -112,6 +112,10 @@ therefore list CodexCommander under both **Open at Login** and **Allow in the Ba
 responsibilities of one installation, not duplicate app copies. Turning off Launch at Login never
 installs, removes, starts, or stops the background service.
 
+The quit action remains available while status is loading. If the stop cannot be verified, the app
+shows the error and offers **Quit App Anyway**. That choice closes only the menu bar app; the proxy or
+background service may still be running.
+
 App-managed startup and the background service solve different problems. The app starts or attaches
 to the proxy at sign-in and routes managed Codex through it when Codex configuration exists, which is
 enough for normal desktop use. On a fresh missing-Codex start, the proxy remains running while Codex
@@ -169,8 +173,8 @@ override it.
   restarting it.
 - **Stop CodexCommander and Quit…** — confirms the interruption, first restores native Codex routing,
   then stops the background proxy and service and quits only after the stopped state is confirmed. If
-  stopping fails, the companion stays open and reports the error. With the panel active, its shortcut
-  is `⌘Q`.
+  stopping fails, the companion reports the error and offers an explicit app-only exit. With the panel
+  active, its shortcut is `⌘Q`.
 
 When the companion finds an older bundled CodexCommander runtime that can no longer read the current
 configuration, automatic ensure, **Start Proxy**, **Restart Proxy**, and **Route Codex Through Proxy**
