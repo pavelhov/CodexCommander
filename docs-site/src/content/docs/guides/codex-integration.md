@@ -238,9 +238,9 @@ refresh re-derives routed entries from `config.json` (including `customModels`),
 name is reapplied instead of drifting back to the routed slug. A managed service restart also attempts
 this sync shortly after the proxy binds. If that best-effort boot sync fails, for example during an
 offline login, the previously persisted catalog is retained and the next successful `ccx sync`
-reapplies the configured name. Genuine upstream native names (e.g. `gpt-5.6-sol` →
-"GPT-5.6-Sol") come from the pinned upstream snapshot and are never overridden by a custom display
-name.
+reapplies the configured name. Genuine native names (e.g. `gpt-5.6-sol` →
+"GPT-5.6-Sol") come from Codex's account catalog when available, with bundled and pinned fallback
+metadata, and are never overridden by a custom display name.
 
 ### External provider managers
 

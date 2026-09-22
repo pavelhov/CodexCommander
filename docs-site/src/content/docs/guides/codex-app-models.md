@@ -134,16 +134,33 @@ The clone keeps strict-parser fields such as reasoning levels, shell type, API s
 base instructions. CodexCommander then removes native-only capabilities that the route cannot honor,
 including OpenAI service-tier metadata.
 
+## Native model discovery and fallback
+
+On catalog sync, CodexCommander requests the native model list for the current Codex login directly
+from Codex's account service. It uses the selected Codex runtime version and keeps the returned
+model metadata, so a newly available native model can appear without a CodexCommander release or a
+hardcoded model entry. The shared catalog combines those native entries with Commander’s routed
+`provider/model` entries. The Models page and subagent roster use this same catalog.
+
+A successful response is saved as a last-good native snapshot for that Codex account, Codex home,
+and runtime. If the service is temporarily unavailable, a matching snapshot can preserve the last
+observed native list; its fetch time is the freshness indicator, not proof of current account
+entitlement. If there is no matching snapshot, CodexCommander falls back to the installed Codex
+bundled catalog and its pinned compatibility metadata. Switching accounts or runtimes does not reuse
+another identity's snapshot. Model availability remains subject to the selected account and Codex's
+own eligibility rules.
+
 ## Current stable model coverage
 
 The native fallback set includes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
 `gpt-5.3-codex-spark`, and GPT-5.6 Sol/Terra/Luna. Matching installed Codex catalog entries are
-authoritative for every native model. The pinned upstream snapshot supplies fallback metadata
-when an installed entry is unavailable; template synthesis is the final fallback.
+used when live account data and a matching last-good snapshot are unavailable. The pinned upstream
+snapshot supplies fallback metadata when an installed entry is unavailable; template synthesis is
+the final fallback. This static set is a safety net, not the limit on discoverable native models.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| Codex login (no eligible account selectors) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. Native context, maximum context, and compaction fields follow the installed client catalog. |
+| Codex login (no eligible account selectors) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. Native context, maximum context, and compaction fields follow the live account catalog when available, with the fallback order described above. |
 | Codex login (eligible account selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
 | OpenAI (API key) | Exactly eight namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three `*-pro` virtual ids (1,050,000 context; 922,000 max input for all eight) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
@@ -233,11 +250,17 @@ limit native `spawn_agent` to those five IDs.
 
 ## Refreshing model state
 
-If the picker still shows stale entries, refresh the catalog and restart the target Codex surface:
+If the picker still shows stale entries, refresh the catalog:
 
 ```bash
 ccx sync
 ```
+
+The dashboard's catalog refresh performs the same discovery. A running Codex app-server keeps the
+catalog it loaded at startup. After a sync changes the on-disk catalog, quit ChatGPT completely,
+reopen it, and start a new task to load the new model list. The dashboard indicates when that
+restart is pending and provides restart steps. A new task in an already-running worker does not
+reload the catalog.
 
 CodexCommander rewrites `models_cache.json` with a deliberately stale cache wrapper whenever catalog
 visibility, priority, or metadata changes, so the next Codex model refresh reads the new catalog.

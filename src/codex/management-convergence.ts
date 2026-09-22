@@ -5,6 +5,7 @@ import {
 } from "./catalog-admission";
 import { convergeCodexCatalog } from "./convergence";
 import { primeBundledCatalogForGatherIfNeeded } from "./catalog/bundled";
+import { refreshNativeLiveCatalog } from "./catalog/native-live";
 import { codexCatalogWritePolicy } from "./management-write-policy";
 import type {
   CatalogDisposition,
@@ -101,6 +102,7 @@ export function createManagementConvergeCodex(
       // this preflight and capture the admitted snapshot again afterwards.
       captureCatalogAdmissionSnapshot(retainedConfig);
       primeBundledCatalogForGatherIfNeeded();
+      await refreshNativeLiveCatalog();
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {
         onCommitBegin: () => { commitBegan = true; },

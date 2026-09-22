@@ -21,6 +21,7 @@ export type CatalogGatherReadableSourceRole =
   | "hashed-backup-fallback"
   | "models-cache-fallback"
   | "retained-routed-fallback"
+  | "native-live-snapshot"
   | "runtime-selection";
 
 /** The minimal observe-only source interface consumed by bundled catalog selection. */
@@ -43,6 +44,7 @@ const CONDITIONAL_SOURCE_ROLES = [
   "models-cache-fallback",
   "retained-routed-fallback",
   "native-catalog-selection",
+  "native-live-snapshot",
   "runtime-selection",
   "provider-auth-selection",
 ] as const satisfies readonly CatalogConditionalSourceRole[];
