@@ -30,6 +30,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private let launchAtLoginController = LaunchAtLoginController()
     private let appBundleLocation: AppBundleLocation
     private let lifecycleConfirmation: ((LifecycleConfirmation) -> Bool)?
+    private let quitAfterFailedStopConfirmation: (() -> Bool)?
     private lazy var executableFingerprint = ExecutableFingerprint.current()
     private lazy var sourceRevision = BuildProvenance.shortRevision(
         Bundle.main.object(forInfoDictionaryKey: "CodexCommanderSourceRevision")
@@ -40,6 +41,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     public override init() {
         appBundleLocation = LaunchAtLoginEligibility.classify(Bundle.main.bundleURL)
         lifecycleConfirmation = nil
+        quitAfterFailedStopConfirmation = nil
         super.init()
     }
 
@@ -47,12 +49,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         appBundleLocation: AppBundleLocation,
         actions: ActionCoordinator?,
         lifecycleConfirmation: ((LifecycleConfirmation) -> Bool)? = nil,
+        quitAfterFailedStopConfirmation: (() -> Bool)? = nil,
         updater: AppUpdater? = nil,
         terminateApplication: (() -> Void)? = nil
     ) {
         self.appBundleLocation = appBundleLocation
         self.actions = actions
         self.lifecycleConfirmation = lifecycleConfirmation
+        self.quitAfterFailedStopConfirmation = quitAfterFailedStopConfirmation
         self.appUpdater = updater
         if let terminateApplication { self.terminateApplication = terminateApplication }
         super.init()
@@ -571,12 +575,29 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         performStop(quitWhenStopped: false)
     }
 
-    /// Explicit destructive exit: stop routing first and terminate the companion only
-    /// after the lifecycle helper confirms that the proxy and service are stopped.
+    /// Explicit destructive exit: stop routing first; if verification fails,
+    /// let the user decide separately whether to close only the menu bar app.
     @objc private func stopCodexCommanderAndQuit(_ sender: Any?) {
         guard !lifecycleInFlight, !restartInFlight, !catalogActionInFlight else { return }
         guard confirm(.stopAndQuit) else { return }
         performStop(quitWhenStopped: true)
+    }
+
+    private func confirmQuitAfterFailedStop() -> Bool {
+        if let quitAfterFailedStopConfirmation { return quitAfterFailedStopConfirmation() }
+        let alert = NSAlert()
+        alert.messageText = "CodexCommander could not confirm it stopped"
+        alert.informativeText = "The proxy or background service may still be running. Quit the menu bar app anyway?"
+        alert.alertStyle = .warning
+        let quit = alert.addButton(withTitle: "Quit App Anyway")
+        let keepOpen = alert.addButton(withTitle: "Keep Open")
+        quit.hasDestructiveAction = true
+        alert.window.defaultButtonCell = keepOpen.cell as? NSButtonCell
+        alert.window.initialFirstResponder = keepOpen
+        panel.isPresentingModal = true
+        NSApp.activate(ignoringOtherApps: true)
+        defer { panel.isPresentingModal = false }
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func performStop(quitWhenStopped: Bool) {
@@ -624,6 +645,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 }
                 self.controller.setLifecycleControlsEnabled(true)
                 self.refreshCatalogApplyAvailability()
+                if quitWhenStopped && self.confirmQuitAfterFailedStop() {
+                    self.normalTerminationAuthorized = true
+                    self.terminateApplication()
+                }
             }
         }
     }
