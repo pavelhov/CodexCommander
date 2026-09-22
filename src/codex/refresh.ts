@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readCodexCatalogPath } from "./catalog";
 import { primeBundledCatalogForGatherIfNeeded } from "./catalog/bundled";
+import { refreshNativeLiveCatalog } from "./catalog/native-live";
 import type { ComboCatalogOmission } from "./catalog/aggregation";
 import type { CatalogQuality } from "./catalog/sync";
 import { withConfigMutationLockSync } from "../config";
@@ -43,7 +44,7 @@ export interface RefreshDeps {
   convergeCodexCatalog: typeof convergeCodexCatalog;
   prepareConfigGeneration: () => void;
   /** Production-only orchestration: resolve/probe before the observe-only gather. */
-  primeCatalogSource?: () => void;
+  primeCatalogSource?: () => void | Promise<void>;
   existsSync: typeof existsSync;
 }
 
@@ -55,7 +56,10 @@ const defaultDeps: RefreshDeps = {
   prepareConfigGeneration: () => { withConfigMutationLockSync(() => undefined); },
   // The canonical gather is deliberately observe-only. Settle the runtime and
   // bundled memo here so a fresh home still has a native template to converge.
-  primeCatalogSource: primeBundledCatalogForGatherIfNeeded,
+  primeCatalogSource: async () => {
+    primeBundledCatalogForGatherIfNeeded();
+    await refreshNativeLiveCatalog();
+  },
   existsSync,
 };
 
@@ -76,7 +80,7 @@ export async function refreshCodexModelCatalog(
       // Reject a stale caller before probing. Priming can add persisted
       // runtime evidence, so this preflight is deliberately discarded.
       deps.captureCatalogAdmissionSnapshot(config);
-      deps.primeCatalogSource();
+      await deps.primeCatalogSource();
     }
     snapshot = deps.captureCatalogAdmissionSnapshot(config);
   } catch (error) {

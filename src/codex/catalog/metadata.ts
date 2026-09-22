@@ -37,6 +37,7 @@ import { bundledCatalogCacheState, peekBundledNativeCatalogEntry, loadBundledCod
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { LEGACY_NATIVE_OPENAI_MODELS } from "./native-models";
+import { peekNativeLiveCatalog } from "./native-live";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export {
   LEGACY_NATIVE_OPENAI_MODELS,
@@ -138,7 +139,8 @@ function hasInjectedNativeCatalogDeps(options: NativeCatalogSelectionOptions): b
 }
 
 function supportedNativeSlugMemoKey(mode: NativeCatalogMode): string {
-  return `${mode}\0${bundledCatalogCacheState().epoch}`;
+  const live = peekNativeLiveCatalog();
+  return `${mode}\0${bundledCatalogCacheState().epoch}\0${live.source}\0${live.identity ?? ""}\0${live.fetchedAt ?? ""}`;
 }
 
 function computeSupportedNativeOpenAiSlugs(
@@ -146,14 +148,25 @@ function computeSupportedNativeOpenAiSlugs(
 ): string[] {
   const mode = resolveNativeCatalogMode(options.nativeCatalogMode);
   const bundled = bundledNativeCatalogSlugs(options, mode);
+  const live = hasInjectedNativeCatalogDeps(options) ? [] : nativeLiveCatalogSlugs(mode);
   if (bundled.length > 0) {
-    return unique([...bundled, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS, ...onDiskBareNativeRecoverySlugs(options)]);
+    return unique([...live, ...bundled, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS, ...onDiskBareNativeRecoverySlugs(options)]);
   }
   const recovered = onDiskBareNativeRecoverySlugs(options);
   if (recovered.length > 0) {
-    return unique([...recovered, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
+    return unique([...live, ...recovered, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
   }
-  return [...LEGACY_NATIVE_OPENAI_MODELS];
+  return unique([...live, ...LEGACY_NATIVE_OPENAI_MODELS]);
+}
+
+function nativeLiveCatalogSlugs(mode: NativeCatalogMode): string[] {
+  const status = peekNativeLiveCatalog();
+  if (status.source === "unavailable") return [];
+  return unique((status.catalog?.models ?? []).flatMap(entry =>
+    isBareBundledNativeCatalogEntry(entry) && matchesNativeCatalogVisibility(entry, mode)
+      ? [entry.slug as string]
+      : [],
+  ));
 }
 
 function shouldMemoizeSupportedNativeSlugs(slugs: readonly string[]): boolean {
@@ -289,7 +302,9 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
 
 /** Source-first capability lookup; the bundled accessor is strictly process-local. */
 function nativeCapabilityEntry(slug: string) {
-  return peekBundledNativeCatalogEntry(slug) ?? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
+  return peekNativeLiveCatalog().catalog?.models?.find(entry => entry.slug === slug)
+    ?? peekBundledNativeCatalogEntry(slug)
+    ?? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
 }
 
 export function nativeOpenAiContextWindow(slug: string): number | undefined {
@@ -453,6 +468,7 @@ export function listCatalogNativeSlugs(
 ): string[] {
   const resolvedMode = resolveNativeCatalogMode(mode);
   const bundled = bundledNativeCatalogSlugs(deps, resolvedMode);
+  const live = hasInjectedNativeCatalogDeps(deps) ? [] : nativeLiveCatalogSlugs(resolvedMode);
   const recovered = onDiskBareNativeRecoverySlugs(deps);
   const models = readCurrentCatalogOrCache(deps)?.models ?? [];
   const accountBound = models.flatMap(entry => {
@@ -466,5 +482,5 @@ export function listCatalogNativeSlugs(
   // visibleNativeSlugs applies the current disabledModels source of truth for public consumers.
   // Ensure documented additions (e.g. gpt-5.3-codex-spark) appear even when the bundled catalog
   // predates the slug — mirrors nativeOpenAiSlugs() which already merges them for /v1/models.
-  return unique([...bundled, ...recovered, ...accountBound, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
+  return unique([...live, ...bundled, ...recovered, ...accountBound, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
 }
