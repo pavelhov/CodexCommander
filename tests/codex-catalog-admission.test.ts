@@ -32,6 +32,7 @@ const CONDITIONAL_SOURCE_ROLES = [
   "hashed-backup-fallback",
   "models-cache-fallback",
   "native-catalog-selection",
+  "native-live-snapshot",
   "provider-auth-selection",
   "retained-routed-fallback",
   "runtime-selection",
