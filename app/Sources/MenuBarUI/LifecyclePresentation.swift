@@ -93,7 +93,7 @@ package enum LifecycleResultMessage {
     ) {
         (
             "\(destination.name) route saved",
-            "Quit ChatGPT completely, reopen it, then start a new task to use this route."
+            "Quit ChatGPT completely, reopen it, then return to your task to use this route."
         )
     }
 

@@ -71,7 +71,8 @@ fully-ready result. The macOS lifecycle waits for startup readiness, retries con
 live management API, and automatically synchronizes the catalog on app launch. A worker roster that
 predates the committed catalog is a nonfatal, persistent **Restart ChatGPT to load models** state; it
 does not make CodexCommander appear stopped or unhealthy. **Show restart steps…** explains the default
-reload boundary: quit ChatGPT completely, reopen it, and then start a new task. The companion does not
+reload boundary: quit ChatGPT completely and reopen it; an existing task can use the refreshed model
+picker. The companion does not
 signal ChatGPT's background workers from this card.
 
 Guarded Apply remains an advanced dashboard/API fallback. It performs another sync, reconciles managed
@@ -141,7 +142,8 @@ The fence marker is seeded only for CodexCommander-managed homes (injected routi
 a never-managed home is observed via raw mtime and never written.
 
 When the catalog and managed routing are already current and only the running worker is stale, the
-recommended end-user boundary is to quit ChatGPT completely, reopen it, and start a new task. A new
+recommended end-user boundary is to quit ChatGPT completely and reopen it; an existing task can then
+check the refreshed picker. A new
 task or fork without that full app restart still reuses the old worker. A pending or unknown catalog,
 or managed routing that is not yet injected, is different: **Apply to Codex** must first reconcile and
 prove the disk/routing state; manual restart guidance must not replace that repair step. The guarded

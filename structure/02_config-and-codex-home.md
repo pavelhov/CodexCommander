@@ -326,8 +326,8 @@ wrong owner or profile, missing proof, tampered/custom/ambiguous routing, tempor
 observation race remains fail-closed and leaves integration OFF. Generated catalog/cache artifacts
 can be reused; no broad CODEX_HOME cleanup is part of either transition.
 
-After either Restore Native or Route Back succeeds, the user must quit ChatGPT completely, reopen
-it, and start a new task so the running Codex host consumes the saved route.
+After either Restore Native or Route Back succeeds, the user must quit ChatGPT completely and reopen
+it so a fresh Codex host consumes the saved route. The existing task can then use its model picker.
 
 Full `ccx uninstall` config cleanup is ownership-manifest based. A fresh config directory receives a
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall

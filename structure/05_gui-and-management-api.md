@@ -334,8 +334,9 @@ verification. **Restore Native Codex** changes only routing and deliberately lea
 Here and below, restoring native means removing CodexCommander-owned routing; an external
 user-managed Codex provider is preserved.
 Both explicit route directions confirm the saved routing document through the fresh route endpoint
-before reporting success. A confirmed route change tells the user to quit ChatGPT completely, reopen
-it, and start a new task; the companion never presents the existing host as already switched.
+before reporting success. A confirmed route change tells the user to quit ChatGPT completely and
+reopen it; the existing task can use the refreshed model picker. The companion never presents the
+old host as already switched.
 
 An explicit route action owns one visible operation card immediately below the header. Its truthful
 orchestration phases are **Changing route** and **Confirming route**, with an indeterminate spinner
