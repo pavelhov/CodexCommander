@@ -61,6 +61,11 @@ files or force-start the proxy. A cancellation or an old-version relaunch is not
 update or permission to restart. If Finish Update cannot complete, open **Logs** and retain the
 recovery state for diagnosis.
 
+If recovery cannot tell its own routing edit from a newer Native choice, it keeps the update pending
+instead of silently reporting success with Codex on the wrong route. **Stop CodexCommander and Quit…**
+records an explicit Off choice. Reopen the app to finish recovery in the stopped, native state, then
+choose **Start Proxy** to start CC and route Codex through it.
+
 Updater-enabled previews authenticate both the update feed and archives with Sparkle EdDSA
 signatures. They remain ad-hoc signed, **unnotarized previews**; Apple Developer ID signing and
 notarization are deferred.
