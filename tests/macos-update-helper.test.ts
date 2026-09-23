@@ -109,6 +109,62 @@ test.skipIf(process.platform === "win32")("partial preparation stays excluded an
 });
 
 import { resumeProduction } from "../src/cli/macos-update";
+test.skipIf(process.platform === "win32")("adopted recovery child must complete canonical route and catalog sync",async()=>{
+  const f=fixture();await performMacOSUpdateCommand(prepare,f.io);f.replace();
+  const calls:string[]=[];let succeeds=false;
+  f.io.resume=(transaction,authority,restoreOwned)=>resumeProduction(transaction,authority,restoreOwned,{
+    service:()=>({kind:"absent",fingerprint:null,active:false}),
+    live:async()=>({pid:123,port:1234,source:"runtime"}),
+    inspect:async()=>({pid:123,bundlePath:"/Applications/Test.app",fingerprint:"child"}),
+    ensure:async options=>{calls.push(options.action!);return {schemaVersion:1,action:options.action!,ok:succeeds,state:"running",changed:false,pid:123,port:1234,message:"sync"};},
+  });
+  expect((await performMacOSUpdateCommand({action:"reconcile"},f.io)).status).toBe("blocked");
+  expect(f.store.read()?.phase).toBe("recovering");
+  succeeds=true;
+  expect((await performMacOSUpdateCommand({action:"reconcile"},f.io)).status).toBe("recovered");
+  expect(f.store.read()).toBeNull();
+  expect(calls).toEqual(["start","start"]);
+});
+test.skipIf(process.platform === "win32")("ambiguous native route after a recovery config write retains the transaction",async()=>{
+  const f=fixture();await performMacOSUpdateCommand(prepare,f.io);f.replace();
+  const authority=await f.io.authority!({includeStart:true});
+  const transaction=f.store.read()!;
+  expect(macOSUpdateResumeIntent(transaction,"newer-fingerprint").restoreOwned).toBe(false);
+  const calls:string[]=[];
+  expect(await resumeProduction(transaction,authority,false,{
+    service:()=>({kind:"absent",fingerprint:null,active:false}),
+    live:async()=>({pid:123,port:1234,source:"runtime"}),
+    inspect:async()=>({pid:123,bundlePath:"/Applications/Test.app",fingerprint:"child"}),
+    intentFingerprint:()=>"newer-fingerprint",routing:()=>"native",
+    ensure:async options=>{calls.push(options.action!);return {schemaVersion:1,action:options.action!,ok:true,state:"running",changed:false,pid:123,port:1234,message:"sync"};},
+  })).toBe(false);
+  expect(calls).toEqual([]);
+  f.store.recordOff(authority);
+  let stopped=false;
+  expect(await resumeProduction(f.store.read()!,authority,false,{
+    restoreNative:()=>({success:true,changed:false,desiredChanged:false,configChanged:false,message:"native"}),
+    service:()=>({kind:"absent",fingerprint:null,active:false}),
+    live:async()=>({pid:123,port:1234,source:"runtime"}),
+    inspect:async()=>({pid:123,bundlePath:"/Applications/Test.app",fingerprint:"child"}),
+    intentFingerprint:()=>"newer-fingerprint",routing:()=>"native",
+    stop:async()=>{stopped=true;return {schemaVersion:1,action:"stop",ok:true,state:"stopped",changed:true,pid:null,port:null,message:"stopped"};},
+  })).toBe(true);
+  expect(stopped).toBe(true);authority.releaseAll();
+});
+test.skipIf(process.platform === "win32")("independent or newer supervisor supersedes ambiguous native recovery",async()=>{
+  const f=fixture();await performMacOSUpdateCommand(prepare,f.io);f.replace();
+  const authority=await f.io.authority!({includeStart:true});
+  for (const service of [{kind:"independent" as const,fingerprint:null,active:true},{kind:"bundle" as const,fingerprint:"newer",active:true}]) {
+    expect(await resumeProduction(f.store.read()!,authority,false,{
+      service:()=>service,
+      intentFingerprint:()=>"newer-fingerprint",routing:()=>"native",
+      live:async()=>{throw Error("Independent/newer service must not be inspected");},
+      ensure:async()=>{throw Error("Independent/newer service must not be resumed");},
+      stop:async()=>{throw Error("Independent/newer service must not be stopped");},
+    })).toBe(true);
+  }
+  authority.releaseAll();
+});
 test.skipIf(process.platform === "win32")("newer OFF stops a recovery child or active bundle supervisor before clearing exclusion",async()=>{
   const f=fixture();await performMacOSUpdateCommand(prepare,f.io);await performMacOSUpdateCommand({action:"record-off"},f.io);
   const authority=await f.io.authority!({includeStart:true});let stops=0;

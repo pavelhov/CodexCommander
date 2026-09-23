@@ -189,6 +189,9 @@ export async function resumeProduction(transaction:MacosUpdateTransaction, autho
   live?: typeof findLiveProxy;
   inspect?: (pid:number) => Promise<Record<string,unknown>>;
   stop?: typeof stopProxyLifecycleUnderAuthority;
+  ensure?: typeof ensureProxyLifecycleUnderLock;
+  intentFingerprint?: () => string;
+  routing?: () => "owned" | "native" | "external";
 } = {}): Promise<boolean> {
   // Preparation does not touch an independent runtime's routes. A later native
   // choice is deferred until recovery, and must be published before any early
@@ -203,6 +206,16 @@ export async function resumeProduction(transaction:MacosUpdateTransaction, autho
   // A newer verified service choice supersedes the snapshot; never recreate or
   // take over that service merely to restore the previous update state.
   if (service.fingerprint !== transaction.original.supervisorFingerprint || service.kind === "independent") return true;
+  // A crash between our settings write and route publication looks like a
+  // newer native edit by metadata alone. Keep the recovery record until the
+  // intent is explicit instead of completing with the captured owned route
+  // missing. Independent/newer service choices above remain authoritative.
+  if (!restoreOwned && transaction.original.routing === "owned"
+    && transaction.latestIntent?.routing !== "native"
+    && transaction.preparationIntent !== "superseded"
+    && transaction.postPreparationFingerprint !== null
+    && transaction.postPreparationFingerprint !== (io.intentFingerprint ?? macOSUpdateIntentFingerprint)()
+    && (io.routing ?? currentRouting)() === "native") return false;
   const live = await (io.live ?? findLiveProxy)();
   if (transaction.latestIntent?.running === false || !transaction.original.running) {
     if (!live) return !service.active || (await (io.stop ?? stopProxyLifecycleUnderAuthority)({io:{attestedTargetPolicy:()=>false}},authority)).ok;
@@ -219,11 +232,17 @@ export async function resumeProduction(transaction:MacosUpdateTransaction, autho
     const info = await (io.inspect ?? (pid => admission(authority,"GET",pid)))(live.pid);
     // Exclusion admits only the one-shot recovery child. A crash after spawn may
     // leave it healthy; prove its bundle and changed birth identity before adopting.
-    return info.pid === live.pid && info.bundlePath === transaction.target.bundlePath
+    const adopted = info.pid === live.pid && info.bundlePath === transaction.target.bundlePath
       && typeof info.fingerprint === "string" && info.fingerprint !== transaction.original.process?.fingerprint
       && (transaction.original.supervision === "launchd" ? service.kind === "bundle" && service.active : !service.active);
+    if (!adopted) return false;
+    // A crash can occur after the replacement child starts but before its
+    // route and catalog sync. Re-enter the canonical lifecycle for that exact
+    // child; process identity alone does not complete the update.
+    const resumed = await (io.ensure ?? ensureProxyLifecycleUnderLock)({action:restoreOwned ? "start" : "ensure",honorAutoStart:false,ensureCompanion:false,preferService:transaction.original.supervision === "launchd"},authority);
+    return resumed.ok && resumed.state === "running";
   }
-  const resumed = await ensureProxyLifecycleUnderLock({action:restoreOwned ? "start" : "ensure",honorAutoStart:false,ensureCompanion:false,preferService:transaction.original.supervision === "launchd"},authority);
+  const resumed = await (io.ensure ?? ensureProxyLifecycleUnderLock)({action:restoreOwned ? "start" : "ensure",honorAutoStart:false,ensureCompanion:false,preferService:transaction.original.supervision === "launchd"},authority);
   return resumed.ok && resumed.state === "running";
 }
 export async function performMacOSUpdateCommand(command:MacOSUpdateCommand, io:MacOSUpdateHelperIo = {}): Promise<MacOSUpdateResult> {
