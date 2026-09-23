@@ -257,10 +257,10 @@ ccx sync
 ```
 
 The dashboard's catalog refresh performs the same discovery. A running Codex app-server keeps the
-catalog it loaded at startup. After a sync changes the on-disk catalog, quit ChatGPT completely,
-reopen it, and start a new task to load the new model list. The dashboard indicates when that
-restart is pending and provides restart steps. A new task in an already-running worker does not
-reload the catalog.
+catalog it loaded at startup. After a sync changes the on-disk catalog, quit ChatGPT completely and
+reopen it. You can return to the same task and check the refreshed model picker. The dashboard
+indicates when that restart is pending and provides restart steps. A new task in an already-running
+worker does not reload the catalog.
 
 CodexCommander rewrites `models_cache.json` with a deliberately stale cache wrapper whenever catalog
 visibility, priority, or metadata changes, so the next Codex model refresh reads the new catalog.

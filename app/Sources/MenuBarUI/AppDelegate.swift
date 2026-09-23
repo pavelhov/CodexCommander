@@ -784,7 +784,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "Restart ChatGPT to load the agent catalog"
-        alert.informativeText = "Quit ChatGPT completely, reopen it, then start a new task. CodexCommander will keep running. After ChatGPT reopens, return here and check the catalog status."
+        alert.informativeText = "Quit ChatGPT completely, reopen it, then return to your task and check the model picker. CodexCommander will keep running. After ChatGPT reopens, return here and check the catalog status."
         alert.addButton(withTitle: "Check status")
         alert.addButton(withTitle: "Close")
         panel.isPresentingModal = true
@@ -823,7 +823,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 case .running:
                     self.clearCatalogUpdate()
                     self.controller.showResult(
-                        "No stale ChatGPT worker is detected. Start a new task after ChatGPT reopens.",
+                        "No stale ChatGPT worker is detected. Return to your task and check the model picker.",
                         isError: false
                     )
                 case .setupRequired(let requirement):

@@ -127,9 +127,9 @@ CodexCommander saves the desired configuration and converges its deterministic c
 does not terminate Codex while you are working. The **Agent Command Center** then shows whether the
 current Codex app-server has actually loaded that catalog.
 
-When the catalog and managed routing are already current and only the running worker is stale, the
-recommended action is to quit ChatGPT completely, reopen it, and then start a new task. The dashboard
-keeps the saved state visible and offers **Check status** after you return.
+When the catalog and managed routing are already current and only the running worker is stale, quit
+ChatGPT completely and reopen it. You can return to the same task and check its refreshed model
+picker. The dashboard keeps the saved state visible and offers **Check status** after you return.
 
 Do not use restart guidance as a substitute for reconciliation. If the status says the catalog is
 pending or unknown, or CodexCommander routing is not injected, choose **Apply to Codex** first. That
@@ -149,7 +149,7 @@ with `ccx gui` or from the macOS menu app. Never paste the raw admin token into 
 one-time browser launch restores API access without exposing it.
 
 A new task or fork within the same ChatGPT worker does not reload its model catalog. Quit and reopen
-ChatGPT first, then start the new task. For advanced automation, `ccx sync --restart-codex` remains
+ChatGPT first; the picker can then be checked in an existing task. For advanced automation, `ccx sync --restart-codex` remains
 available with the same worker-interruption caveat as the dashboard fallback.
 
 ## Install the advisory delegation setup

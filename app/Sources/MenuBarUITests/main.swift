@@ -927,7 +927,7 @@ runner.test("ui: route success persists with explicit ChatGPT restart step until
     runner.equal(status.titleText, "CodexCommander route saved")
     runner.equal(
         status.detailText,
-        "Quit ChatGPT completely, reopen it, then start a new task to use this route.",
+        "Quit ChatGPT completely, reopen it, then return to your task to use this route.",
         "restart boundary"
     )
 

@@ -110,7 +110,7 @@ public final class CatalogUpdateView: NSView {
         default:
             workerText = "Codex background workers are using an older model roster."
         }
-        detail.stringValue = "\(workerText) Quit and reopen ChatGPT, then start a new task. CodexCommander remains running."
+        detail.stringValue = "\(workerText) Quit and reopen ChatGPT, then return to your task and check the model picker. CodexCommander remains running."
         setAccessibilityLabel("ChatGPT restart required. \(detail.stringValue)")
         isHidden = false
     }
