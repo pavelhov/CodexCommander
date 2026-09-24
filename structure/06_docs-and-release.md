@@ -136,12 +136,13 @@ not Ed25519 verification.
 
 Maintainer configuration (no production update key is supplied by this repository):
 
-Before asking the maintainer for paths, inspect prior ignored
-`.tmp/release-*/release-env.sh` files on the release machine. They may record
-the existing key and tool locations even when the current shell has no release
-variables. Validate that the referenced files still exist, check private-key
-permissions and public-key agreement, and update the build/version variables
-for the new release. Never print key contents or commit these local files.
+Before asking the maintainer for paths, source the ignored project-root
+`.release.local.env` on the release machine. It records the existing external
+key paths, project-local Sparkle tool path, and current build/version inputs
+even when the shell has no release variables. Validate the referenced files,
+private-key permissions, public-key agreement, and build inventory before use.
+Never print key contents or commit this local file. Prior ignored
+`.tmp/release-*/release-env.sh` files are migration sources only.
 
 - `MACOS_UPDATE_PUBLIC_KEY_FILE`: physical, single-link file containing the
   canonical Base64 32-byte Ed25519 public key. Store the private counterpart in

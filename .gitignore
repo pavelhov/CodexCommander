@@ -9,6 +9,8 @@ dist/
 # `mktemp -d` path, and nowhere else. Do not use a repository. See the
 # "Security working notes" section of AGENTS.md.
 .tmp/
+.release.local.env
+.release-tools/
 .opencode/
 
 # Local agent/session artifacts
