@@ -71,7 +71,8 @@ fully-ready result. The macOS lifecycle waits for startup readiness, retries con
 live management API, and automatically synchronizes the catalog on app launch. A worker roster that
 predates the committed catalog is a nonfatal, persistent **Restart ChatGPT to load models** state; it
 does not make CodexCommander appear stopped or unhealthy. **Show restart steps…** explains the default
-reload boundary: quit ChatGPT completely, reopen it, and then start a new task. The companion does not
+reload boundary: quit ChatGPT completely and reopen it; an existing task can use the refreshed model
+picker. The companion does not
 signal ChatGPT's background workers from this card.
 
 Guarded Apply remains an advanced dashboard/API fallback. It performs another sync, reconciles managed
@@ -141,7 +142,8 @@ The fence marker is seeded only for CodexCommander-managed homes (injected routi
 a never-managed home is observed via raw mtime and never written.
 
 When the catalog and managed routing are already current and only the running worker is stale, the
-recommended end-user boundary is to quit ChatGPT completely, reopen it, and start a new task. A new
+recommended end-user boundary is to quit ChatGPT completely and reopen it; an existing task can then
+check the refreshed picker. A new
 task or fork without that full app restart still reuses the old worker. A pending or unknown catalog,
 or managed routing that is not yet injected, is different: **Apply to Codex** must first reconcile and
 prove the disk/routing state; manual restart guidance must not replace that repair step. The guarded
@@ -229,6 +231,10 @@ canonical ChatGPT requests atomically alias the complete known collaboration nam
 the three message encryption markers, then restore the namespace and add Codex's
 `encrypted_function_args: []` plaintext sentinel on the response. Routed adapters add that sentinel
 only to completed `spawn_agent`, `send_message`, and `followup_task` calls at the bridge boundary.
+This also applies to routed children whose available collaboration tools contain only
+`send_message` or `followup_task` and no `spawn_agent`. Native plaintext-mode requests repair
+plain prose mistakenly stored in an `agent_message` encrypted-content slot on replay, while
+preserving genuine ciphertext and the agent-message envelope.
 Lifecycle and unrelated tools remain unchanged. Because the parent schema is fixed before worker
 selection, all V2 delegation messages in that parent session become plaintext, including native
 children; usage-debug body sampling is suppressed for those turns. Changes affect subsequent

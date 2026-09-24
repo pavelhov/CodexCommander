@@ -89,8 +89,8 @@ ccx restore back
 ccx eject back
 ```
 
-After either Restore Native or Route Back reports success, quit ChatGPT completely, reopen it, and
-start a new task so the running Codex host loads the saved route.
+After either Restore Native or Route Back reports success, quit ChatGPT completely and reopen it so
+a fresh Codex host loads the saved route. You can return to your existing task.
 
 ### `ccx uninstall` · `ccx remove`
 

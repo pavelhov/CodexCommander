@@ -163,8 +163,9 @@ override it.
   reauthentication, account switching, and provider configuration stay in the dashboard.
 - **Restart ChatGPT to load models** — a persistent, nonfatal card shown when running Codex background
   workers still hold an older model roster. The CodexCommander proxy remains healthy and running.
-- **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely, reopen
-  it, and then start a new task. The menu app does not force-restart background workers from this card.
+- **Show restart steps…** — explains the recommended reload boundary: quit ChatGPT completely and
+  reopen it. You can return to the same task and check its model picker. The menu app does not
+  force-restart background workers from this card.
 - **Start Proxy** — starts or attaches to the proxy, then routes Codex through the live endpoint when
   Codex configuration exists. If Codex has not run yet, the proxy stays running, Codex remains native,
   and the setup-required card explains how to finish setup.
@@ -200,8 +201,8 @@ success or error remains visible until you choose **Dismiss** or start another o
 not disappear on a timer.
 
 After **Restore Native Codex** or **Route Codex Through Proxy** reports success, quit ChatGPT
-completely, reopen it, and then start a new task. The route is saved and confirmed at that point, but
-an already-running ChatGPT/Codex host may still hold its previous route.
+completely and reopen it. Return to the same task and check its model picker. The route is saved and
+confirmed at that point, but an already-running ChatGPT/Codex host may still hold its previous route.
 
 The native escape is deliberately narrow: it removes only CodexCommander's marker-owned routing and
 owned catalog pointer from <code>$CODEX_HOME/config.toml</code>. After proving that exact route, it also
@@ -237,9 +238,9 @@ configured in CodexCommander. If no Codex worker is running, the new roster is r
 task. If a long-lived worker loaded an older roster, CodexCommander stays running and the panel keeps the
 nonfatal **Restart ChatGPT to load models** card visible.
 
-Choose **Show restart steps…**, quit ChatGPT completely, reopen it, and then start a new task. This is
-the recommended and most predictable way to replace the old worker. CodexCommander and the menu app
-remain running throughout.
+Choose **Show restart steps…**, quit ChatGPT completely, and reopen it. Return to the same task and
+check its model picker. This replaces the old worker; CodexCommander and the menu app remain running
+throughout. Some task-scoped collaboration setting changes still require a new task.
 
 A new task or fork inside the same old background host is not a catalog-reload boundary. The menu card
 therefore stays available until status observes a current worker. If the dashboard instead reports a
@@ -375,7 +376,8 @@ relocatable and are not moved automatically.
 - **Only native models appear after a stop, a Codex update, or a cold start** — reopen CodexCommander. Launch
   automatically synchronizes the catalog and restores still-configured routed models from its
   protected last-known-good catalog when live provider discovery is temporarily empty. If **Restart
-  ChatGPT to load models** remains visible, quit and reopen ChatGPT, then start a new task. Use the
+  ChatGPT to load models** remains visible, quit and reopen ChatGPT, then check the picker in your
+  existing task. Use the
   advanced dashboard/API or CLI fallback in [Agent catalog updates](#agent-catalog-updates) only if
   manual restart is unsuitable.
 

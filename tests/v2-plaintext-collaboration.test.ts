@@ -741,3 +741,166 @@ describe("routed Responses-native V2 plaintext integration", () => {
     }
   });
 });
+
+function childMessageNamespace(extra: Record<string, unknown>[] = []): Record<string, unknown> {
+  return {
+    type: "namespace",
+    name: "collaboration",
+    description: "V2 child collaboration",
+    tools: [messageTool("send_message"), messageTool("followup_task"), ...extra],
+  };
+}
+
+function routedChildBody(stream: boolean, namespace = childMessageNamespace()): Record<string, unknown> {
+  return {
+    model: "responses-native/v4",
+    stream,
+    input: [
+      {
+        type: "additional_tools",
+        role: "developer",
+        tools: [{ type: "custom", name: "exec_command" }, namespace],
+      },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "report back" }] },
+    ],
+  };
+}
+
+function childSendMessageSse(): string {
+  return completedSse("collaboration").replaceAll('"name":"spawn_agent"', '"name":"send_message"');
+}
+
+function sseFunctionCalls(text: string): Record<string, unknown>[] {
+  return text
+    .split(/\r?\n/)
+    .filter(line => line.startsWith("data: {"))
+    .map(line => JSON.parse(line.slice(6)) as Record<string, unknown>)
+    .flatMap(payload => {
+      const direct = (payload as { item?: Record<string, unknown> }).item;
+      const output = (payload as { response?: { output?: Record<string, unknown>[] } }).response?.output;
+      return [...(direct ? [direct] : []), ...(output ?? [])];
+    })
+    .filter(item => item.type === "function_call");
+}
+
+describe("routed V2 child with message-only collaboration tools", () => {
+  test("marks streamed send_message without spawn_agent and suppresses usage-debug samples", async () => {
+    globalThis.fetch = (async () => new Response(childSendMessageSse(), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(routedChildBody(true)),
+    }), routedResponsesConfig("plaintext"), logCtx);
+
+    expect(response.status).toBe(200);
+    const items = sseFunctionCalls(await response.text());
+    expect(items.length).toBeGreaterThanOrEqual(3);
+    for (const item of items) {
+      expect(item).toMatchObject({ namespace: "collaboration", name: "send_message", encrypted_function_args: [] });
+    }
+    expect(logCtx.suppressUsageDebugBodySample).toBe(true);
+  });
+
+  test("marks non-streamed followup_task without spawn_agent", async () => {
+    globalThis.fetch = (async () => Response.json(completedJson("collaboration"))) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(routedChildBody(false)),
+    }), routedResponsesConfig("plaintext"), logCtx);
+
+    expect(response.status).toBe(200);
+    const client = await response.json() as { output: Record<string, unknown>[] };
+    expect(client.output[0]).toMatchObject({
+      namespace: "collaboration",
+      name: "followup_task",
+      encrypted_function_args: [],
+    });
+    expect(logCtx.suppressUsageDebugBodySample).toBe(true);
+  });
+
+  test("keeps V1 companion tools excluded", async () => {
+    globalThis.fetch = (async () => Response.json(completedJson("collaboration"))) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const v1Namespace = childMessageNamespace([
+      { type: "function", name: "send_input", parameters: { type: "object", properties: {} } },
+    ]);
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(routedChildBody(false, v1Namespace)),
+    }), routedResponsesConfig("plaintext"), logCtx);
+
+    expect(response.status).toBe(200);
+    const client = await response.json() as { output: Record<string, unknown>[] };
+    expect(client.output[0]).not.toHaveProperty("encrypted_function_args");
+    expect(logCtx.suppressUsageDebugBodySample).toBeUndefined();
+  });
+});
+
+describe("native plaintext agent_message replay repair", () => {
+  test("rewrites prose in agent_message encrypted slots and leaves Fernet untouched", async () => {
+    const prose = "Worker finished: see notes, ready for review.";
+    const encryptedTask = fernetFixture();
+    let upstreamBody = "";
+    globalThis.fetch = (async (_input, init) => {
+      upstreamBody = typeof init?.body === "string" ? init.body : "";
+      return Response.json(completedJson(V2_PLAINTEXT_COLLABORATION_NAMESPACE));
+    }) as typeof fetch;
+    const body = nativeV2Body(false);
+    body.input = [
+      ...(body.input as unknown[]),
+      {
+        type: "agent_message",
+        id: "amsg_plain",
+        author: "/root/media_worker",
+        recipient: "/root",
+        content: [
+          { type: "input_text", text: "Message from /root/media_worker:" },
+          { type: "encrypted_content", encrypted_content: prose },
+        ],
+      },
+      {
+        type: "agent_message",
+        id: "amsg_fernet",
+        author: "/root",
+        recipient: "/root/worker",
+        content: [{ type: "encrypted_content", encrypted_content: encryptedTask }],
+      },
+    ];
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+      body: JSON.stringify(body),
+    }), nativeConfig("plaintext"), { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    await response.text();
+
+    const upstream = JSON.parse(upstreamBody) as { input: Record<string, unknown>[] };
+    const plain = upstream.input.find(item => item.id === "amsg_plain");
+    expect(plain).toEqual({
+      type: "agent_message",
+      id: "amsg_plain",
+      author: "/root/media_worker",
+      recipient: "/root",
+      content: [
+        { type: "input_text", text: "Message from /root/media_worker:" },
+        { type: "input_text", text: prose },
+      ],
+    });
+    const fernet = upstream.input.find(item => item.id === "amsg_fernet");
+    expect(fernet).toEqual({
+      type: "agent_message",
+      id: "amsg_fernet",
+      author: "/root",
+      recipient: "/root/worker",
+      content: [{ type: "encrypted_content", encrypted_content: encryptedTask }],
+    });
+  });
+});

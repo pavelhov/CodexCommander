@@ -106,7 +106,8 @@ Here, **Restore Native** means removing CodexCommander-owned routing. A user-man
 provider is left unchanged.
 
 Route changes show a spinner, elapsed time, and the real **Changing route → Confirming route**
-phases. After a confirmed route change, quit ChatGPT completely, reopen it, and start a new task.
+phases. After a confirmed route change, quit ChatGPT completely and reopen it. You can return to
+your existing task and check the refreshed model picker.
 
 #### Build or package it yourself
 

@@ -187,8 +187,13 @@ import {
 import { composeSsePayloadRewrites, relaySseWithPayloadRewrite } from "../sse-payload-rewrite";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
-import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
-import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
+import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText, plaintextV2DeliveryApplies } from "./collaboration";
+import {
+  hasUnreadableEncryptedAgentTask,
+  looksLikeBackendCiphertext,
+  sanitizeEncryptedContentInPlace,
+  sanitizeNativePlaintextAgentMessagesInPlace,
+} from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
 import { recordUpstreamHostFailure, resetUpstreamHostHealth, upstreamHostHealthKey } from "../../codex/upstream-host-health";
@@ -1433,6 +1438,17 @@ async function handleResponsesInner(
       console.warn(
         `[codexcommander] rewrote ${rewritten} plaintext encrypted_content part(s) to input_text (spawn-message compatibility)`,
       );
+  } else if (config.multiAgentV2MessageDelivery === "plaintext") {
+    // Plaintext V2 mode: a routed child may have delivered an unmarked message that Codex
+    // recorded as prose inside an agent_message encrypted_content slot. The native backend
+    // cannot decrypt it on replay, so repair only those slots; genuine ciphertext is untouched.
+    const repaired = sanitizeNativePlaintextAgentMessagesInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+    );
+    if (repaired > 0)
+      console.warn(
+        `[codexcommander] repaired ${repaired} plaintext agent_message encrypted_content part(s) for native replay`,
+      );
   }
 
   let parsed;
@@ -1454,7 +1470,7 @@ async function handleResponsesInner(
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
   const plaintextV2DeliveryRequested = config.multiAgentV2MessageDelivery === "plaintext"
-    && collabSurface(parsed) === "v2";
+    && plaintextV2DeliveryApplies(parsed);
   if (plaintextV2DeliveryRequested) {
     // Collaboration arguments intentionally become readable to the local Codex runtime. Keep
     // them out of the separate opt-in usage-debug persistence surface on every provider route.
