@@ -231,6 +231,10 @@ canonical ChatGPT requests atomically alias the complete known collaboration nam
 the three message encryption markers, then restore the namespace and add Codex's
 `encrypted_function_args: []` plaintext sentinel on the response. Routed adapters add that sentinel
 only to completed `spawn_agent`, `send_message`, and `followup_task` calls at the bridge boundary.
+This also applies to routed children whose available collaboration tools contain only
+`send_message` or `followup_task` and no `spawn_agent`. Native plaintext-mode requests repair
+plain prose mistakenly stored in an `agent_message` encrypted-content slot on replay, while
+preserving genuine ciphertext and the agent-message envelope.
 Lifecycle and unrelated tools remain unchanged. Because the parent schema is fixed before worker
 selection, all V2 delegation messages in that parent session become plaintext, including native
 children; usage-debug body sampling is suppressed for those turns. Changes affect subsequent

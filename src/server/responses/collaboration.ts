@@ -186,6 +186,27 @@ export function collabSurface(parsed: CodexCommanderParsedRequest): "v1" | "v2" 
   return namespacedSpawn ? "v1" : "v2"; // companionless shape follows spawn_agent namespacing
 }
 
+/**
+ * Plaintext V2 delivery applies to full V2 parents and to V2 children that only
+ * expose message tools (send_message/followup_task) without spawn_agent. Without
+ * this, a routed child's collaboration message is recorded as plaintext inside an
+ * encrypted_content slot and poisons native continuation.
+ */
+export function plaintextV2DeliveryApplies(parsed: CodexCommanderParsedRequest): boolean {
+  const surface = collabSurface(parsed);
+  if (surface === "v2") return true;
+  if (surface === "v1") return false;
+  let spawn = false;
+  let v1Only = false;
+  let messageTool = false;
+  for (const t of parsed.context.tools ?? []) {
+    if (t.name === "spawn_agent") spawn = true;
+    else if (t.name === "send_input" || t.name === "resume_agent" || t.name === "close_agent") v1Only = true;
+    else if (t.name === "send_message" || t.name === "followup_task") messageTool = true;
+  }
+  return !spawn && !v1Only && messageTool;
+}
+
 
 
 export interface MultiAgentGuidanceOptions {

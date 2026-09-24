@@ -247,6 +247,33 @@ export function encryptedSlotParts(payload: string): Array<Record<string, string
   return parts.length > 0 ? parts : [{ type: "input_text", text: payload }];
 }
 
+/**
+ * Repair plaintext V2 agent messages before native passthrough. A routed child can
+ * emit an unmarked collaboration message, which Codex records as plaintext in an
+ * encrypted_content slot. The native backend cannot decrypt that slot on replay.
+ * Keep the agent_message envelope and genuine ciphertext intact.
+ */
+export function sanitizeNativePlaintextAgentMessagesInPlace(input: unknown): number {
+  if (!Array.isArray(input)) return 0;
+  let rewritten = 0;
+  for (const item of input) {
+    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "agent_message") continue;
+    const content = (item as { content?: unknown }).content;
+    if (!Array.isArray(content)) continue;
+    for (let index = 0; index < content.length; index += 1) {
+      const part = content[index];
+      if (!part || typeof part !== "object" || (part as { type?: unknown }).type !== "encrypted_content") continue;
+      const payload = (part as { encrypted_content?: unknown }).encrypted_content;
+      if (typeof payload !== "string" || looksLikeBackendCiphertext(payload)) continue;
+      const parts = encryptedSlotParts(payload);
+      content.splice(index, 1, ...parts);
+      index += parts.length - 1;
+      rewritten += 1;
+    }
+  }
+  return rewritten;
+}
+
 
 
 export function hasEncryptedContentPart(content: unknown): boolean {
@@ -305,4 +332,3 @@ export function sanitizeEncryptedContentInPlace(input: unknown): number {
   visit(input);
   return rewritten;
 }
-
