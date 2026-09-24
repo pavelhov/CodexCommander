@@ -101,6 +101,12 @@ Both branches use the same Bun-native TypeScript runtime. `development` is a
 staging branch, not a separate runtime port. If native code returns, introduce
 it incrementally through the same feature-PR and promotion workflow.
 
+For a macOS in-app release, read `structure/06_docs-and-release.md` before asking
+for signing setup. On a maintainer machine, check ignored prior-release files
+under `.tmp/release-*/release-env.sh` for the existing key and Sparkle tool paths;
+validate those files before reuse and never print private key contents. An unset
+shell variable alone does not mean the release credentials are missing.
+
 Merge requirements are enforced by a GitHub **ruleset** on `main`, configured
 in repository settings (not in this repository's files). Two invariants:
 

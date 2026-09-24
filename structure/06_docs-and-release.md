@@ -136,6 +136,13 @@ not Ed25519 verification.
 
 Maintainer configuration (no production update key is supplied by this repository):
 
+Before asking the maintainer for paths, inspect prior ignored
+`.tmp/release-*/release-env.sh` files on the release machine. They may record
+the existing key and tool locations even when the current shell has no release
+variables. Validate that the referenced files still exist, check private-key
+permissions and public-key agreement, and update the build/version variables
+for the new release. Never print key contents or commit these local files.
+
 - `MACOS_UPDATE_PUBLIC_KEY_FILE`: physical, single-link file containing the
   canonical Base64 32-byte Ed25519 public key. Store the private counterpart in
   maintainer secret storage with a recovery backup; only this public value is
