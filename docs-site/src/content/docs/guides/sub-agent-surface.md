@@ -224,6 +224,11 @@ parent is plaintext, including messages to native ChatGPT workers. CodexCommande
 arguments from usage-debug body samples, but the trusted local Codex runtime and proxy necessarily
 handle the plaintext to deliver it.
 
+Routed children can have `send_message` or `followup_task` without a `spawn_agent` tool. Their
+completed collaboration message calls also carry the plaintext marker. When an older task replays
+a delegated message that Codex stored as plain text in an encrypted-content slot, native plaintext
+delivery repairs that message before forwarding it, so the task can continue.
+
 For a canonical ChatGPT parent, plaintext compatibility activates only with the complete recognized
 V2 schema. For a routed parent, CodexCommander marks only the exact `collaboration` message calls listed
 above; lifecycle and unrelated tools remain untouched. A partial, changed, malformed, or colliding
