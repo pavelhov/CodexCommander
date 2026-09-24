@@ -720,8 +720,10 @@ describe("ultra reasoning effort (upstream codex-rs parity)", () => {
     const older = routeModel(config, "xai/grok-4.5");
     expect(mapReasoningEffort(older.provider, "grok-4.5", "ultra")).toBe("high");
     expect(mapReasoningEffort(older.provider, "grok-4.5", "max")).toBe("high");
+    // grok-4.7 carries static registry metadata with the xhigh ladder.
+    expect(mapReasoningEffort(route.provider, "grok-4.7", "ultra")).toBe("xhigh");
     // Live-discovered models without a per-model entry fall back to the provider ladder.
-    expect(mapReasoningEffort(route.provider, "grok-4.7", "ultra")).toBe("high");
+    expect(mapReasoningEffort(route.provider, "grok-9.9-unlisted", "ultra")).toBe("high");
     // noReasoningModels members stay effort-free.
     expect(mapReasoningEffort(route.provider, "grok-build-0.1", "max")).toBeUndefined();
   });

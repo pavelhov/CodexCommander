@@ -67,6 +67,40 @@ request. The effective bridge watchdog is
 stall is not a total generation timeout. Failures before SSE starts return non-2xx JSON; generation
 failures after response headers have started are delivered as `response.failed` SSE.
 
+### X search for Grok 4.7
+
+When a turn routes to `xai/grok-4.7` on the xAI provider, CodexCommander also gives the model a
+synthetic `x_search` function tool. The model calls it only when a task needs live X (Twitter)
+research, such as what people are posting about a topic or what a specific account said. Other
+providers and other Grok models are unchanged, and the turn itself keeps using the existing xAI chat
+route, so Codex tools such as `apply_patch` and shell keep working.
+
+Each `x_search` call runs one request to xAI `/v1/responses` with xAI's server-side
+[`x_search` tool](https://docs.x.ai/developers/tools/x-search). It uses the same xAI credential and
+transport as the routed turn, either your Grok login or an xAI API key. The model can narrow a
+search with `allowed_x_handles` or `excluded_x_handles` (up to 20 handles, not both) and
+`from_date` / `to_date` (`YYYY-MM-DD`).
+
+The answer returns to the model as an untrusted tool result with direct `x.com` post links. Codex
+shows the call as a web-search cell whose sources are those post links. X search counts against the
+same `maxSearchesPerTurn` budget and forced-answer rule as web search. Its per-search deadline is
+`max(webSearchSidecar.timeoutMs, 90000)` milliseconds.
+
+xAI bills X search on top of tokens: $5 per 1,000 posts and $10 per 1,000 profiles fetched (xAI
+pricing as of 2026-09-21; check the xAI page above for current rates). The search query text is sent
+to xAI. To turn X search off, set:
+
+```json
+{
+  "webSearchSidecar": {
+    "xSearch": false
+  }
+}
+```
+
+If your client already defines its own `x_search` function, CodexCommander leaves it alone and does
+not add the synthetic tool.
+
 ## Vision sidecar
 
 When the routed model is listed in its provider's `noVisionModels` and a request carries an image,
