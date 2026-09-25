@@ -6,6 +6,16 @@ import { getAccountSet } from "../oauth/store";
 import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
 
 export { runWithWebSearch } from "./loop";
+export {
+  buildXSearchTool,
+  isXSearchModel,
+  parseXSearchArgs,
+  parseXSearchResponse,
+  planXaiXSearch,
+  runXaiXSearch,
+  X_SEARCH_TOOL_NAME,
+  type XaiXSearchSidecar,
+} from "./xai-x-search";
 export { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 export { runAnthropicWebSearch, parseAnthropicSidecarSSE } from "./anthropic-executor";
 
@@ -192,5 +202,24 @@ export function planWebSearch(
     maxSearches,
     routedModelStallTimeoutMs,
     stallTimeoutSec,
+  };
+}
+
+/**
+ * Loop settings for a turn that exposes ONLY the xAI x_search tool (Codex did not enable web_search,
+ * or no web-search backend is usable). The web backend never runs because no web_search tool is
+ * exposed; these values only bound the loop and its stall watchdog.
+ */
+export function planXSearchOnlyLoop(config: CodexCommanderConfig, xSearchTimeoutMs: number): SidecarPlan {
+  const cfg = config.webSearchSidecar ?? {};
+  const routedModelStallTimeoutMs = resolveRoutedModelStallTimeoutMs(cfg.routedModelStallTimeoutMs);
+  const connectTimeoutMs = config.connectTimeoutMs ?? 200_000;
+  return {
+    backend: "openai",
+    hostedTool: {},
+    settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning: cfg.reasoning ?? DEFAULT_SIDECAR_REASONING, timeoutMs: xSearchTimeoutMs, describeImages: false },
+    maxSearches: cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES,
+    routedModelStallTimeoutMs,
+    stallTimeoutSec: webSearchStallTimeoutSec(config.stallTimeoutSec, connectTimeoutMs, routedModelStallTimeoutMs, xSearchTimeoutMs),
   };
 }

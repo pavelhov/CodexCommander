@@ -65,7 +65,7 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
-import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
+import { buildWebSearchTool, buildXSearchTool, planWebSearch, planXaiXSearch, planXSearchOnlyLoop, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar, X_SEARCH_TOOL_NAME } from "../../web-search";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -2539,27 +2539,41 @@ async function handleResponsesInner(
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
     : undefined;
+  // xAI hosted X search: Grok models listed in the registry `xSearchModels` get a synthetic x_search
+  // function the loop runs on xAI /v1/responses (same transport + credential as this routed turn).
+  const xPlan = !routedCompaction && !adapter.runTurn
+    ? planXaiXSearch(config, parsed, route.providerName, route.provider, route.modelId)
+    : undefined;
+  const xOnlyLoopPlan = xPlan ? planXSearchOnlyLoop(config, xPlan.timeoutMs) : undefined;
+  const loopPlan = wsPlan ?? xOnlyLoopPlan;
   // Web-search sidecar: Codex enabled web_search but this is a routed (non-OpenAI) model that can't
   // run it server-side. Expose web_search as a function tool and run searches via the gpt-mini sidecar
   // through the ChatGPT passthrough, looping until the model answers. Otherwise take the normal path.
   // Placed BEFORE the runTurn early-return for non-runTurn adapters so dual-tool turns dispatch
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
-  if (wsPlan && !adapter.runTurn) {
-    const tools = parsed.context.tools ?? [];
-    if (!tools.some(tool => !tool.namespace && tool.name === "web_search")) {
-      parsed.context.tools = [...tools, buildWebSearchTool()];
+  if (loopPlan && !adapter.runTurn) {
+    if (xPlan) parsed.options.parallelToolCalls = false;
+    let tools = parsed.context.tools ?? [];
+    if (wsPlan && !tools.some(tool => !tool.namespace && tool.name === "web_search")) {
+      tools = [...tools, buildWebSearchTool()];
     }
+    if (xPlan && !tools.some(tool => !tool.namespace && tool.name === X_SEARCH_TOOL_NAME)) {
+      tools = [...tools, buildXSearchTool()];
+    }
+    parsed.context.tools = tools;
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget, dispatch: requestDispatchContext(logCtx, options.abortSignal ?? req.signal) },
       toolParameterSchemas: toolBridgeMaps.toolParameterSchemas,
-      backend: wsPlan.backend,
-      forwardProvider: wsPlan.forwardSidecar?.provider,
-      anthropicSidecar: wsPlan.anthropicSidecar,
-      hostedTool: wsPlan.hostedTool,
-      selectedForwardHeaders: wsPlan.forwardSidecar?.headers ?? selectedForwardHeaders,
-      settings: wsPlan.settings,
-      maxSearches: wsPlan.maxSearches,
+      backend: loopPlan.backend,
+      forwardProvider: loopPlan.forwardSidecar?.provider,
+      anthropicSidecar: loopPlan.anthropicSidecar,
+      hostedTool: loopPlan.hostedTool,
+      selectedForwardHeaders: loopPlan.forwardSidecar?.headers ?? selectedForwardHeaders,
+      settings: loopPlan.settings,
+      maxSearches: loopPlan.maxSearches,
+      ...(xPlan ? { xSearch: xPlan } : {}),
+      webSearchEnabled: !!wsPlan,
       forceEmptyResponseId: true,
       abortSignal: options.abortSignal,
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
@@ -2573,10 +2587,10 @@ async function handleResponsesInner(
           if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
         }
       },
-      recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+      recordSidecarOutcome: loopPlan.forwardSidecar?.recordOutcome,
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
-      stallTimeoutSec: wsPlan.stallTimeoutSec,
+      routedModelStallTimeoutMs: loopPlan.routedModelStallTimeoutMs,
+      stallTimeoutSec: Math.max(loopPlan.stallTimeoutSec, xOnlyLoopPlan?.stallTimeoutSec ?? 0),
       on429: retryAfter => {
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter,
@@ -2586,6 +2600,8 @@ async function handleResponsesInner(
         });
         if (!rotated) return null;
         route.provider = rotated;
+        // Keep the X-search sidecar on the rotated credential too.
+        if (xPlan) xPlan.provider = rotated;
         return resolveAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
