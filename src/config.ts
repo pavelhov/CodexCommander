@@ -997,6 +997,7 @@ const webSearchSidecarSchema = z.object({
   reasoning: z.string().optional(),
   maxSearchesPerTurn: z.number().int().nonnegative().optional(),
   timeoutMs: z.number().int().positive().optional(),
+  xSearch: z.boolean().optional(),
   routedModelStallTimeoutMs: z.number().int().min(1).max(2_147_483_647).optional(),
 }).strict();
 

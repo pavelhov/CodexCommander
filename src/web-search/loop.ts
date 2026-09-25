@@ -3,7 +3,7 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/
 import type { AdapterEvent, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderThinkingContent, CodexCommanderUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName } from "../types";
 import type { AttemptRecoveryKind } from "../usage/log";
-import { bridgeToResponsesSSE } from "../bridge";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { clearableDeadline } from "../lib/abort";
@@ -19,6 +19,7 @@ import {
 import { formatWebSearchResults } from "./format-result";
 import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchStreamProtocolError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
+import { parseXSearchArgs, runXaiXSearch, X_SEARCH_TOOL_NAME, xSearchCallArguments, type XaiXSearchSidecar, type XSearchArgs } from "./xai-x-search";
 
 const SSE_HEADERS = {
   "Content-Type": "text/event-stream",
@@ -27,13 +28,17 @@ const SSE_HEADERS = {
   "X-Accel-Buffering": "no",
 };
 
-interface WebSearchCall {
+interface SearchCallBase {
   id: string;
   // One or more queries the model batched into a single web_search call. Always length >= 0; an
   // empty array means the model called the tool with neither `query` nor `queries` (handled as an
   // empty-query placeholder).
   queries: string[];
 }
+
+type WebSearchCall =
+  | (SearchCallBase & { kind?: "web"; xArgs?: never })
+  | (SearchCallBase & { kind: "x"; xArgs: XSearchArgs });
 
 /**
  * Normalize a web_search tool call's raw JSON args into a canonical `queries[]`. Accepts native
@@ -60,7 +65,7 @@ function parseQueries(argsBuf: string): string[] {
  * (Codex never sees the synthetic tool); every other event — text, thinking, real tool calls, done —
  * is preserved in order.
  */
-export function scanEventsForWebSearch(events: AdapterEvent[]): {
+export function scanEventsForWebSearch(events: AdapterEvent[], interceptXSearch = false, interceptWebSearch = true): {
   calls: WebSearchCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
@@ -72,10 +77,14 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
   let hasMalformedToolCall = false;
   let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[] } | null = null;
   const isBlank = (value: string): boolean => value.trim().length === 0;
+  // x_search is intercepted only when the turn actually exposes the synthetic X-search tool;
+  // otherwise a client-defined function of that name passes through untouched.
+  const isSynthetic = (name: string): boolean =>
+    (interceptWebSearch && name === WEB_SEARCH_TOOL_NAME) || (interceptXSearch && name === X_SEARCH_TOOL_NAME);
   const flushPending = (): void => {
     // A pending call that never saw tool_call_end is structurally malformed.
     if (pending && !pending.closed) hasMalformedToolCall = true;
-    if (pending && pending.name !== WEB_SEARCH_TOOL_NAME) {
+    if (pending && !isSynthetic(pending.name)) {
       passthrough.push(...pending.events);
       if (pending.closed && !isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
     }
@@ -100,8 +109,11 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
       } else {
         pending.events.push(e);
         pending.closed = true;
-        if (pending.name === WEB_SEARCH_TOOL_NAME) {
+        if (interceptWebSearch && pending.name === WEB_SEARCH_TOOL_NAME) {
           calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf) });
+        } else if (interceptXSearch && pending.name === X_SEARCH_TOOL_NAME) {
+          const xArgs = parseXSearchArgs(pending.argsBuf);
+          calls.push({ id: pending.id, queries: xArgs.query ? [xArgs.query] : [], kind: "x", xArgs });
         } else {
           passthrough.push(...pending.events);
           if (!isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
@@ -283,6 +295,13 @@ export interface WebSearchLoopDeps {
   on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
   /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
   retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
+  /**
+   * xAI hosted X search for this turn (Grok models listed in the registry `xSearchModels`). When set,
+   * the loop intercepts the synthetic `x_search` tool and runs it on xAI /v1/responses.
+   */
+  xSearch?: XaiXSearchSidecar;
+  /** False when this loop was entered only to handle X search, without a synthetic web_search tool. */
+  webSearchEnabled?: boolean;
   /** Request-visible tool parameter schemas for integer argument canonicalization at the Responses bridge. */
   toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
 }
@@ -580,7 +599,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       throw new LoopError(502, terminal.message);
     }
-    return scanEventsForWebSearch(events);
+    return scanEventsForWebSearch(events, !!deps.xSearch, deps.webSearchEnabled !== false);
   };
 
   // Execute one model-requested web_search call. The call may batch several queries (native
@@ -592,11 +611,13 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   async function* runSearchCall(call: WebSearchCall, precedingThinking: CodexCommanderThinkingContent[] = []): AsyncGenerator<AdapterEvent> {
     const results: { query: string; outcome: SidecarOutcome }[] = [];
     let beganCell = false;
+    const isX = call.kind === "x";
+    const toolLabel = isX ? X_SEARCH_TOOL_NAME : "web_search";
     if (call.queries.length === 0) {
       // The model called web_search with neither query nor queries — count it against the budget
       // (loop-bounding) exactly as the old empty-query placeholder did, but emit no cell.
       searchesExecuted++;
-      results.push({ query: "", outcome: { text: "", sources: [], error: "the model called web_search with an empty query" } });
+      results.push({ query: "", outcome: { text: "", sources: [], error: `the model called ${toolLabel} with an empty query` } });
     }
     for (const query of call.queries) {
       // Stall-watchdog seam: batched queries run sequentially inside ONE begin/end cell, and
@@ -604,9 +625,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       // bounded units chain into one silent span past the stall deadline (audit 011 B1).
       yield { type: "heartbeat" };
       let outcome: SidecarOutcome;
-      if (failedQueries.has(normalizeQuery(query))) {
+      const failureKey = `${toolLabel}:${normalizeQuery(query)}`;
+      if (failedQueries.has(failureKey)) {
         // Already failed this turn — don't spend another real search on it.
-        outcome = { text: "", sources: [], error: "this query already failed earlier in the turn — do not call web_search again for it; answer from existing context" };
+        outcome = { text: "", sources: [], error: `this query already failed earlier in the turn — do not call ${toolLabel} again for it; answer from existing context` };
       } else if (searchesExecuted >= maxSearches) {
         outcome = { text: "", sources: [], error: "web search limit reached for this turn — answer from results already gathered" };
       } else {
@@ -623,9 +645,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // signal.aborted both after the await and in the catch (a fulfilled {error} on an aborted
         // signal would otherwise look like an ordinary degradable failure).
         try {
-          outcome = backend === "anthropic" && anthropicSidecar
-            ? await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal, deps.incomingMeta.dispatch?.attempt)
-            : await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome, deps.incomingMeta.dispatch?.attempt);
+          if (call.kind === "x") {
+            outcome = deps.xSearch
+              ? await runXaiXSearch(call.xArgs, deps.xSearch, signal, deps.incomingMeta.dispatch?.attempt)
+              : { text: "", sources: [], error: "X search is not available for this turn" };
+          } else if (backend === "anthropic" && anthropicSidecar) {
+            outcome = await runAnthropicWebSearch(query, anthropicSidecar.providerName, anthropicSidecar.provider, settings, signal, deps.incomingMeta.dispatch?.attempt);
+          } else {
+            outcome = await runWebSearch(query, hostedTool, forwardProvider!, selectedForwardHeaders, settings, signal, recordSidecarOutcome, deps.incomingMeta.dispatch?.attempt);
+          }
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
         } catch (e) {
           if (e instanceof LoopError) throw e;
@@ -635,14 +663,16 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         }
         searchesExecuted++;
         executedSearchCount++;
-        if (outcome.error) failedQueries.add(normalizeQuery(query));
+        if (outcome.error) failedQueries.add(failureKey);
       }
       results.push({ query, outcome });
     }
     const now = Date.now();
     // Preserve the singular `{query}` arg shape for a single-query call (avoids prompt-history drift);
     // use `{queries}` only when the model actually batched several.
-    const callArgs: Record<string, unknown> = call.queries.length > 1
+    const callArgs: Record<string, unknown> = isX
+      ? xSearchCallArguments(call.xArgs)
+      : call.queries.length > 1
       ? { queries: call.queries }
       : { query: call.queries[0] ?? "" };
     messages.push({
@@ -651,14 +681,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // Signed thinking must precede tool_use on replay (Anthropic extended thinking), and
         // unsigned raw reasoning has to ride along for providers that require it back (#688).
         ...precedingThinking,
-        { type: "toolCall" as const, id: call.id, name: WEB_SEARCH_TOOL_NAME, arguments: callArgs },
+        { type: "toolCall" as const, id: call.id, name: isX ? X_SEARCH_TOOL_NAME : WEB_SEARCH_TOOL_NAME, arguments: callArgs },
       ],
       timestamp: now,
     });
     // One aggregated tool result. isError only when EVERY query failed (a partial success is usable).
     const allFailed = results.every(r => !!r.outcome.error);
     messages.push({
-      role: "toolResult", toolCallId: call.id, toolName: WEB_SEARCH_TOOL_NAME,
+      role: "toolResult", toolCallId: call.id, toolName: isX ? X_SEARCH_TOOL_NAME : WEB_SEARCH_TOOL_NAME,
       content: formatWebSearchResults(results, !!parsed._structuredOutput),
       isError: allFailed, timestamp: now,
     });
@@ -728,6 +758,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // tool call (e.g. shell/apply_patch) means this turn is terminal for Codex — finalize so those
           // calls reach Codex. forceAnswer also finalizes.
           const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
+          if (split.calls.length > 0 && split.hasRealToolCall && !forceAnswer) {
+            // A provider may return synthetic searches beside client function calls even after
+            // parallel_tool_calls=false. Execute the searches before forwarding the real calls;
+            // silently dropping them would lose citations and still charge no search budget.
+            const iterationThinking = extractIterationThinking(split.passthrough);
+            for (const [callIndex, call] of split.calls.entries()) {
+              yield* runSearchCall(call, callIndex === 0 ? iterationThinking : []);
+            }
+          }
           if (!shouldLoop) {
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
@@ -775,6 +814,22 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     } finally {
       if (abortSignal) abortSignal.removeEventListener("abort", linkAbort);
     }
+  }
+
+  if (!parsed.stream) {
+    const events: AdapterEvent[] = [];
+    for await (const event of produce()) events.push(event);
+    const json = buildResponseJSON(events, parsed.modelId, {
+      translatorBudget,
+      replayCacheScope: parsed._clientThreadId ?? "global",
+      toolNsMap,
+      freeformToolNames: freeform,
+      toolSearchToolNames: toolSearch,
+      hideThinkingSummary: parsed.options.hideThinkingSummary,
+      ...(deps.toolParameterSchemas ? { toolParameterSchemas: deps.toolParameterSchemas } : {}),
+      ...(deps.onUsage ? { onUsage: deps.onUsage } : {}),
+    });
+    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
 
   const sse = bridgeToResponsesSSE(

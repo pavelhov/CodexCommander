@@ -166,6 +166,8 @@ export interface CodexCommanderTool {
   loadedFromToolSearch?: boolean;
   /** Synthetic web_search tool: the model's call is executed by the gpt-5.4-mini sidecar, not relayed to Codex. */
   webSearch?: boolean;
+  /** Synthetic xAI x_search tool: executed by the proxy against xAI /v1/responses, not relayed to Codex. */
+  xSearch?: boolean;
 }
 
 /**
@@ -953,6 +955,11 @@ export interface CodexCommanderWebSearchSidecarConfig {
   maxSearchesPerTurn?: number;
   /** Sidecar fetch timeout (ms). */
   timeoutMs?: number;
+  /**
+   * xAI X search for Grok models listed in the registry `xSearchModels`. Default on: the routed
+   * Grok model gets an `x_search` tool it calls only for X research. Set false to hide it.
+   */
+  xSearch?: boolean;
   /**
    * Config-file-only deadline (ms) for continuous routed-model response-body raw-byte inactivity
    * during a web-search turn. Default 200000. Must be an integer from 1 through 2147483647.

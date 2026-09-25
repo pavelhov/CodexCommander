@@ -170,6 +170,7 @@ provider-selection behavior.
 | `maxSearchesPerTurn?` | `number` | `3` | Real searches allowed per main-model turn. |
 | `routedModelStallTimeoutMs?` | `number` | `200000` | Config-file-only routed-model raw-body inactivity deadline. Integer 1–2147483647; every non-empty chunk resets it. |
 | `timeoutMs?` | `number` | `60000` | Deadline for one hosted search. |
+| `xSearch?` | `boolean` | `true` | Adds the xAI `x_search` tool for Grok 4.7 turns on the xAI provider. `false` turns it off. See [X search for Grok 4.7](/guides/sidecars/#x-search-for-grok-47). |
 
 The OpenAI backend requires a ChatGPT login and enabled ChatGPT `forward` provider. Claude-inbound
 routed replays inject main ChatGPT auth into the internal request. The Anthropic backend uses the
