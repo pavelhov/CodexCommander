@@ -38,7 +38,8 @@ import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { LEGACY_NATIVE_OPENAI_MODELS } from "./native-models";
 import { peekNativeLiveCatalog } from "./native-live";
-import { activeCodexModelsCachePath, readCatalog } from "./parsing";
+import { activeCodexModelsCachePath, readCatalog, readCodexCatalogPath } from "./parsing";
+import { readOwnerCheckedPublishedNativeCatalog } from "./published-native";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export {
   LEGACY_NATIVE_OPENAI_MODELS,
@@ -174,9 +175,9 @@ function computeSupportedNativeOpenAiSlugs(
   const bundled = bundledNativeCatalogSlugs(options, mode);
   const live = hasInjectedNativeCatalogDeps(options) ? [] : nativeLiveCatalogSlugs(mode);
   if (bundled.length > 0) {
-    return unique([...live, ...bundled, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS, ...onDiskBareNativeRecoverySlugs(options)]);
+    return unique([...live, ...bundled, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS, ...onDiskBareNativeRecoverySlugs(options, mode)]);
   }
-  const recovered = onDiskBareNativeRecoverySlugs(options);
+  const recovered = onDiskBareNativeRecoverySlugs(options, mode);
   if (recovered.length > 0) {
     return unique([...live, ...recovered, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
   }
@@ -232,7 +233,7 @@ export function supportedNativeOpenAiSlugSet(
     return supportedNativeSlugMemo.slugSet;
   }
   const slugs = supportedNativeOpenAiSlugs(options);
-  return supportedNativeSlugMemo?.slugSet ?? new Set(slugs);
+  return supportedNativeSlugMemo?.key === key ? supportedNativeSlugMemo.slugSet : new Set(slugs);
 }
 
 export function isSupportedNativeOpenAiSlug(
@@ -250,13 +251,14 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
 export function configuredNativeAliasSlugs(
   config: Pick<CodexCommanderConfig, "combos" | "nativeCatalogMode">,
   deps: BundledCatalogDeps = {},
+  extraSupported: ReadonlySet<string> = new Set(),
 ): Set<string> {
   const aliases = new Set<string>();
   const supported = supportedNativeOpenAiSlugSet({ ...deps, nativeCatalogMode: config.nativeCatalogMode });
   for (const raw of Object.values(config.combos ?? {})) {
     if (!isNativeAliasCombo(raw)) continue;
     const alias = raw.alias!.trim();
-    if (supported.has(alias)) aliases.add(alias);
+    if (supported.has(alias) || extraSupported.has(alias)) aliases.add(alias);
   }
   return aliases;
 }
@@ -269,11 +271,12 @@ export function configuredNativeAliasSlugs(
 export function desktopAllowlistSuppressedNativeSlugs(
   config: Pick<CodexCommanderConfig, "combos" | "disabledModels" | "nativeCatalogMode">,
   deps: BundledCatalogDeps = {},
+  extraSupported: ReadonlySet<string> = new Set(),
 ): Set<string> {
-  const suppressed = configuredNativeAliasSlugs(config, deps);
+  const suppressed = configuredNativeAliasSlugs(config, deps, extraSupported);
   if (suppressed.size === 0) return suppressed;
   const disabled = disabledNativeSlugs(config);
-  for (const slug of supportedNativeOpenAiSlugs({ ...deps, nativeCatalogMode: config.nativeCatalogMode })) {
+  for (const slug of new Set([...supportedNativeOpenAiSlugs({ ...deps, nativeCatalogMode: config.nativeCatalogMode }), ...extraSupported])) {
     if (disabled.has(slug)) suppressed.add(slug);
   }
   return suppressed;
@@ -328,6 +331,8 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
 function nativeCapabilityEntry(slug: string) {
   return peekNativeLiveCatalog().catalog?.models?.find(entry => entry.slug === slug)
     ?? peekBundledNativeCatalogEntry(slug)
+    ?? readOwnerCheckedPublishedNativeCatalog()?.models?.find(entry =>
+      entry.slug === slug && isBareBundledNativeCatalogEntry(entry))
     ?? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
 }
 

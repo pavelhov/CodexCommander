@@ -299,7 +299,7 @@ The management API exposes matching `GET`, `PUT`, and guidance-only `PATCH` endp
 | `/api/effort-caps` | Main-agent and sub-agent effort ceilings |
 | `/api/subagent-models` | Ordered roster of up to five `{ model, guidance? }` objects; `GET` also keeps `chosen: string[]`, while legacy `{ models }` writes preserve matching guidance. `PATCH` changes one existing row's guidance atomically. Saving is non-disruptive and reports catalog activation state |
 | `/api/subagent-model-fallback` | Global fallback order and poll interval |
-| `/api/codex-catalog/status` | Read desired configuration, deterministic on-disk catalog evidence, and current-worker activation evidence |
+| `/api/codex-catalog/status` | Read desired configuration, deterministic on-disk catalog evidence, current-worker activation evidence, and native model discovery status |
 | `/api/codex-catalog/apply` | Guarded reconciliation for a pending catalog or uninjected managed route, followed when necessary by a confirmed force-restart of verified stale workers. For an already-converged stale worker this is an advanced fallback that may make ChatGPT show **stopped unexpectedly**; browser use requires a confirmed `ccx gui` or menu-app launch |
 
 Sending `multiAgentV2MessageDelivery: "encrypted"` or `null` to `PUT /api/v2` removes the explicit

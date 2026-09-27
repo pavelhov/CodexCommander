@@ -69,6 +69,7 @@ export function createReadinessGate(): ReadinessGate {
 export interface SyncOutcomeLike {
   ok?: boolean;
   warning?: string;
+  notice?: string;
   /** #1046: whether the sync actually rewrote the on-disk catalog/cache. */
   catalogWritten?: boolean;
   cacheSynced?: boolean;

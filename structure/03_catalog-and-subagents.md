@@ -39,6 +39,18 @@ bundled catalog never contains those rows.
 
 Codex App model picker visibility comes from this shared catalog, not from patching the App.
 
+When native OpenAI discovery is unavailable for a signed-in home, catalog convergence
+carries previously published bare native rows into the next candidate. A working
+bundled catalog does not erase a live-only row. A confirmed sign-out, a fresh home,
+provider exclusion, disabled model, desktop allowlist suppression, or a current
+`nativeCatalogMode` exclusion intentionally drops it; successful discovery can also
+retire upstream rows. A private, atomically written owner sidecar binds the published native rows to the ChatGPT account and canonical Codex home; an owner mismatch drops prior rows, while an unreadable credential file leaves ownership unknown and permits carry. Before the sidecar exists, a retained native snapshot must match the current identity if present. The `kept` count reports only carried rows absent from the bundled supported set. `auth` means missing ChatGPT credentials or account identity; only a confirmed missing or signed-out auth file drops carried rows. `credentials` means an
+unreadable or malformed credential file, `runtime` means no usable CLI runtime,
+`network` and `response` describe fetch failures, `snapshot` means the admitted
+identity or snapshot changed, `disk` means snapshot persistence failed, and `busy`
+is genuine native-main contention. A commit carrying rows reports the
+`native-discovery` notice, while status is `pending` before any refresh.
+
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather

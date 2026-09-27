@@ -35,6 +35,8 @@ export interface CodexSyncResult {
   rehydrated: number;
   message: string;
   warning?: string;
+  /** Informational catalog state; never blocks Apply or readiness. */
+  notice?: string;
   comboOmissions?: ComboCatalogOmission[];
   nativeSubagentDefaultsWarning?: string;
   projectConfigWarnings?: ProjectCodexConfigWarning[];
@@ -208,6 +210,7 @@ export async function syncModelsToCodex(
   let catalogQuality: CatalogQuality = "native-only";
   let rehydrated = 0;
   let warning: string | undefined;
+  let notice: string | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
   let admittedGeneration: CodexCatalogRefreshResult["admittedGeneration"];
   let admittedConfigAuthority: CodexCatalogRefreshResult["admittedConfigAuthority"];
@@ -263,6 +266,11 @@ export async function syncModelsToCodex(
       const message = `catalog sync skipped: catalog convergence failed during ${cat.catalogDisposition.phase}.`;
       warning = warning ? `${warning} ${message}` : message;
       log?.error(message);
+    }
+    if (cat.catalogDisposition?.status === "committed" && cat.catalogDisposition.nativeDiscovery) {
+      const { reason, kept } = cat.catalogDisposition.nativeDiscovery;
+      const message = `OpenAI model discovery is unavailable (${reason}); kept ${kept} previously published OpenAI models. Run \`ccx sync\` to retry; GET /api/codex-catalog/status shows the discovery reason.`;
+      notice = message;
     }
     // A native-only commit while routed providers are configured is a degraded
     // state, not a success: the live gather returned nothing and there was no
@@ -345,6 +353,7 @@ export async function syncModelsToCodex(
       rehydrated,
       message,
       ...(warning ? { warning } : {}),
+      ...(notice ? { notice } : {}),
       ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
     };
   }
@@ -378,6 +387,7 @@ export async function syncModelsToCodex(
       rehydrated,
       message,
       ...(warning ? { warning } : {}),
+      ...(notice ? { notice } : {}),
       ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
     };
   }
@@ -405,6 +415,7 @@ export async function syncModelsToCodex(
       rehydrated,
       message,
       ...(warning ? { warning } : {}),
+      ...(notice ? { notice } : {}),
       ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
     };
   }
@@ -421,6 +432,7 @@ export async function syncModelsToCodex(
       rehydrated,
       message: result.message,
       ...(warning ? { warning } : {}),
+      ...(notice ? { notice } : {}),
       ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
     };
   }
@@ -439,6 +451,7 @@ export async function syncModelsToCodex(
     rehydrated,
     message: result.message,
     ...(warning ? { warning } : {}),
+    ...(notice ? { notice } : {}),
     ...(comboOmissions.length > 0 ? { comboOmissions } : {}),
     ...(result.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: result.nativeSubagentDefaultsWarning } : {}),
     ...(projectConfigWarnings.length > 0 ? {

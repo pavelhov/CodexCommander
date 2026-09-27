@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getCodexAccountCredential } from "./account-store";
 import { loadConfig } from "../config";
-import { resolveCodexHomeDir } from "./home";
+import { canonicalCodexHomeDir } from "./home";
 import { extractAccountId } from "../oauth/chatgpt";
 import { isSelectableCodexPoolAccount } from "./account-id";
 
@@ -20,7 +20,7 @@ export interface CodexTokens {
  */
 export type CodexTokenReadResult =
   | { status: "ok"; tokens: CodexTokens }
-  | { status: "missing" | "invalid" | "unreadable" };
+  | { status: "missing" | "signed-out" | "invalid" | "unreadable" };
 
 function hasErrnoCode(error: unknown, code: string): boolean {
   return typeof error === "object" && error !== null && "code" in error
@@ -32,10 +32,10 @@ function hasErrnoCode(error: unknown, code: string): boolean {
  * `existsSync` pre-check, so a file replaced between check and read cannot be misread as absent.
  * Never returns or logs the raw error or any token material.
  */
-export function readCodexTokensResult(): CodexTokenReadResult {
+export function readCodexTokensResult(codexHome = canonicalCodexHomeDir()): CodexTokenReadResult {
   let raw: string;
   try {
-    raw = readFileSync(join(resolveCodexHomeDir(), "auth.json"), "utf-8");
+    raw = readFileSync(join(canonicalCodexHomeDir(codexHome), "auth.json"), "utf-8");
   } catch (error) {
     return { status: hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable" };
   }
@@ -43,7 +43,8 @@ export function readCodexTokensResult(): CodexTokenReadResult {
     const j = JSON.parse(raw) as {
       tokens?: { access_token?: string; account_id?: string; id_token?: string };
     };
-    if (!j?.tokens?.access_token) return { status: "invalid" };
+    if (!j || typeof j !== "object" || Array.isArray(j)) return { status: "invalid" };
+    if (!j.tokens?.access_token) return { status: "signed-out" };
     return {
       status: "ok",
       tokens: {

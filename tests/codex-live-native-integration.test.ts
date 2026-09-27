@@ -1,8 +1,8 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { refreshNativeLiveCatalog, peekNativeLiveCatalog } from "../src/codex/catalog/native-live";
+import { refreshNativeLiveCatalog, peekNativeLiveCatalog, resetNativeLiveCatalogStateForTests } from "../src/codex/catalog/native-live";
 import { listCatalogNativeSlugs, nativeOpenAiSlugs, nativeReasoningEfforts } from "../src/codex/catalog/metadata";
 import { mergeCatalogEntriesForSync, mergeCatalogModelsWithNativeRecovery } from "../src/codex/catalog/sync";
 import { nativeEffortClamp } from "../src/codex/catalog/effort";
@@ -18,6 +18,7 @@ const previousHome = process.env.CODEX_HOME;
 const previousConfig = process.env.CODEXCOMMANDER_HOME;
 const previousCli = process.env.CODEX_CLI_PATH;
 const dirs: string[] = [];
+beforeEach(() => resetNativeLiveCatalogStateForTests());
 afterEach(() => {
   if (previousHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousHome;
@@ -26,6 +27,7 @@ afterEach(() => {
   if (previousCli === undefined) delete process.env.CODEX_CLI_PATH;
   else process.env.CODEX_CLI_PATH = previousCli;
   resetBundledCatalogCacheForTests();
+  resetNativeLiveCatalogStateForTests();
   resetCodexRuntimeResolveCacheForTests();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -74,10 +76,8 @@ test("identity-matched live Sol and Luna reach native roster and sync with disti
   saveConfig(config);
   const blockedDuringSync = spyOn(nativeProfileStartup, "isNativeMainTrafficBlocked").mockReturnValue(true);
   try {
-    const beforeBusySync = readFileSync(join(dir, "codexcommander-catalog.json"), "utf8");
     const busy = await refreshCodexModelCatalog(config);
-    expect(busy.catalogDisposition).toMatchObject({ status: "skipped", reason: "busy" });
-    expect(readFileSync(join(dir, "codexcommander-catalog.json"), "utf8")).toBe(beforeBusySync);
+    expect(busy.catalogDisposition).toMatchObject({ status: "committed" });
   } finally {
     blockedDuringSync.mockRestore();
   }
@@ -110,6 +110,14 @@ test("identity-matched live Sol and Luna reach native roster and sync with disti
       expect(fromHttp?.context_window).toBe(fromDisk?.context_window);
       expect(fromHttp?.supported_reasoning_levels).toEqual(fromDisk?.supported_reasoning_levels);
     }
+    openGate.mockReturnValue(true);
+    expect(nativeReasoningEfforts("gpt-6-sol")).toContain("ultra");
+    expect(nativeEffortClamp("gpt-6-sol", "ultra")).toBeNull();
+    const degradedResponse = await fetch(new URL("/v1/models?client_version=0.146.0", server.url));
+    expect(degradedResponse.ok).toBe(true);
+    const degraded = await degradedResponse.json() as { models: typeof sol[] };
+    expect(degraded.models.map(row => row.slug)).toEqual(expect.arrayContaining(["gpt-6-sol", "gpt-6-luna"]));
+    openGate.mockReturnValue(false);
   } finally {
     await server.stop(true);
     openGate.mockRestore();
