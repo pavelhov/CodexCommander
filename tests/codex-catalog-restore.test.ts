@@ -293,7 +293,9 @@ describe("Codex catalog restore", () => {
     expect(JSON.parse(r.stdout)).toMatchObject({ added: 0 });
     const synced = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
     expect(synced.find(m => m.slug === "gpt-5.5")?.priority).toBe(0);
-    expect(synced.find(m => m.slug === "gpt-5.4")?.priority).toBeGreaterThan(100);
+    const unfeaturedNativePriority = synced.find(m => m.slug === "gpt-5.4")?.priority as number;
+    expect(unfeaturedNativePriority).toBeGreaterThan(0);
+    expect(unfeaturedNativePriority).toBeLessThan(1_000);
   }, { timeout: 45_000 });
 
   test("sync advertises documented Codex-native additions omitted by the bundled catalog", () => {

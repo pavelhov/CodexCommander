@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { refreshNativeLiveCatalog, peekNativeLiveCatalog } from "../src/codex/catalog/native-live";
-import { listCatalogNativeSlugs, nativeReasoningEfforts } from "../src/codex/catalog/metadata";
-import { mergeCatalogEntriesForSync } from "../src/codex/catalog/sync";
+import { listCatalogNativeSlugs, nativeOpenAiSlugs, nativeReasoningEfforts } from "../src/codex/catalog/metadata";
+import { mergeCatalogEntriesForSync, mergeCatalogModelsWithNativeRecovery } from "../src/codex/catalog/sync";
 import { nativeEffortClamp } from "../src/codex/catalog/effort";
 import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { startServer } from "../src/server/index";
@@ -72,6 +72,15 @@ test("identity-matched live Sol and Luna reach native roster and sync with disti
     defaultProvider: "openai",
   };
   saveConfig(config);
+  const blockedDuringSync = spyOn(nativeProfileStartup, "isNativeMainTrafficBlocked").mockReturnValue(true);
+  try {
+    const beforeBusySync = readFileSync(join(dir, "codexcommander-catalog.json"), "utf8");
+    const busy = await refreshCodexModelCatalog(config);
+    expect(busy.catalogDisposition).toMatchObject({ status: "skipped", reason: "busy" });
+    expect(readFileSync(join(dir, "codexcommander-catalog.json"), "utf8")).toBe(beforeBusySync);
+  } finally {
+    blockedDuringSync.mockRestore();
+  }
   const committed = await refreshCodexModelCatalog(config);
   expect(committed.catalogDisposition.status).toBe("committed");
   expect(peekNativeLiveCatalog().source).toBe("retained");
@@ -142,4 +151,35 @@ test("identity-matched live Sol and Luna reach native roster and sync with disti
   expect(peekNativeLiveCatalog().source).toBe("unavailable");
   expect(listCatalogNativeSlugs()).not.toContain("gpt-6-sol");
   expect(listCatalogNativeSlugs()).not.toContain("gpt-6-luna");
+});
+
+test("an admitted account can recover newer Codex cache rows absent from the bundled catalog", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ccx-native-cache-recovery-"));
+  dirs.push(dir);
+  process.env.CODEX_HOME = dir;
+  process.env.CODEXCOMMANDER_HOME = dir;
+  const astra = bundledCatalogFixture(["gpt-6-astra"]).models[0]!;
+  process.env.CODEX_CLI_PATH = createCodexRuntimeFixture(dir, { version: "0.146.0", catalog: { models: [astra] } });
+  resetCodexRuntimeResolveCacheForTests();
+  const runtime = resolveCodexRuntime({ discoverAlternatives: false }).runtime;
+  persistCodexRuntime(runtime, { configDir: dir });
+  writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { access_token: "fixture-token", account_id: "account-one" } }));
+  const openGate = spyOn(nativeProfileStartup, "isNativeMainTrafficBlocked").mockReturnValue(false);
+  const admitted = await refreshNativeLiveCatalog({ runtime, force: true, fetch: async () => new Response(JSON.stringify({ models: [astra] }), {
+    headers: { "content-type": "application/json" },
+  }) });
+  expect(admitted.source).toBe("live");
+  expect(peekNativeLiveCatalog().source).toBe("retained");
+  const sol = { ...astra, slug: "gpt-6-sol", display_name: "GPT-6 Sol", priority: 2 };
+  const routed = { ...sol, slug: "provider/gpt-6-sol" };
+  const synthetic = { ...sol, slug: "gpt-6-fake", codexcommander_native_source: "synthetic-fallback" };
+  writeFileSync(join(dir, "models_cache.json"), JSON.stringify({ models: [sol, routed, synthetic] }));
+  expect(nativeOpenAiSlugs()).toContain("gpt-6-sol");
+  expect(nativeOpenAiSlugs()).not.toContain("gpt-6-fake");
+  const recovered = mergeCatalogModelsWithNativeRecovery([astra], [[sol, routed, synthetic]]);
+  expect(recovered.map(row => row.slug)).toContain("gpt-6-sol");
+  expect(recovered.map(row => row.slug)).not.toContain("gpt-6-fake");
+  writeFileSync(join(dir, "models_cache.json"), JSON.stringify({ models: [] }));
+  expect(nativeOpenAiSlugs()).not.toContain("gpt-6-sol");
+  openGate.mockRestore();
 });
