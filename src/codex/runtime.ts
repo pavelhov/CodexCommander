@@ -1,7 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync as fsReaddirSync,
+  readFileSync,
+  rmSync,
+  statSync as fsStatSync,
+  unlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
 import { findNativeTemplate, parseCatalogJson } from "./catalog/parsing";
@@ -72,12 +81,22 @@ export interface ResolveCodexRuntimeDeps {
   execFileSync?: RuntimeExecFile;
   existsSync?: (path: string) => boolean;
   readFileSync?: (path: string, encoding: "utf8") => string;
+  /** Directory listing seam for macOS app-bundle discovery. */
+  readdirSync?: (path: string) => string[];
+  /** File metadata seam for macOS app-bundle discovery (follows symlinks). */
+  statSync?: (path: string) => RuntimeFileStat;
   now?: () => number;
   /**
    * When false, stop after the first valid priority candidate (skip PATH-wide
    * newerAvailable discovery). Use for hot UI/status paths.
    */
   discoverAlternatives?: boolean;
+}
+
+/** Minimal stat shape used to vet bundled Codex launchers without spawning them. */
+export interface RuntimeFileStat {
+  isFile(): boolean;
+  readonly mode: number;
 }
 
 export interface PersistedCodexRuntimeState {
@@ -433,10 +452,52 @@ function probeBundledCatalog(
   }
 }
 
+const BUNDLED_CODEX_PACKAGE_DIR = "codex-cli";
+const BUNDLED_CODEX_PACKAGE_MANIFEST = "codex-package.json";
+const BUNDLED_CODEX_DEFAULT_ENTRYPOINT = join("bin", "codex");
+
+/**
+ * Resolve the launcher of the `Resources/codex-cli` package layout used by
+ * newer ChatGPT.app builds. The manifest entrypoint must stay inside the
+ * package directory; anything else falls back to `bin/codex`.
+ */
+function bundledPackageEntrypoint(root: string, deps: ResolveCodexRuntimeDeps): string {
+  const packageDir = join(root, BUNDLED_CODEX_PACKAGE_DIR);
+  const fallback = join(packageDir, BUNDLED_CODEX_DEFAULT_ENTRYPOINT);
+  const read = deps.readFileSync ?? ((path, encoding) => readFileSync(path, encoding));
+  try {
+    const manifest = JSON.parse(read(join(packageDir, BUNDLED_CODEX_PACKAGE_MANIFEST), "utf8")) as unknown;
+    if (!manifest || typeof manifest !== "object") return fallback;
+    const entrypoint = (manifest as { entrypoint?: unknown }).entrypoint;
+    if (typeof entrypoint !== "string" || entrypoint.length === 0 || entrypoint.includes("\0")) return fallback;
+    if (isAbsolute(entrypoint) || /^[A-Za-z]:/.test(entrypoint) || entrypoint.startsWith("\\")) return fallback;
+    const resolved = resolvePath(packageDir, entrypoint);
+    const rel = relative(packageDir, resolved);
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) return fallback;
+    return resolved;
+  } catch {
+    return fallback;
+  }
+}
+
 function bundledAppCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   const platform = deps.platform ?? process.platform;
   if (platform !== "darwin") return [];
   const exists = deps.existsSync ?? existsSync;
+  const readdir = deps.readdirSync ?? ((path: string) => fsReaddirSync(path));
+  const stat = deps.statSync ?? ((path: string) => fsStatSync(path));
+  // Vet each candidate without spawning: directories, sound files, and other
+  // non-executables in Resources must never reach the version probe.
+  // Bundled discovery is macOS-only, so the POSIX execute bit always applies.
+  const usable = (candidate: string): boolean => {
+    if (!isSpawnableCodexCandidate(candidate, platform)) return false;
+    try {
+      const info = stat(candidate);
+      return info.isFile() && (info.mode & 0o111) !== 0;
+    } catch {
+      return false;
+    }
+  };
   const out: string[] = [];
   const roots = [
     "/Applications/ChatGPT.app/Contents/Resources",
@@ -444,15 +505,18 @@ function bundledAppCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   ];
   for (const root of roots) {
     const direct = join(root, "codex");
-    if (exists(direct) && isSpawnableCodexCandidate(direct, platform)) out.push(direct);
+    if (exists(direct) && usable(direct)) out.push(direct);
+    const packaged = bundledPackageEntrypoint(root, deps);
+    if (exists(packaged) && usable(packaged)) out.push(packaged);
+    let entries: string[] = [];
     try {
-      const { readdirSync } = require("node:fs") as typeof import("node:fs");
-      for (const entry of readdirSync(root)) {
-        if (!entry.startsWith("codex-")) continue;
-        const candidate = join(root, entry);
-        if (exists(candidate) && isSpawnableCodexCandidate(candidate, platform)) out.push(candidate);
-      }
+      entries = readdir(root);
     } catch { /* absent app bundle */ }
+    for (const entry of entries) {
+      if (!entry.startsWith("codex-")) continue;
+      const candidate = join(root, entry);
+      if (exists(candidate) && usable(candidate)) out.push(candidate);
+    }
   }
   return [...new Set(out)];
 }
@@ -608,7 +672,10 @@ function persistedRuntimeCacheStamp(deps: ResolveCodexRuntimeDeps): string {
 
 function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
   // Only memoize uninjected process-env resolves (settings/status hot paths).
-  if (deps.execFileSync || deps.existsSync || deps.readFileSync || deps.configDir || deps.now) {
+  if (
+    deps.execFileSync || deps.existsSync || deps.readFileSync || deps.readdirSync
+    || deps.statSync || deps.configDir || deps.now
+  ) {
     return null;
   }
   const env = deps.env ?? process.env;

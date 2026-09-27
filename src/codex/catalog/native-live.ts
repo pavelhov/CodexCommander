@@ -47,6 +47,32 @@ interface RefreshMemo {
 let refreshMemo: RefreshMemo | null = null;
 let snapshotMemo: { identity: string; stamp: string; result: NativeLiveCatalogStatus | null } | null = null;
 let admittedPeek: { identity: string; configDir: string; home: string; authStamp: string; runtimeCommand: string; runtimeVersion: string } | null = null;
+/** Credential-free projection of the most recent refresh outcome, for status surfaces. */
+let lastRefreshOutcome: NativeDiscoveryStatus | null = null;
+
+export interface NativeDiscoveryStatus {
+  readonly source: NativeLiveCatalogStatus["source"];
+  readonly reason: NativeLiveCatalogStatus["reason"] | null;
+  readonly fetchedAt: string | null;
+}
+
+/** Last refresh outcome (source/reason/fetchedAt only); never identity, tokens, or paths. */
+export function lastNativeDiscoveryStatus(): NativeDiscoveryStatus | null {
+  return lastRefreshOutcome;
+}
+
+function rememberOutcome(result: NativeLiveCatalogStatus): NativeLiveCatalogStatus {
+  lastRefreshOutcome = Object.freeze({ source: result.source, reason: result.reason ?? null, fetchedAt: result.fetchedAt });
+  return result;
+}
+
+/** Test seam: forget process-local discovery memos. */
+export function resetNativeLiveCatalogStateForTests(): void {
+  refreshMemo = null;
+  snapshotMemo = null;
+  admittedPeek = null;
+  lastRefreshOutcome = null;
+}
 
 function authFingerprint(home: string): string | null {
   try {
@@ -78,7 +104,17 @@ function immutable<T>(value: T): T {
   return value;
 }
 
-function context(options: NativeLiveCatalogOptions, probeRuntime: boolean): IdentityContext | null {
+type ContextResult =
+  | { readonly ok: true; readonly ctx: IdentityContext }
+  | { readonly ok: false; readonly reason: "auth" | "runtime" };
+
+const RUNTIME_VERSION = /^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/;
+
+function usableVersion(runtime: Pick<ResolvedCodexRuntime, "command" | "version"> | undefined | null): boolean {
+  return Boolean(runtime?.version && RUNTIME_VERSION.test(runtime.version));
+}
+
+function context(options: NativeLiveCatalogOptions, probeRuntime: boolean): ContextResult {
   const tokenRead = options.token === undefined ? readCodexTokensResult() : null;
   const token = options.token === undefined
     ? tokenRead?.status === "ok" ? {
@@ -86,23 +122,32 @@ function context(options: NativeLiveCatalogOptions, probeRuntime: boolean): Iden
       chatgptAccountId: tokenRead.tokens.account_id,
     } : null
     : typeof options.token === "function" ? options.token() : options.token;
-  if (!token?.accessToken || !token.chatgptAccountId) return null;
+  if (!token?.accessToken || !token.chatgptAccountId) return { ok: false, reason: "auth" };
   let runtime = typeof options.runtime === "function" ? options.runtime() : options.runtime;
   if (!runtime && probeRuntime) runtime = resolveAndPersistCodexRuntime({ discoverAlternatives: false }).runtime;
-  if (!runtime) {
+  // A failed probe yields a truthy `{ version: null }` fallback. The fetch needs only a
+  // client_version, and the persisted selection keeps the identity equal to the one used
+  // by non-probing reads and by the retained snapshot.
+  if (!usableVersion(runtime)) {
     const persisted = loadPersistedCodexRuntime({ configDir: options.configDir });
     // A new explicit runtime path cannot safely consume the previous selection's snapshot.
     const selectedPath = process.env.CODEX_CLI_PATH?.trim();
-    if (!persisted || (selectedPath && selectedPath !== persisted.command)) return null;
-    runtime = { command: persisted.command, version: persisted.selectedVersion };
+    if (persisted && !(selectedPath && selectedPath !== persisted.command)) {
+      runtime = { command: persisted.command, version: persisted.selectedVersion };
+    }
   }
-  if (!runtime.version || !/^\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?$/.test(runtime.version)) return null;
+  if (!runtime || !usableVersion(runtime)) return { ok: false, reason: "runtime" };
   const home = resolve(options.codexHome ?? getCodexHome());
   const configDir = resolve(options.configDir ?? getConfigDir());
   const identity = createHash("sha256")
     .update(JSON.stringify([token.chatgptAccountId, home, runtime.command, runtime.version]))
     .digest("hex");
-  return { token, runtime, identity, configDir };
+  return { ok: true, ctx: { token, runtime, identity, configDir } };
+}
+
+function contextIdentity(options: NativeLiveCatalogOptions): string | null {
+  const result = context(options, false);
+  return result.ok ? result.ctx.identity : null;
 }
 
 /** Fixed snapshot path; the file itself is checked against the current identity on every read. */
@@ -164,7 +209,9 @@ function readSnapshot(ctx: Pick<IdentityContext, "identity" | "configDir">): Nat
 export function peekNativeLiveCatalog(options: NativeLiveCatalogOptions = {}): NativeLiveCatalogStatus {
   let ctx: Pick<IdentityContext, "identity" | "configDir"> | null;
   if (options.token !== undefined) {
-    ctx = context(options, false);
+    const result = context(options, false);
+    if (!result.ok) return unavailable(result.reason);
+    ctx = result.ctx;
   } else {
     if (isNativeMainTrafficBlocked() || !admittedPeek) return unavailable("busy");
     const home = resolve(options.codexHome ?? getCodexHome());
@@ -179,7 +226,6 @@ export function peekNativeLiveCatalog(options: NativeLiveCatalogOptions = {}): N
       || (explicitCommand && explicitCommand !== admittedPeek.runtimeCommand)) return unavailable("snapshot");
     ctx = { identity: admittedPeek.identity, configDir };
   }
-  if (!ctx) return unavailable("auth");
   return readSnapshot(ctx) ?? immutable({ source: "unavailable", catalog: null, fetchedAt: null, identity: ctx.identity, reason: "snapshot" });
 }
 
@@ -213,12 +259,14 @@ export async function refreshNativeLiveCatalog(options: NativeLiveCatalogOptions
   // native-main profile switch drain. Injected credentials are isolated test seams.
   if (options.token === undefined) {
     const lease = tryAcquireNativeMainProfileClaim();
-    if (!lease) return unavailable("busy");
+    if (!lease) return rememberOutcome(unavailable("busy"));
+    let admitted = false;
     try {
-      return await withNativeMainSharedClaim(resolveNativeProfileContext(), async () => {
+      return rememberOutcome(await withNativeMainSharedClaim(resolveNativeProfileContext(), async () => {
+        admitted = true;
         const result = await refreshNativeLiveCatalogAdmitted(options);
         if (result.identity && result.source !== "unavailable"
-          && context(options, false)?.identity === result.identity) {
+          && contextIdentity(options) === result.identity) {
           const home = resolve(options.codexHome ?? getCodexHome());
           const configDir = resolve(options.configDir ?? getConfigDir());
           const selected = loadPersistedCodexRuntime({ configDir });
@@ -233,19 +281,27 @@ export async function refreshNativeLiveCatalog(options: NativeLiveCatalogOptions
           };
         }
         return result;
-      });
+      }));
     } catch {
-      return unavailable("busy");
+      // Only a denied/draining shared claim is contention. A failure after
+      // admission (probe, credential read, snapshot write) is a local runtime
+      // problem and must not masquerade as a transient busy state.
+      return rememberOutcome(unavailable(admitted ? "runtime" : "busy"));
     } finally {
       lease.release();
     }
   }
-  return refreshNativeLiveCatalogAdmitted(options);
+  try {
+    return rememberOutcome(await refreshNativeLiveCatalogAdmitted(options));
+  } catch {
+    return rememberOutcome(unavailable("runtime"));
+  }
 }
 
 async function refreshNativeLiveCatalogAdmitted(options: NativeLiveCatalogOptions): Promise<NativeLiveCatalogStatus> {
-  const ctx = context(options, true);
-  if (!ctx) return immutable({ source: "unavailable", catalog: null, fetchedAt: null, identity: null, reason: "auth" });
+  const resolved = context(options, true);
+  if (!resolved.ok) return unavailable(resolved.reason);
+  const ctx = resolved.ctx;
   const now = (options.now ?? Date.now)();
   const memo = refreshMemo?.identity === ctx.identity ? refreshMemo : null;
   if (memo?.flight) return memo.flight;
@@ -295,8 +351,8 @@ async function refreshNativeLiveCatalogUncached(
     // The network request may outlive a main-login or selected-runtime switch.
     // Never publish its rows into the new identity's durable snapshot.
     const current = context(options, false);
-    if (!current || current.identity !== ctx.identity
-      || current.token.accessToken !== ctx.token.accessToken) {
+    if (!current.ok || current.ctx.identity !== ctx.identity
+      || current.ctx.token.accessToken !== ctx.token.accessToken) {
       return peekNativeLiveCatalog(options);
     }
     const fetchedAt = new Date((options.now ?? Date.now)()).toISOString();
