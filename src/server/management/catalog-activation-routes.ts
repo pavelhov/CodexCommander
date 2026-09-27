@@ -223,7 +223,7 @@ export async function handleCatalogActivationRoutes(ctx: ManagementContext): Pro
     return noStore(jsonResponse({
       activation: projectCatalogActivationForPrincipal(collectActivation(ctx), ctx.principal),
       nativeDiscovery: {
-        source: discovery?.source ?? "unavailable",
+        source: discovery?.source ?? "pending",
         reason: discovery ? discovery.reason : null,
         fetchedAt: discovery?.fetchedAt ?? null,
       },

@@ -287,6 +287,22 @@ describe("foreground proxy lifecycle", () => {
     expect(events.at(-1)).toBe("release-authority");
   });
 
+  test("start against a running proxy succeeds with a carry-only notice", async () => {
+    const events: string[] = [];
+    const io = baseStartIo(events, {
+      findLive: async () => ({ pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      replaceStaleRuntime: async candidate => ({ live: candidate, changed: false }),
+      syncCatalog: async () => ({ ...successfulCatalogSync(),
+        catalogExists: true,
+        notice: "OpenAI model discovery is unavailable (network); kept 2 previously published OpenAI models.",
+      }),
+      startServer: (() => { events.push("unexpected-bind"); return {}; }) as NonNullable<ForegroundProxyStartIo["startServer"]>,
+    });
+    expect(await runForegroundProxyStart([], { block: false, io })).toBe(0);
+    expect(events).not.toContain("unexpected-bind");
+    expect(events.filter(event => event.includes("OpenAI model discovery is unavailable"))).toHaveLength(1);
+  });
+
   test("explicit foreground Start retires a stale current-home runtime before routing and bind", async () => {
     const events: string[] = [];
     const stale: LiveProxy = {
@@ -796,6 +812,21 @@ describe("foreground proxy lifecycle", () => {
 });
 
 describe("foreground startup integrations", () => {
+  test("a fresh start prints a carried native discovery notice once", async () => {
+    const lines: string[] = [];
+    const notice = "OpenAI model discovery is unavailable (network); kept 2 previously published OpenAI models.";
+    await runForegroundStartupInitialization({ port: 19191, config, readinessGate: createReadinessGate() }, {
+      sleep: async () => {},
+      injectSystemEnv: async () => {},
+      syncCodexOnStart: async () => ({ ran: true, catalogWritten: false, cacheSynced: false, notice }),
+      buildDesktopRegistry: async () => {},
+      shouldSyncGrok: () => false,
+      ensureCompanion: async () => true,
+      logger: { log: line => { lines.push(line); }, error: line => { lines.push(line); } },
+    });
+    expect(lines.filter(line => line === notice)).toHaveLength(1);
+  });
+
   test("still synchronizes Grok when Desktop registry construction fails", async () => {
     const events: string[] = [];
     const gate = createReadinessGate();

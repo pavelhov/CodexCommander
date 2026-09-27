@@ -35,6 +35,23 @@ import {
   replaceCodexModelsCache,
 } from "../internal/catalog-writer";
 import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug } from "./account-models";
+import { readOwnerCheckedPublishedNativeCatalog, readPublishedNativeCatalog } from "./published-native";
+import { isBareBundledNativeCatalogEntry } from "./metadata";
+import { nativeCatalogOwnerDecision } from "./native-owner";
+
+function isSupportedOrPublishedNativeSlug(slug: string): boolean {
+  return isSupportedNativeOpenAiSlug(slug)
+    || Boolean(readOwnerCheckedPublishedNativeCatalog()?.models?.some(entry => entry.slug === slug
+      && isBareBundledNativeCatalogEntry(entry)));
+}
+
+/** Reject only native rows known to belong to another signed-in account. */
+function isForeignPublishedNativeSlug(slug: string): boolean {
+  return !isSupportedNativeOpenAiSlug(slug)
+    && nativeCatalogOwnerDecision() === "mismatch"
+    && Boolean(readPublishedNativeCatalog()?.models?.some(entry => entry.slug === slug
+      && isBareBundledNativeCatalogEntry(entry)));
+}
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
 
@@ -101,11 +118,18 @@ export function configuredCatalogEntry(entries: readonly RawEntry[], configured:
 
 export function configuredSubagentModelMatchesEntry(configured: string, entry: RawEntry): boolean {
   if (typeof entry.slug !== "string") return false;
-  if (configured === entry.slug) return true;
+  if (configured === entry.slug) {
+    const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
+    return nativeSlug !== undefined
+      ? !isForeignPublishedNativeSlug(nativeSlug)
+      : !(/^(?:gpt|codex)-/.test(entry.slug) && isBareBundledNativeCatalogEntry(entry)
+        && isForeignPublishedNativeSlug(entry.slug));
+  }
   const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
   return !configured.includes("/")
     && nativeSlug !== undefined
-    && isSupportedNativeOpenAiSlug(nativeSlug)
+    && isSupportedOrPublishedNativeSlug(nativeSlug)
+    && !isForeignPublishedNativeSlug(nativeSlug)
     && configured === nativeSlug;
 }
 
@@ -123,6 +147,12 @@ export function effectiveSubagentRoster(
   const ordered = entries
     .map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => typeof entry.slug === "string")
+    .filter(({ entry }) => {
+      const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry)
+        ?? (/^(?:gpt|codex)-/.test(entry.slug as string) && isBareBundledNativeCatalogEntry(entry)
+          ? entry.slug as string : undefined);
+      return nativeSlug === undefined || !isForeignPublishedNativeSlug(nativeSlug);
+    })
     .filter(({ entry }) => entry.visibility === "list")
     .filter(({ entry }) => surface !== "v2" || isEligibleV2SubagentEntry(entry))
     .sort((left, right) => {
@@ -507,9 +537,9 @@ export function isCodexCommanderAuthoredRoutedEntry(entry: RawEntry): boolean {
     && desc.startsWith("Routed via CodexCommander → ");
 }
 
-function recoverableNativeSlug(entry: RawEntry): string | null {
+function recoverableNativeSlug(entry: RawEntry, supported?: ReadonlySet<string>): string | null {
   const slug = typeof entry.slug === "string" ? entry.slug : "";
-  return isSupportedNativeOpenAiSlug(slug)
+  return (supported?.has(slug) ?? isSupportedNativeOpenAiSlug(slug))
     && !isNativeAliasCatalogEntry(entry)
     && entry.owned_by !== COMBO_NAMESPACE
     ? slug
@@ -520,15 +550,16 @@ function recoverableNativeSlug(entry: RawEntry): string | null {
 export function mergeCatalogModelsWithNativeRecovery(
   primaryCatalogModels: readonly RawEntry[],
   nativeRecoverySources: readonly (readonly RawEntry[])[],
+  supported?: ReadonlySet<string>,
 ): RawEntry[] {
   const merged = [...primaryCatalogModels];
   const recoveredNativeSlugs = new Set(primaryCatalogModels.flatMap(entry => {
-    const slug = recoverableNativeSlug(entry);
+    const slug = recoverableNativeSlug(entry, supported);
     return slug === null ? [] : [slug];
   }));
   for (const source of nativeRecoverySources) {
     for (const entry of source) {
-      const slug = recoverableNativeSlug(entry);
+      const slug = recoverableNativeSlug(entry, supported);
       if (slug === null || recoveredNativeSlugs.has(slug)) continue;
       merged.push(structuredClone(entry) as RawEntry);
       recoveredNativeSlugs.add(slug);
@@ -855,7 +886,7 @@ function visibleAccountReplacementNatives(
   const replacements = new Map<string, boolean>();
   for (const entry of models) {
     const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry);
-    if (nativeSlug === undefined || !isSupportedNativeOpenAiSlug(nativeSlug)) continue;
+    if (nativeSlug === undefined || !isSupportedOrPublishedNativeSlug(nativeSlug)) continue;
     const exactSlug = typeof entry.slug === "string" ? entry.slug : "";
     const visible = entry.visibility === "list"
       || (disabledModels !== null
@@ -874,7 +905,7 @@ function restoreAccountHiddenBareNatives(
     const slug = typeof entry.slug === "string" ? entry.slug : "";
     if (
       entry.visibility !== "hide"
-      || !isSupportedNativeOpenAiSlug(slug)
+      || !isSupportedOrPublishedNativeSlug(slug)
       || replacementVisibility.get(slug) !== true
       || disabledModels === null
       || disabledModels.has(slug)

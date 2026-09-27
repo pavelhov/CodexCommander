@@ -699,6 +699,11 @@ describe("createReadinessGate", () => {
 // ── runStartupReadinessSync drives the gate from the sync outcome ──────────────
 
 describe("runStartupReadinessSync", () => {
+  test("informational native discovery notice keeps readiness ready", async () => {
+    const gate = createReadinessGate();
+    await runStartupReadinessSync(gate, async () => ({ ok: true, notice: "Kept prior OpenAI models" }));
+    expect(gate.getStatus()).toBe("ready");
+  });
   test("ok=true with no warning → ready", async () => {
     const gate = createReadinessGate();
     await runStartupReadinessSync(gate, async () => ({ ok: true }));

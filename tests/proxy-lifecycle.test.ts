@@ -1388,6 +1388,25 @@ describe("shared proxy lifecycle authority", () => {
     expect(calls).toEqual(["release-S", "release-E", "companion"]);
   });
 
+  test("an already-live proxy accepts a carry-only sync notice", async () => {
+    const lines: string[] = [];
+    const notice = "OpenAI model discovery is unavailable (network); kept 2 previously published OpenAI models.";
+    const result = await ensureProxyLifecycle({
+      logger: { info: line => lines.push(line), warn: line => lines.push(line), error: line => lines.push(line) },
+      io: baseIo({
+        findLive: async () => ({ pid: 42, port: 10123, source: "runtime" }),
+        syncLive: async () => ({ status: "applied", ok: true,
+          notice,
+          catalogQuality: "live", catalogWritten: false, cacheSynced: false,
+          catalogState: { state: "not_running", processes: [], catalogMtimeMs: null },
+        }),
+      }),
+    });
+    expect(result).toMatchObject({ ok: true, state: "running", changed: false, notice });
+    expect(result.errorCode).toBeUndefined();
+    expect(lines.filter(line => line === notice)).toHaveLength(1);
+  });
+
   test("a failed current sync stays fatal", async () => {
     const result = await ensureProxyLifecycle({
       io: baseIo({

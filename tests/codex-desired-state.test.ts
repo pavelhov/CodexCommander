@@ -212,6 +212,12 @@ describe("the startup gate", () => {
     expect(ports).toEqual([43210]);
   });
 
+  test("startup carries a nonblocking discovery notice to the foreground logger", async () => {
+    const notice = "OpenAI model discovery is unavailable (network); kept 2 previously published OpenAI models.";
+    const result = await syncCodexOnStartIfEnabled(10100, {}, async () => ({ ok: true, notice }));
+    expect(result).toMatchObject({ ran: true, notice });
+  });
+
   /**
    * The swallow stays, and is asserted rather than assumed. A provider fetch
    * failing at startup must not stop the proxy from coming up — swallowing a

@@ -25,6 +25,7 @@ import { activeCodexModelsCachePath, readCodexCatalogPath } from "../codex/catal
 import { getCodexRoutingKind } from "../codex/inject";
 import type { CodexRoutingKind } from "../codex/routing-document";
 import { syncModelsToCodex, type CodexSyncResult } from "../codex/sync";
+import { withNativeDiscoveryLogsSuppressed } from "../codex/catalog/native-discovery-log";
 import {
   acquireProxyLifecycleAuthority,
   type ProxyLifecycleAuthority,
@@ -133,7 +134,7 @@ export async function syncCodexCatalogForCli(
   // the listener. Cross-process catalog serialization still protects a legacy
   // same-home proxy whose runtime record was lost.
   if (!live || live.source !== "runtime" || live.pid === null) {
-    return deps.syncModelsToCodex();
+    return withNativeDiscoveryLogsSuppressed(() => deps.syncModelsToCodex());
   }
   try {
     const headers = proxyLifecycleLockLeaseHeaders(lifecycleLease);
@@ -155,6 +156,11 @@ export async function syncCodexCatalogForCli(
     if (error instanceof RuntimeApiError && hasCatalogActivationReceipt(error.body)) return error.body;
     throw error;
   }
+}
+
+/** One user-facing discovery line for both local and live `ccx sync`. */
+export function reportCliNativeDiscoveryNotice(result: Pick<CodexSyncResult, "ok" | "notice">): void {
+  if (result.ok && result.notice) console.warn(result.notice);
 }
 
 interface FileFingerprint {

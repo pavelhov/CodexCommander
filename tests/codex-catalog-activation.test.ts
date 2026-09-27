@@ -18,6 +18,7 @@ import { handleAgentSettingsRoutes } from "../src/server/management/agent-settin
 import type { ManagementContext } from "../src/server/management/context";
 import type { ProxyLifecycleAuthority } from "../src/server/proxy-lifecycle-authority";
 import type { CodexCommanderConfig } from "../src/types";
+import { resetNativeLiveCatalogStateForTests } from "../src/codex/catalog/native-live";
 
 let previousCodexHome: string | undefined;
 let codexHome = "";
@@ -343,6 +344,7 @@ function routeContext(options: {
 
 describe("catalog activation management routes", () => {
   test("GET returns the additive no-store activation observation", async () => {
+    resetNativeLiveCatalogStateForTests();
     const response = await handleCatalogActivationRoutes(routeContext({
       method: "GET",
       path: "/api/codex-catalog/status",
@@ -350,6 +352,7 @@ describe("catalog activation management routes", () => {
     expect(response?.status).toBe(200);
     expect(response?.headers.get("cache-control")).toBe("no-store");
     expect(await response?.json()).toMatchObject({
+      nativeDiscovery: { source: "pending", reason: null, fetchedAt: null },
       activation: {
         workers: { status: "reload_required" },
         apply: { required: true, allowed: false, reason: "confirmed-launch-required" },
@@ -911,6 +914,31 @@ describe("catalog activation management routes", () => {
       outcome: "blocked",
       activation: { catalog: { status: "pending" } },
     });
+  });
+
+  test("a carried native discovery notice does not block HTTP Apply", async () => {
+    const cfg = config({ multiAgentMode: "v2" });
+    let applied = 0;
+    const response = await handleCatalogActivationRoutes(routeContext({
+      method: "POST",
+      path: "/api/codex-catalog/apply",
+      principal: "confirmed-gui-session",
+      cfg,
+      body: { expectedDesiredRevision: codexCatalogDesiredRevision(cfg), confirmInterrupt: true },
+      sync: async () => ({
+        status: "applied", ok: true, added: 0,
+        catalogPath: join(codexHome, "codexcommander-catalog.json"),
+        catalogExists: true, catalogWritten: false, cacheSynced: false,
+        catalogQuality: "live", rehydrated: 0, message: "synchronized",
+        notice: "OpenAI model discovery is unavailable (network); kept 2 previously published OpenAI models.",
+      }),
+      apply: async () => {
+        applied += 1;
+        return { outcome: "applied", staleWorkerCount: 1, stoppedWorkerCount: 1, survivingWorkerCount: 0 };
+      },
+    }));
+    expect(response?.status).toBe(200);
+    expect(applied).toBe(1);
   });
 
   test("a stale desired revision is superseded before convergence or signaling", async () => {

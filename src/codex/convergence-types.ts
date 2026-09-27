@@ -98,12 +98,13 @@ export interface CodexObservedState {
   };
 }
 
-export type CatalogNotice = "provider-auth" | "provider-network" | "fallback";
+export type CatalogNotice = "provider-auth" | "provider-network" | "fallback" | "native-discovery";
 
 /** Sanitized catalog fact safe to append to management mutation responses. */
 export type CatalogDisposition =
   | { status: "committed"; changed: boolean; degraded: boolean;
-      notices: readonly CatalogNotice[] }
+      notices: readonly CatalogNotice[];
+      nativeDiscovery?: Readonly<{ reason: string; kept: number }> }
   | { status: "skipped";
       reason: "not-requested" | "catalog-unavailable" | "busy" | "stale" | "refused";
       retryable: boolean }

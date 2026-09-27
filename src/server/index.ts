@@ -863,13 +863,23 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           throw error;
         }
         const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, loadBundledCodexCatalog, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { carriedNativeDiscoveryRows } = await import("../codex/catalog/native-carry");
+        const { readOwnerCheckedPublishedNativeCatalog } = await import("../codex/catalog/published-native");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
-        const nativeSlugs = includeNativeOpenAi ? nativeOpenAiSlugs() : [];
+        const nativePeek = peekNativeLiveCatalog();
+        const publishedNativeRows = nativePeek.catalog === null && includeNativeOpenAi
+          ? carriedNativeDiscoveryRows(config, nativePeek, readOwnerCheckedPublishedNativeCatalog())
+          : [];
+        const carriedSlugs = new Set(publishedNativeRows.map(entry => entry.slug as string));
+        // With no carried rows this is exactly the base mode-less native set.
+        const nativeSlugs = includeNativeOpenAi
+          ? [...new Set([...nativeOpenAiSlugs(), ...carriedSlugs])]
+          : [];
         const disabledNatives = disabledNativeSlugs(config);
         const disabledModels = new Set(config.disabledModels ?? []);
-        const shadowedNativeSlugs = configuredNativeAliasSlugs(config);
-        const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
+        const shadowedNativeSlugs = configuredNativeAliasSlugs(config, {}, carriedSlugs);
+        const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config, {}, carriedSlugs);
         const accountSelectors = includeAccountBoundNativeOpenAi
           ? visibleCodexAccountSelectors(config)
           : [];
@@ -883,7 +893,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // extra fields (backward-safe). Ids are the claude-opus-4-8-{code} Desktop
         // aliases; legacy claude-ccx2-* ids keep decoding via resolveAlias. Detection:
         // anthropic-version header (Claude Code sends it) or explicit ?flavor=anthropic.
-        // Codex catalog (client_version) and the OpenAI list shape below stay byte-identical.
+        // Codex catalog (client_version) and the OpenAI list shape below retain their existing shapes.
         const wantsAnthropicList = req.headers.get("anthropic-version") !== null
           || url.searchParams.get("flavor") === "anthropic";
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
@@ -920,12 +930,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // Account rows use the same hidden-inclusive supported set as on-disk sync. This lets a
           // newly re-enabled native reappear under each selector before the next sync, while the
           // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
-          const catalogNativeSlugs = accountSelectors.length > 0
-            ? nativeOpenAiSlugs()
-            : nativeSlugs;
+          const catalogNativeSlugs = nativeSlugs;
           const nativeSourceEntries = [
-            ...(peekNativeLiveCatalog().catalog?.models ?? []),
+            ...(nativePeek.catalog?.models ?? []),
             ...(loadBundledCodexCatalog()?.models ?? []),
+            ...publishedNativeRows,
           ];
           const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, featured, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs, new Set(), nativeSourceEntries);
           return jsonResponse({
@@ -933,6 +942,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
               entries,
               disabledModels,
               accountSelectors.length > 0,
+              {},
+              carriedSlugs.size > 0 ? new Set(nativeSlugs) : undefined,
             ),
           }, 200, req, config);
         }
@@ -976,12 +987,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // for both bare and qualified rows. Without selectors, the live catalog continues to own
         // bare availability.
         const selectorNativeSlugs = accountSelectors.length > 0
-          ? nativeOpenAiSlugs().filter(slug => !disabledNatives.has(slug))
+          ? nativeSlugs.filter(slug => !disabledNatives.has(slug))
           : [];
         const visibleNatives = includeNativeOpenAi
           ? accountSelectors.length > 0
             ? selectorNativeSlugs.filter(slug => !shadowedNativeSlugs.has(slug))
-            : visibleNativeSlugs(config)
+            : [...new Set([...visibleNativeSlugs(config), ...carriedSlugs])]
+              .filter(slug => !disabledNatives.has(slug) && !shadowedNativeSlugs.has(slug))
           : [];
         const visibleAccountNatives = accountSelectors.flatMap(selector =>
           selectorNativeSlugs.flatMap(metadataId => {

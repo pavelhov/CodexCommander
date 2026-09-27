@@ -60,7 +60,11 @@ function isCatalogDisposition(value: unknown): value is CatalogDisposition {
     return typeof disposition.changed === "boolean"
       && typeof disposition.degraded === "boolean"
       && Array.isArray(disposition.notices)
-      && disposition.notices.every(notice => notice === "provider-auth" || notice === "provider-network" || notice === "fallback");
+      && (disposition.nativeDiscovery === undefined || (
+        typeof disposition.nativeDiscovery === "object" && disposition.nativeDiscovery !== null
+        && typeof (disposition.nativeDiscovery as Record<string, unknown>).reason === "string"
+        && typeof (disposition.nativeDiscovery as Record<string, unknown>).kept === "number"))
+      && disposition.notices.every(notice => notice === "provider-auth" || notice === "provider-network" || notice === "fallback" || notice === "native-discovery");
   }
   if (disposition.status === "skipped") {
     return ["not-requested", "catalog-unavailable", "busy", "stale", "refused"].includes(String(disposition.reason))

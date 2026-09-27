@@ -92,6 +92,8 @@ export interface ProxyLifecycleResult {
   pid: number | null;
   port: number | null;
   message: string;
+  /** Nonblocking native discovery carry explanation from the running proxy. */
+  notice?: string;
   setupRequired?: ProxySetupRequirement;
   /** Additive catalog-apply fields consumed by the native companion. */
   catalogUpdated?: boolean;
@@ -122,6 +124,7 @@ export interface ProxyCatalogSyncOutcome {
   skippedReason?: "desired_disabled" | "external_provider";
   message?: string;
   warning?: string;
+  notice?: string;
   catalogQuality?: "live" | "retained" | "native-only";
   catalogWritten?: boolean;
   cacheSynced?: boolean;
@@ -357,6 +360,7 @@ function lifecycleResult(
     changed?: boolean;
     live?: LiveProxy | null;
     message: string;
+    notice?: string;
     errorCode?: ProxyLifecycleResult["errorCode"];
     setupRequired?: ProxySetupRequirement;
     catalogUpdated?: boolean;
@@ -375,6 +379,7 @@ function lifecycleResult(
     pid: options.live?.pid ?? null,
     port: options.live?.port ?? null,
     message: options.message.slice(0, 240),
+    ...(options.notice ? { notice: options.notice.slice(0, 500) } : {}),
     ...(options.setupRequired ? { setupRequired: options.setupRequired } : {}),
     ...(options.catalogUpdated !== undefined ? { catalogUpdated: options.catalogUpdated } : {}),
     ...(options.codexRestartRequired !== undefined
@@ -760,6 +765,7 @@ async function syncLiveProxy(
         ? body.message
         : "CodexCommander is running, but its Codex model catalog did not synchronize.",
       ...(typeof body?.warning === "string" ? { warning: body.warning } : {}),
+      ...(typeof body?.notice === "string" ? { notice: body.notice } : {}),
       lifecycleErrorCode: "SYNC_FAILED",
     };
     logger.warn(catalogSync.message ?? "Model catalog sync failed.");
@@ -1294,6 +1300,7 @@ export async function ensureProxyLifecycleUnderLock(
   }
   syncProblem = catalogSyncFailure(syncResult, config);
   syncNotice = catalogSyncNotice(syncResult);
+  if (!syncProblem && syncResult.ok && syncResult.notice) logger.info(syncResult.notice);
   if (action === "start" && startPreparation.setupRequired) {
     return lifecycleResult(action, "running", {
       ok: true,
@@ -1301,6 +1308,7 @@ export async function ensureProxyLifecycleUnderLock(
       live,
       message: "CodexCommander is running. Open Codex once, then route Codex through the proxy.",
       setupRequired: startPreparation.setupRequired,
+      notice: syncResult.notice,
     });
   }
   if (syncProblem) {
@@ -1326,6 +1334,7 @@ export async function ensureProxyLifecycleUnderLock(
       changed: preparedChanged || startedHere,
       live,
       message: syncNotice.message,
+      notice: syncResult.notice,
       errorCode: syncNotice.errorCode,
       catalogUpdated: syncNotice.catalogUpdated,
       codexRestartRequired: syncNotice.codexRestartRequired,
@@ -1339,6 +1348,7 @@ export async function ensureProxyLifecycleUnderLock(
     changed: preparedChanged || startedHere,
     live,
     message: startedHere ? "CodexCommander proxy started." : "CodexCommander proxy is already running.",
+    notice: syncResult.notice,
   });
 }
 
