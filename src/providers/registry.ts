@@ -359,8 +359,9 @@ const THINKING_BUDGET_MODELS = [
 ];
 const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"];
 /**
- * Pinned last-known-good OpenCode Go lineup (25 ids): the exact id set advertised by
- * `GET https://opencode.ai/zen/go/v1/models`, verified 2026-08-05. That endpoint is
+ * Pinned OpenCode Go lineup (28 ids): the 25-id snapshot from 2026-08-05 plus
+ * DeepSeek V4.1 Flash, GLM-5.3 Flash, and Qwen3.8 Flash, verified 2026-09-27.
+ * `GET https://opencode.ai/zen/go/v1/models` is
  * existence-only — it returns ids without context/output/pricing metadata — so this list is
  * the catalog seed, and the registry-only discovery filter below admits exactly these ids:
  * any other model upstream starts (or stops) advertising is quarantined rather than guessed
@@ -381,9 +382,9 @@ const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwe
 const OPENCODE_GO_MODELS = [
   "minimax-m3", "minimax-m2.7", "minimax-m2.5",
   "kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
-  "glm-5.2", "glm-5.1", "glm-5",
+  "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
   "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash",
-  "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
   "mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
   "hy3", "hy3-preview",
   "gpt-5.6-luna", "grok-4.5",
@@ -1179,14 +1180,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelWireDefaults: {
       ...Object.fromEntries(OPENCODE_GO_RESPONSES_WIRE_MODELS.map(id => [id, "openai-responses"])),
     },
-    // Zen Go context windows not covered by the generated jawcode bundle (qwen3.8-max and
-    // gpt-5.6-luna have no bundle row yet): official data pages
-    // https://opencode.ai/data/qwen/qwen3-8-max (1M) and
-    // https://opencode.ai/data/openai/gpt-5-6-luna (1.1M — the OpenAI API value 1,050,000).
+    // Zen Go context windows not covered by the generated jawcode bundle:
+    // https://stats.opencode.ai/data/zhipu/glm-5-3-flash and
+    // https://stats.opencode.ai/data/qwen/qwen3-8-flash (both 1M), plus the
+    // previously pinned Qwen3.8 Max and GPT-5.6 Luna values.
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       "deepseek-v4.1-flash": 1_000_000,
+      "glm-5.3-flash": 1_000_000,
       "qwen3.8-max": 1_000_000,
+      "qwen3.8-flash": 1_000_000,
       "gpt-5.6-luna": 1_050_000,
     },
     // qwen3.8-max (text/image/video) and gpt-5.6-luna (text/image/pdf) are multimodal upstream;
@@ -1194,7 +1197,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelInputModalities: {
       "kimi-k3": ["text", "image"],
       "deepseek-v4.1-flash": ["text", "image"],
+      "glm-5.3-flash": ["text", "image"],
       "qwen3.8-max": ["text", "image"],
+      "qwen3.8-flash": ["text", "image"],
       "gpt-5.6-luna": ["text", "image"],
     },
     modelReasoningEfforts: {

@@ -296,7 +296,8 @@ and 30-day observations are local usage estimates, not live remaining quota or b
 authoritative limit event is shown only after the upstream reports a concrete limit event (and, when
 provided, its reset).
 
-The provider pins the current Zen Go lineup (26 model ids, including `deepseek-v4.1-flash`) as
+The provider pins 28 verified Zen Go model ids, including `deepseek-v4.1-flash`,
+`glm-5.3-flash`, and `qwen3.8-flash`, as
 its static catalog. Live `/v1/models` discovery is authoritative on the canonical host; ids
 outside the trusted set are quarantined rather than routed. Transports follow the official
 endpoint table: Qwen and MiniMax models go over Anthropic Messages, `gpt-5.6-luna` and `grok-4.5`

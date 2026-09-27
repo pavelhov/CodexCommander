@@ -71,6 +71,33 @@ describe("OpenCode Go session affinity", () => {
     expect(outbound[0]?.headers.get("user-agent")).toBe("CodexCommander");
   });
 
+  test("keeps the session header across Go's Chat, Anthropic, and Responses wires", async () => {
+    const outbound: Array<{ url: string; headers: Headers }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push({ url: String(input), headers: new Headers(init?.headers) });
+      return Response.json({ choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] });
+    }) as typeof fetch;
+    const config = { providers: { "opencode-go": goProvider() } } as unknown as CodexCommanderConfig;
+    for (const [model, path] of [
+      ["glm-5.3-flash", "/chat/completions"],
+      ["qwen3.8-flash", "/messages"],
+      ["qwen3.8-max", "/messages"],
+      ["gpt-5.6-luna", "/responses"],
+    ]) {
+      const req = new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", "thread-id": `go-${model}` },
+        body: JSON.stringify({ model: `opencode-go/${model}`, input: "Say OK", stream: true }),
+      });
+      const response = await handleResponses(req, config, { model: "", provider: "" });
+      await response.text();
+      const sent = outbound.at(-1);
+      expect(sent?.url).toBe(`https://opencode.ai/zen/go/v1${path}`);
+      expect(sent?.headers.get("x-opencode-session")).toMatch(/^ccx_[0-9a-f]{32}$/);
+      expect(sent?.headers.get("user-agent")).toBe("CodexCommander");
+    }
+  });
+
   test("keeps an explicit client session through the Chat Completions bridge", async () => {
     const outbound: Headers[] = [];
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

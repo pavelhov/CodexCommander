@@ -21,7 +21,12 @@ export function resolveOpenCodeGoTransport(
   headers: Headers,
   clientMetadata?: unknown,
 ): CodexCommanderProviderConfig {
-  if (providerName !== "opencode-go" || !providerMatchesRegistryTransport(providerName, provider)) return provider;
+  // The router may already have pinned this model to Go's Anthropic or Responses
+  // wire. Verify the canonical key destination against the registry's base adapter,
+  // while accepting only Go's three documented wire adapters.
+  if (providerName !== "opencode-go"
+    || !["openai-chat", "anthropic", "openai-responses"].includes(provider.adapter)
+    || !providerMatchesRegistryTransport(providerName, { ...provider, adapter: "openai-chat" })) return provider;
   const hasSession = hasHeader(provider.headers, SESSION_HEADER);
   const hasUserAgent = hasHeader(provider.headers, USER_AGENT_HEADER);
   if (hasSession && hasUserAgent) return provider;

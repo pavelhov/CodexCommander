@@ -1355,7 +1355,7 @@ export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
  */
 export const OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS = [
   "minimax-m2.5", "minimax-m2.7", "minimax-m3",
-  "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max",
+  "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash",
 ] as const;
 
 const ANTHROPIC_WIRE_MODELS: Record<string, ReadonlySet<string>> = {
