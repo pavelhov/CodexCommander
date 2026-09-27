@@ -36,6 +36,10 @@ function tempConfigDir(): string {
 
 const CHATGPT_RESOURCES = "/Applications/ChatGPT.app/Contents/Resources";
 
+// ChatGPT.app bundle discovery only runs on macOS, and these fixtures key the
+// fake bundle with POSIX paths, so the layout tests are skipped on Windows.
+const macOsBundleTest = test.skipIf(process.platform === "win32");
+
 interface FakeBundleEntry {
   kind: "file" | "dir";
   mode?: number;
@@ -590,7 +594,7 @@ describe("resolveCodexRuntime", () => {
     expect(result.runtime.source).toBe("bundled");
   });
 
-  test("discovers the ChatGPT.app codex-cli package layout and skips directories and sound files", () => {
+  macOsBundleTest("discovers the ChatGPT.app codex-cli package layout and skips directories and sound files", () => {
     const entry = `${CHATGPT_RESOURCES}/codex-cli/bin/codex`;
     const probed: string[] = [];
     const inner = createBundledCatalogExec({ versionByPath: { [entry]: "codex-cli 0.158.0-alpha.2.1" } });
@@ -613,7 +617,7 @@ describe("resolveCodexRuntime", () => {
       .toBe(false);
   });
 
-  test("recovers from a failing configured wrapper under the menu-bar bare PATH", () => {
+  macOsBundleTest("recovers from a failing configured wrapper under the menu-bar bare PATH", () => {
     const configDir = tempConfigDir();
     const configured = "/Users/example/.local/bin/codex";
     persistCodexRuntime({ command: configured, version: "0.157.1", source: "path" }, { configDir });
@@ -640,7 +644,7 @@ describe("resolveCodexRuntime", () => {
     expect(persisted?.selectedVersion).toBe("0.158.0-alpha.2.1");
   });
 
-  test("rejects codex-package.json entrypoints that escape the package directory", () => {
+  macOsBundleTest("rejects codex-package.json entrypoints that escape the package directory", () => {
     const fallback = `${CHATGPT_RESOURCES}/codex-cli/bin/codex`;
     for (const entrypoint of ["../../evil", "/usr/local/bin/evil", "bin/../../codex"]) {
       const bundleFs = fakeBundleFs({
@@ -670,7 +674,7 @@ describe("resolveCodexRuntime", () => {
     }
   });
 
-  test("prefers the legacy Resources/codex binary when both layouts exist", () => {
+  macOsBundleTest("prefers the legacy Resources/codex binary when both layouts exist", () => {
     const legacy = `${CHATGPT_RESOURCES}/codex`;
     const bundleFs = fakeBundleFs({
       [legacy]: { kind: "file", mode: 0o100755 },
