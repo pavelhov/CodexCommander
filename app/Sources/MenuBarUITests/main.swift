@@ -1499,7 +1499,21 @@ runner.test("ui: stop-and-quit exits only after a confirmed stopped outcome") {
     )
 }
 
-runner.test("ui: failed stop offers an explicit app-only exit") {
+runner.test("ui: ordinary app termination leaves proxy routing and intent alone") {
+    let lifecycle = RecordingLifecycleRunner(resultState: .running)
+    var confirmations = 0
+    let delegate = AppDelegate(
+        appBundleLocation: .stable,
+        actions: ActionCoordinator(lifecycle: lifecycle),
+        lifecycleConfirmation: { _ in confirmations += 1; return true }
+    )
+    runner.equal(delegate.applicationShouldTerminate(app), .terminateNow)
+    spinMainRunLoop(seconds: 0.05)
+    runner.equal(lifecycle.recordedActions, [])
+    runner.equal(confirmations, 0)
+}
+
+runner.test("ui: explicit failed Stop and Quit offers an app-only exit") {
     for quitAnyway in [false, true] {
         let lifecycle = RecordingLifecycleRunner(resultState: .running)
         var offeredExit = false
@@ -1514,7 +1528,7 @@ runner.test("ui: failed stop offers an explicit app-only exit") {
             },
             terminateApplication: { terminated = true }
         )
-        runner.equal(delegate.applicationShouldTerminate(app), .terminateCancel)
+        delegate.stopAndQuitForTesting()
         let deadline = Date().addingTimeInterval(2)
         while !offeredExit && Date() < deadline { spinMainRunLoop(seconds: 0.01) }
         runner.equal(lifecycle.recordedActions, [.stop])
@@ -2142,7 +2156,7 @@ MainActor.assumeIsolated {
         spinMainRunLoop(seconds: 0.1)
         runner.equal(done, true)
     }
-    runner.test("updater UI: ordinary quit records newer OFF then canonical Stop during pending update") {
+    runner.test("updater UI: ordinary termination leaves pending update and proxy intent alone") {
         let helper = RecordingUpdateRunner([.finishRequired, .finishRequired], capturedId: UUID().uuidString)
         let updater = AppUpdater(bundle: .main, helper: helper, confirmInterruption: { false })
         let lifecycle = RecordingLifecycleRunner(resultState: .stopped)
@@ -2153,16 +2167,16 @@ MainActor.assumeIsolated {
         var done = false
         Task { @MainActor in
             _ = await updater.session.recover()
-            runner.equal(delegate.applicationShouldTerminate(app), .terminateCancel)
+            runner.equal(delegate.applicationShouldTerminate(app), .terminateNow)
             done = true
         }
         spinMainRunLoop(seconds: 0.15)
         runner.equal(done, true)
-        runner.equal(lifecycle.recordedActions, [.stop])
-        runner.equal(terminated, true)
+        runner.equal(lifecycle.recordedActions, [])
+        runner.equal(terminated, false)
         Task { @MainActor in
             let commands = await helper.commands
-            runner.equal(commands.map(\.action), [.reconcile, .recordOff])
+            runner.equal(commands.map(\.action), [.reconcile])
         }
         spinMainRunLoop(seconds: 0.05)
     }

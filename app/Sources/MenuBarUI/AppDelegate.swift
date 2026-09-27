@@ -9,7 +9,6 @@ private enum CodexRouteConfirmationError: Error {
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var appUpdater: AppUpdater?
-    private var normalTerminationAuthorized = false
     private var terminateApplication: () -> Void = { NSApp.terminate(nil) }
     private var updaterStartupPending = false
     private var statusItem: NSStatusItem?
@@ -261,9 +260,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        if normalTerminationAuthorized || appUpdater?.authorizedTermination == true { return .terminateNow }
-        stopCodexCommanderAndQuit(nil)
-        return .terminateCancel
+        // macOS also asks this during logout, restart, and shutdown. Those are
+        // app exits, not an explicit request to stop the background proxy or
+        // restore native Codex routing. Only Stop and Quit performs that action.
+        return .terminateNow
     }
 
     public func applicationDidBecomeActive(_ notification: Notification) {
@@ -499,7 +499,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.setLifecycleControlsEnabled(false)
         refreshCatalogApplyAvailability()
         Task { [actions, coordinator] in
-            let outcome = await CompanionLaunchPolicy.run(using: actions)
+            let outcome = await CompanionLaunchPolicy.runWithCatalogBusyRetry(using: actions)
             await coordinator?.forceRefresh()
             await MainActor.run { [weak self] in
                 guard let self else { return }
@@ -622,7 +622,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 self.lifecycleInFlight = false
                 self.updateApplicationMenu()
                 if shouldTerminate {
-                    self.normalTerminationAuthorized = true
                     self.terminateApplication()
                     return
                 }
@@ -646,7 +645,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 self.controller.setLifecycleControlsEnabled(true)
                 self.refreshCatalogApplyAvailability()
                 if quitWhenStopped && self.confirmQuitAfterFailedStop() {
-                    self.normalTerminationAuthorized = true
                     self.terminateApplication()
                 }
             }
@@ -910,6 +908,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     package func startProxyOnLaunchForTesting() { startProxyOnLaunch() }
     package func startProxyForTesting() { startProxy() }
     package func restartProxyForTesting() { restartProxy() }
+    package func stopAndQuitForTesting() { stopCodexCommanderAndQuit(nil) }
     package func recheckCodexCatalogForTesting() {
         presentCatalogUpdate(staleWorkerCount: nil)
         recheckCodexCatalog()

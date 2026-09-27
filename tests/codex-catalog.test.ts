@@ -1248,7 +1248,10 @@ describe("Codex catalog routed normalization", () => {
       .map(entry => String(entry.slug));
 
   test("convergence-style build keeps exactly the featured five in the spawn_agent window", () => {
-    const entries = buildCatalogEntries(nativeTemplate(), ROSTER_NATIVE_SLUGS, ROSTER_ROUTED_MODELS, FEATURED_ROSTER);
+    const entries = buildCatalogEntries(nativeTemplate(), ROSTER_NATIVE_SLUGS, [
+      ...ROSTER_ROUTED_MODELS,
+      { provider: "other", id: "unfeatured", owned_by: "other" },
+    ], FEATURED_ROSTER);
 
     // Unfeatured natives sort strictly below the featured block: upstream priorities
     // (terra=2, luna=3) may NOT leak into the window.
@@ -1257,6 +1260,8 @@ describe("Codex catalog routed normalization", () => {
       .toBeGreaterThan(FEATURED_ROSTER.length - 1);
     expect(entries.find(e => e.slug === "gpt-5.6-luna")?.priority as number)
       .toBeGreaterThan(FEATURED_ROSTER.length - 1);
+    expect(entries.find(e => e.slug === "gpt-5.6-terra")?.priority as number)
+      .toBeLessThan(entries.find(e => e.slug === "other/unfeatured")?.priority as number);
 
     for (const surface of ["v1", "v2"] as const) {
       const roster = effectiveSubagentRoster(FEATURED_ROSTER, surface, entries);
