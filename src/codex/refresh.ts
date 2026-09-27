@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { readCodexCatalogPath } from "./catalog";
 import { primeBundledCatalogForGatherIfNeeded } from "./catalog/bundled";
-import { nativeLiveCatalogSnapshotPath, refreshNativeLiveCatalog } from "./catalog/native-live";
+import { refreshNativeLiveCatalog } from "./catalog/native-live";
 import type { ComboCatalogOmission } from "./catalog/aggregation";
 import type { CatalogQuality } from "./catalog/sync";
 import { withConfigMutationLockSync } from "../config";
@@ -58,14 +58,7 @@ const defaultDeps: RefreshDeps = {
   // bundled memo here so a fresh home still has a native template to converge.
   primeCatalogSource: async () => {
     primeBundledCatalogForGatherIfNeeded();
-    const native = await refreshNativeLiveCatalog();
-    // A native-main profile switch can temporarily deny the account claim.
-    // Keep the last good catalog intact until its retained native rows can be
-    // admitted; otherwise this sync would replace them with the older bundle.
-    // Other degraded outcomes (runtime/network/response/snapshot) are handled
-    // by the central no-downgrade guard in gatherCodexCatalogCandidate.
-    if (native.source === "unavailable" && native.reason === "busy"
-      && existsSync(nativeLiveCatalogSnapshotPath())) throw new Error("native catalog busy");
+    await refreshNativeLiveCatalog();
   },
   existsSync,
 };

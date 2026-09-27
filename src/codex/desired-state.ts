@@ -179,7 +179,7 @@ export async function syncCodexOnStartIfEnabled(
   config: Pick<CodexCommanderConfig, "clientIntegrations">,
   sync: CodexStartupSync = defaultStartupSync,
   readinessGate?: ReadinessGate,
-): Promise<{ ran: boolean; catalogWritten: boolean; cacheSynced: boolean }> {
+): Promise<{ ran: boolean; catalogWritten: boolean; cacheSynced: boolean; notice?: string }> {
   if (!shouldSyncCodexOnStart(config)) {
     // The user explicitly turned Codex off: there is nothing to sync, so the
     // proxy is ready as soon as it is up. The gate is driven here so /readyz
@@ -199,6 +199,7 @@ export async function syncCodexOnStartIfEnabled(
     ran: true,
     catalogWritten: outcome?.catalogWritten === true,
     cacheSynced: outcome?.cacheSynced === true,
+    ...(typeof outcome?.notice === "string" ? { notice: outcome.notice } : {}),
   };
 }
 

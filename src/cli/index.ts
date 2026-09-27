@@ -19,6 +19,7 @@ import {
   captureCatalogRestartFence,
   reportCatalogWorkerApply,
   syncCodexCatalogForCli,
+  reportCliNativeDiscoveryNotice,
   type CliCodexSyncResult,
   warnAfterCatalogWrite,
 } from "./catalog-activation";
@@ -334,6 +335,7 @@ switch (command) {
       // server intentionally keeps its logs out of this CLI process.
       console.log(synced.message);
     }
+    reportCliNativeDiscoveryNotice(synced);
     const synchronizedCatalogIsUsable = catalogSyncCanApply(synced, live !== null);
     if (restartCodex && synchronizedCatalogIsUsable) {
       // Explicit Apply also resolves a worker left stale by an earlier write,

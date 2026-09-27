@@ -213,6 +213,7 @@ export async function runForegroundStartupInitialization(
     undefined,
     readinessGate,
   );
+  if (startupSync.notice) logger.log(startupSync.notice);
   if (!startupSync.ran) logger.log("   Codex integration OFF; startup left Codex native.");
   if (startupSync.catalogWritten || startupSync.cacheSynced) {
     const warn = io.warnAfterCatalogWrite ?? (async () => {
@@ -489,6 +490,7 @@ export async function runForegroundProxyStart(
       logger.log(externalProviderPreserved
         ? `✅ Proxy already running (PID ${currentHomeLive.pid}, port ${currentHomeLive.port}); ${synced.message}`
         : `✅ Proxy already running (PID ${currentHomeLive.pid}, port ${currentHomeLive.port}); Codex now routes through it.`);
+      if (synced.ok && synced.notice) logger.log(synced.notice);
       return 0;
     }
     if (existingPid) removePidFn(existingPid);

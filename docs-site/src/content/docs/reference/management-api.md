@@ -181,6 +181,30 @@ applied, partial, superseded, and blocked outcomes. The endpoint never accepts a
 path from the caller, never queues an idle apply, and does not persist a separate activation
 snapshot.
 
+This response also includes `nativeDiscovery`, the state of native OpenAI model discovery:
+
+```json
+{ "nativeDiscovery": { "source": "pending", "reason": null, "fetchedAt": null } }
+```
+
+`source` is `pending` before this runtime has attempted a refresh, `live` for a list fetched from
+the service, `retained` for a matching last-good snapshot, or `unavailable` when no usable list is
+available. `reason` is `null` on success; otherwise it is one of `auth` (no usable ChatGPT sign-in: no auth
+file, no ChatGPT tokens including API-key-only files, or no account id), `credentials` (the auth file
+exists but could not be read or parsed; treated as temporary), `runtime` (no usable Codex runtime
+was found or probed), `network` (the request failed), `response` (the service response was unusable),
+`snapshot` (the account, home, or runtime changed during or after the fetch, or no snapshot matches),
+`disk` (the list was fetched but could not be saved as the last-good snapshot; the running proxy
+keeps using it in memory until restart), or `busy` (native traffic is temporarily blocked, such as
+during native profile-switch recovery or another refresh). Only the first two `auth` cases (no auth
+file or no ChatGPT tokens) remove previously published models; a missing account id and
+`credentials` keep them. `fetchedAt` is the ISO time of the
+fetched or retained list, or `null`. This status contains no tokens, account ids, identities, or
+paths. Catalog-refreshing mutation routes, including provider and combo changes and settings saves,
+return `catalogRefresh` with `status`, `changed`, advisory `degraded`, and `notices` (values:
+`fallback`, `provider-auth`, `provider-network`, `native-discovery`). When models are kept, it also
+includes `nativeDiscovery: { reason, kept }`.
+
 For scripts or the native companion, `ccx sync --restart-codex` remains the compatible advanced
 fallback. Quitting and reopening Codex Desktop is the reliable manual worker-replacement boundary.
 
@@ -367,8 +391,8 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
-| `POST /api/sync` | Sync the current model catalog into Codex without interrupting workers; returns `catalogQuality` (`live`, `retained`, or `native-only`), `rehydrated`, current Codex app-server `catalogState`, and additive `activation` evidence | 409 refused write authority; 500 failed sync |
-| `GET /api/codex-catalog/status` | Read the catalog activation state: desired configuration revision, deterministic on-disk catalog evidence, and whether verified current-user Codex workers have loaded it | — |
+| `POST /api/sync` | Sync the current model catalog into Codex without interrupting workers; returns `catalogQuality` (`live`, `retained`, or `native-only`), `rehydrated`, current Codex app-server `catalogState`, additive `activation` evidence, and an optional informational `notice` string when previously published OpenAI models outside the bundled catalog were kept. The notice does not block Apply, `ccx start`, or readiness | 409 refused write authority; 500 failed sync |
+| `GET /api/codex-catalog/status` | Read catalog activation state and native model discovery status: desired configuration revision, deterministic on-disk catalog evidence, worker activation evidence, and `nativeDiscovery` | — |
 | `POST /api/codex-catalog/apply` | Explicitly converge then apply the current catalog to verified stale Codex workers. The body must be `{ "expectedDesiredRevision": "…", "confirmInterrupt": true }`; the revision fence prevents applying a superseded choice. This browser endpoint accepts only the confirmed GUI session created by the single-use launch handoff | 400 invalid confirmation/body; 403 confirmed dashboard launch required; 409 superseded or unsafe worker identity; 503 apply busy (`Retry-After: 1`) |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |

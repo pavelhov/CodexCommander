@@ -146,6 +146,12 @@ export function resolveCodexHomeDir(deps: CodexHomeDeps = {}): string {
   return defaultCodexHome(deps);
 }
 
+/** One physical home identity for credential reads and native catalog ownership. */
+export function canonicalCodexHomeDir(path = resolveCodexHomeDir()): string {
+  const selected = resolve(path);
+  try { return realpathSync.native(selected); } catch { return selected; }
+}
+
 export type OrcaCodexHomeDiagnostic = {
   applicable: boolean;
   mismatch: boolean;

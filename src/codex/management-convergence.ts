@@ -102,9 +102,8 @@ export function createManagementConvergeCodex(
       // this preflight and capture the admitted snapshot again afterwards.
       captureCatalogAdmissionSnapshot(retainedConfig);
       primeBundledCatalogForGatherIfNeeded();
-      // The refresh outcome is intentionally not inspected here: the central
-      // gather guard (degradedNativeDiscoveryDrops) turns degraded native
-      // discovery into a retryable skip for every publish path.
+      // The gather carries previously published native rows when this refresh
+      // cannot provide an admitted catalog.
       await refreshNativeLiveCatalog();
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {

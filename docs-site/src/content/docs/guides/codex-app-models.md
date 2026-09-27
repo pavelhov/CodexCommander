@@ -155,10 +155,40 @@ CodexCommander finds the Codex runtime that ships inside the Codex desktop app, 
 starts with a minimal `PATH`. If the saved runtime cannot be probed at startup, CodexCommander keeps
 using the saved runtime selection so the matching last-good snapshot still applies.
 
-If native discovery fails and there is neither a matching snapshot nor a working bundled catalog,
-CodexCommander does not publish a smaller native list. It keeps the current Codex catalog, reports
-the sync as busy, and retries on the next sync or **Apply to Codex**. Models you disabled, native
-models turned off in settings, and a signed-out Codex account still update the catalog normally.
+When discovery is unavailable and the account and Codex home still match the last publication,
+CodexCommander keeps previously published OpenAI models while syncing other changes, including
+routed providers, combos, disabled models, and the roster. The degraded state is advisory: it never
+blocks **Apply to Codex**, `ccx start`, or readiness. A `native-discovery` notice appears only when
+models were kept that are not in the bundled catalog; its count includes only those models.
+
+The notice is informational and `ccx sync` prints it once while still exiting with code 0; `ccx
+start` also prints it once. Its exact text is:
+
+```text
+OpenAI model discovery is unavailable (<reason>); kept <n> previously published OpenAI models. Run `ccx sync` to retry; GET /api/codex-catalog/status shows the discovery reason.
+```
+
+Use `GET /api/codex-catalog/status` → `nativeDiscovery.reason` to inspect the cause. If the picker
+still looks stale after syncing, restart Codex or use **Apply to Codex** as described in
+[Refreshing model state](#refreshing-model-state).
+
+Kept models are bound to the account and Codex home. CodexCommander stores an opaque hash of the
+ChatGPT account and Codex home in `native-catalog-owner.json` in its config folder (`$CODEXCOMMANDER_HOME`,
+normally `~/.codexcommander`). The file has mode `0600` and contains no raw account id. Kept models
+never carry across accounts or Codex homes. If you switch accounts while discovery is down, only
+bundled OpenAI models appear until discovery recovers.
+
+A missing `auth.json` or one without ChatGPT tokens (including an API-key-only file) means you are
+signed out and removes kept models. An unreadable or half-written `auth.json` (`credentials` reason)
+or a missing account id is treated as temporary and keeps them. Other intentional removals still
+apply: disabled models, turning off native OpenAI models, switching `nativeCatalogMode` to
+`bundled-listed` (hidden models are not kept), or replacing a native model with a
+**Combos → Native OpenAI** alias. A fresh Codex home has no previously published models to keep.
+
+When discovery recovers, the next sync publishes the current list and removes models OpenAI retired
+or your account can no longer use. Until then, a retired model can remain in the picker. If the
+`disk` reason is reported, the list was fetched but could not be saved as the last-good snapshot;
+the running proxy keeps using it in memory until restart.
 
 ## Current stable model coverage
 

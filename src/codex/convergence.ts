@@ -75,7 +75,11 @@ import {
   shouldIncludeNativeOpenAi,
 } from "./catalog/metadata";
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./catalog/account-models";
-import { lastNativeDiscoveryStatus, nativeLiveCatalogSnapshotPath, peekNativeLiveCatalog } from "./catalog/native-live";
+import { carriedNativeDiscoveryRows } from "./catalog/native-carry";
+import { nativeDiscoveryLogsSuppressed } from "./catalog/native-discovery-log";
+import { currentNativeCatalogOwner, forgetNativeCatalogOwnerAfterWriteFailure, nativeAuthFileStamp, writeNativeCatalogOwner } from "./catalog/native-owner";
+export { carriedNativeDiscoveryRows } from "./catalog/native-carry";
+import { currentNativeLiveIdentity, lastNativeDiscoveryStatus, nativeLiveCatalogSnapshotPath, peekNativeLiveCatalog } from "./catalog/native-live";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { isMultiAgentV2Enabled } from "./features";
 import {
@@ -181,6 +185,9 @@ interface CandidateState {
   readonly sourceEvidence: CatalogSourceEvidence;
   readonly processLocal: CatalogProcessLocalEvidence;
   readonly nativeLiveIdentity: string | null;
+  readonly nativeOwnerToRecord: string | null;
+  readonly nativeAuthStamp: string;
+  readonly nativeDiscovery?: Readonly<{ reason: string; kept: number }>;
   readonly home: string;
   readonly targets: CatalogAdmissionSnapshot["targets"];
   readonly catalog: PreparedCatalogFileWrite;
@@ -199,6 +206,14 @@ interface CandidateState {
 }
 
 const candidateStates = new WeakMap<object, CandidateState>();
+const warnedNativeDiscovery = new Set<string>();
+function warnNativeDiscoveryCarry(reason: string, count: number): void {
+  if (nativeDiscoveryLogsSuppressed()) return;
+  const key = `${reason}:${count}`;
+  if (warnedNativeDiscovery.has(key)) return;
+  warnedNativeDiscovery.add(key);
+  console.warn(`[codexcommander] native model discovery degraded (reason=${reason}); kept ${count} previously published OpenAI models`);
+}
 const CATALOG_INPUT_IDENTITY_KEY = randomBytes(32);
 let nextCandidateSequence = 0;
 let convergenceReceipt: Readonly<{
@@ -223,6 +238,8 @@ function nativeLiveCatalogFrom(
   bytes: Uint8Array | null,
   current: ReturnType<typeof peekNativeLiveCatalog>,
 ): RawCatalog | null {
+  // Ephemeral disk-failure rows are admissible only for the identity selected by this peek.
+  if (current.reason === "disk" && current.identity !== null && current.catalog !== null) return current.catalog as RawCatalog;
   if (bytes === null || current.identity === null || current.catalog === null) return null;
   try {
     const envelope = JSON.parse(Buffer.from(bytes).toString("utf8")) as Record<string, unknown>;
@@ -247,36 +264,7 @@ function bareNativeOpenAiSlugs(catalog: RawCatalog | null): Set<string> {
   }));
 }
 
-/**
- * Native discovery is degraded when neither an identity-matched live nor a
- * retained native catalog is admitted and the last refresh did not report a
- * genuine logout, and the bundled runtime catalog is unavailable. Publishing then would shrink the native set to whatever the
- * (possibly empty) bundled catalog and documented additions happen to cover.
- * Returns the prior native slugs the candidate would drop; empty means publish.
- */
-export function degradedNativeDiscoveryDrops(
-  config: Readonly<CodexCommanderConfig>,
-  nativeLive: ReturnType<typeof peekNativeLiveCatalog>,
-  prior: RawCatalog | null,
-  prepared: RawCatalog,
-  bundledCatalogAvailable: boolean,
-  lastReason: ReturnType<typeof lastNativeDiscoveryStatus> = lastNativeDiscoveryStatus(),
-): string[] {
-  if (nativeLive.catalog !== null) return [];
-  // A working bundled runtime catalog is authoritative for retirements.
-  if (bundledCatalogAvailable) return [];
-  // Only a recorded non-auth refresh failure marks discovery as degraded; no
-  // refresh (or a genuine logout) leaves ordinary retirement semantics intact.
-  if (!lastReason?.reason || lastReason.reason === "auth") return [];
-  if (!shouldIncludeNativeOpenAi(config)) return [];
-  const intentional = new Set([
-    ...disabledNativeSlugs(config),
-    ...desktopAllowlistSuppressedNativeSlugs(config),
-  ]);
-  const kept = bareNativeOpenAiSlugs(prepared);
-  return [...bareNativeOpenAiSlugs(prior)].filter(slug => !kept.has(slug) && !intentional.has(slug));
-}
-
+/** Prior native rows authorized for this gather when live discovery is unavailable. */
 function normalizeJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalizeJsonValue);
   if (value !== null && typeof value === "object") {
@@ -446,6 +434,7 @@ function prepareCatalog(
   retainedCatalog: RawCatalog | null,
   liveNativeCatalog: RawCatalog | null,
   nativeRecoverySources: readonly (readonly RawEntry[])[] = [],
+  carriedNativeRows: readonly RawEntry[] = [],
 ): {
   catalog: RawCatalog;
   retainedRows: RawEntry[];
@@ -456,14 +445,17 @@ function prepareCatalog(
 } {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
-  const nativeSourceEntries = [...(liveNativeCatalog?.models ?? []), ...(source.catalog.models ?? [])];
+  const nativeSourceEntries = [...(liveNativeCatalog?.models ?? []), ...carriedNativeRows, ...(source.catalog.models ?? [])];
+  const carriedSlugs = new Set(carriedNativeRows.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : []));
+  const availableNativeSlugs = [...new Set([...nativeOpenAiSlugs(),
+    ...carriedNativeRows.flatMap(entry => typeof entry.slug === "string" ? [entry.slug] : [])])];
   const enabled = filterCatalogVisibleModels(routedModels, config);
   const featured = subagentRosterModels(config.subagentModels);
   const ordered = orderForSubagents(enabled, featured);
   const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
     ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
-  const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
+  const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config, {}, carriedSlugs);
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const enabledProviders = Object.entries(config.providers).filter(([, provider]) => provider.disabled !== true);
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
@@ -475,6 +467,7 @@ function prepareCatalog(
   const catalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
     [nativeSourceEntries, ...nativeRecoverySources],
+    new Set(availableNativeSlugs),
   );
   const routedEntries = buildCatalogEntries(
     template ? JSON.parse(JSON.stringify(template)) : null,
@@ -485,7 +478,7 @@ function prepareCatalog(
     ? []
     : buildCatalogEntries(
       template ? JSON.parse(JSON.stringify(template)) : null,
-      nativeOpenAiSlugs(),
+      availableNativeSlugs,
       [],
       featured,
       websocketsEnabled(config),
@@ -525,7 +518,7 @@ function prepareCatalog(
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
-    nativeOpenAiSlugs(),
+    availableNativeSlugs,
     suppressedBareNativeSlugs,
     nativeSourceEntries,
   );
@@ -651,17 +644,20 @@ export async function gatherCodexCatalogCandidate(
     }
 
     const active = catalogFrom(activeBytes);
+    const priorNativeEvidence = active ?? catalogFrom(keyedBackupBytes);
+    const admittedNativeStatus = nativeLiveCatalog === null
+      ? { ...nativeLiveStatus, catalog: null }
+      : nativeLiveStatus;
+    const carriedNativeRows = carriedNativeDiscoveryRows(snapshot.config, admittedNativeStatus, priorNativeEvidence, home.canonicalCodexHome);
+    const currentSupported = new Set(nativeOpenAiSlugs());
     const prepared = prepareCatalog(snapshot.config, source, active, routedModels, catalogFrom(retainedBytes), nativeLiveCatalog, [
       catalogFrom(keyedBackupBytes)?.models ?? [],
       catalogFrom(cacheBytes)?.models ?? [],
-    ]);
-    // No-downgrade guard shared by every publish path. Prior evidence is the
-    // active catalog, or the keyed backup when none is active; Commander's own
-    // models_cache is a projection of the catalog, not independent evidence.
-    const priorNativeEvidence = active ?? catalogFrom(keyedBackupBytes);
-    if (degradedNativeDiscoveryDrops(snapshot.config, nativeLiveStatus, priorNativeEvidence, prepared.catalog, source.source === "bundled-catalog-template").length > 0) {
-      return { kind: "disposition", disposition: { status: "skipped", reason: "busy", retryable: true } };
-    }
+    ], carriedNativeRows);
+    const preparedNative = bareNativeOpenAiSlugs(prepared.catalog);
+    // `kept` is discovery-only rows absent from the bundled supported set.
+    const carriedCount = carriedNativeRows.filter(entry => preparedNative.has(entry.slug as string)
+      && !currentSupported.has(entry.slug as string)).length;
     const preparedCatalog = prepared.catalog;
     const preparedCatalogBytes = catalogBytes(preparedCatalog);
     const preparedCache = {
@@ -677,6 +673,10 @@ export async function gatherCodexCatalogCandidate(
     if (source.source !== "bundled-catalog-template") notices.add("fallback");
     if (authOutcomes.some(outcome => outcome.state !== "available")) notices.add("provider-auth");
     if (prepared.retainedRows.length > 0) notices.add("provider-network");
+    if (carriedCount > 0) notices.add("native-discovery");
+    const nativeDiscovery = carriedCount > 0
+      ? { reason: lastNativeDiscoveryStatus()?.reason ?? nativeLiveStatus.reason ?? "snapshot", kept: carriedCount }
+      : undefined;
     const candidate = {} as CodexCatalogCandidate;
     const catalogChanged = !sameJsonDocument(activeBytes, preparedCatalog);
     const cacheChanged = !sameJsonDocument(cacheBytes, preparedCache);
@@ -703,6 +703,11 @@ export async function gatherCodexCatalogCandidate(
       sourceEvidence,
       processLocal,
       nativeLiveIdentity: nativeLiveStatus.identity,
+      nativeOwnerToRecord: nativeLiveCatalog !== null && nativeLiveStatus.identity !== null
+        && currentNativeLiveIdentity({ codexHome: home.canonicalCodexHome }) === nativeLiveStatus.identity
+        ? currentNativeCatalogOwner(home.canonicalCodexHome) : null,
+      nativeAuthStamp: nativeAuthFileStamp(home.canonicalCodexHome),
+      nativeDiscovery,
       home: home.canonicalCodexHome,
       targets: snapshot.targets,
       catalog: { path: paths.catalog, content: preparedCatalogBytes },
@@ -737,6 +742,10 @@ export async function gatherCodexCatalogCandidate(
 }
 
 function revalidateCandidate(state: CandidateState): CodexCatalogCommitResult | null {
+  if (nativeAuthFileStamp(state.home) !== state.nativeAuthStamp
+    || (state.nativeOwnerToRecord !== null && currentNativeCatalogOwner(state.home) !== state.nativeOwnerToRecord)) {
+    return { kind: "stale", reason: "source-observation" };
+  }
   if (peekNativeLiveCatalog().identity !== state.nativeLiveIdentity) {
     return { kind: "stale", reason: "source-observation" };
   }
@@ -829,6 +838,14 @@ function fixedCommit(state: CandidateState, permit: Parameters<typeof replaceAct
     if (state.retained && state.retainedChanged) {
       writeRetainedRoutedCatalogAtPath(state.retained.path, state.retained.models);
     }
+    if (state.nativeOwnerToRecord) {
+      try {
+        writeNativeCatalogOwner(state.nativeOwnerToRecord);
+      } catch {
+        forgetNativeCatalogOwnerAfterWriteFailure();
+        console.warn("[codexcommander] native catalog owner persistence failed (reason=disk)");
+      }
+    }
     return { kind: "committed", changed: state.changed, writes };
   } catch {
     return { kind: "failed", surface: "disk", writes };
@@ -869,10 +886,12 @@ export async function commitCodexCatalogCandidate(
   }
 }
 
-function projectCommit(result: CommitAttempt, notices: readonly CatalogNotice[]): CatalogDisposition {
+function projectCommit(result: CommitAttempt, notices: readonly CatalogNotice[], nativeDiscovery?: CandidateState["nativeDiscovery"]): CatalogDisposition {
   if (result.kind === "busy") return { status: "skipped", reason: "busy", retryable: true };
   if (result.kind === "committed") {
-    return { status: "committed", changed: result.changed, degraded: notices.length > 0, notices };
+    // `degraded` is advisory; Apply/readiness gate only on actual sync warnings.
+    return { status: "committed", changed: result.changed, degraded: notices.length > 0, notices,
+      ...(nativeDiscovery ? { nativeDiscovery } : {}) };
   }
   if (result.kind === "stale") return { status: "skipped", reason: "stale", retryable: true };
   if (result.kind === "refused") return { status: "skipped", reason: "refused", retryable: false };
@@ -933,6 +952,11 @@ export async function convergeCodexCatalog(
   const state = candidateStates.get(gathered.candidate as object)!;
   lifecycle.onCommitBegin?.();
   const committed = await commitCodexCatalogCandidate(gathered.candidate, request.deadlineMs);
+  if (committed.kind === "committed" && state.nativeDiscovery) {
+    warnNativeDiscoveryCarry(state.nativeDiscovery.reason, state.nativeDiscovery.kept);
+  } else if (committed.kind === "committed") {
+    warnedNativeDiscovery.clear();
+  }
   const catalogWritten = (committed.kind === "committed" || committed.kind === "failed")
     && committed.writes.catalog === "written";
   const cacheSynced = (committed.kind === "committed" || committed.kind === "failed")
@@ -941,7 +965,7 @@ export async function convergeCodexCatalog(
     || (committed.kind === "failed" && (catalogWritten || !state.catalogChanged));
   return {
     changed: committed.kind === "committed" ? committed.changed : false,
-    catalogRefresh: projectCommit(committed, state.notices),
+    catalogRefresh: projectCommit(committed, state.notices, state.nativeDiscovery),
     projection: {
       admittedGeneration: state.generation,
       admittedConfigAuthority: {

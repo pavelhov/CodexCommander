@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,11 +12,13 @@ import {
   catalogApplyFenceArtifactsStillMatch,
   catalogSyncCanApply,
   reportCatalogWorkerApply,
+  reportCliNativeDiscoveryNotice,
   syncCodexCatalogForCli,
   type CliCodexSyncResult,
 } from "../src/cli/catalog-activation";
 import { APPLY_CODEX_CATALOG_ACTION } from "../src/codex/catalog-apply";
 import type { CodexSyncResult } from "../src/codex/sync";
+import { refreshNativeLiveCatalog, resetNativeLiveCatalogStateForTests } from "../src/codex/catalog/native-live";
 import { RuntimeApiError } from "../src/cli/runtime-api";
 import {
   PROXY_ENSURE_LEASE_HEADER,
@@ -93,6 +95,49 @@ describe("CLI catalog activation orchestration", () => {
     expect(requests[0]?.headers.get(PROXY_START_LEASE_HEADER)).toBe("start-token");
     expect(events).toEqual(["acquire:true", "release"]);
     expect(result.catalogWritten).toBe(false);
+  });
+
+  test("live sync prints its nonblocking discovery notice exactly once", async () => {
+    const notice = "OpenAI model discovery is unavailable (network); kept 2 previously published OpenAI models.";
+    const lines: string[] = [];
+    const printed = spyOn(console, "warn").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      const result = await syncCodexCatalogForCli(
+        { pid: 41, port: 14100, hostname: "127.0.0.1", source: "runtime" },
+        {
+          syncModelsToCodex: async () => { throw new Error("unexpected local writer"); },
+          runtimeRequest: async () => liveSyncResult({ notice }),
+          acquireAuthority: async () => authority([]),
+        },
+      );
+      reportCliNativeDiscoveryNotice(result);
+      expect(catalogSyncCanApply(result, true)).toBe(true);
+      expect(lines).toEqual([notice]);
+    } finally { printed.mockRestore(); }
+  });
+
+  test("local degraded sync suppresses diagnostics and prints one notice", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ccx-cli-native-notice-"));
+    const notice = "OpenAI model discovery is unavailable (network); kept 2 previously published OpenAI models.";
+    const lines: string[] = [];
+    const printed = spyOn(console, "warn").mockImplementation(line => { lines.push(String(line)); });
+    try {
+      const result = await syncCodexCatalogForCli(null, {
+        syncModelsToCodex: async () => {
+          await refreshNativeLiveCatalog({ codexHome: dir, configDir: dir,
+            token: { accessToken: "fixture-token", chatgptAccountId: "fixture-account" },
+            runtime: { command: "/fixture/codex", version: "0.150.0" }, force: true,
+            fetch: async () => { throw new Error("offline"); },
+          });
+          return syncResult({ notice });
+        },
+        runtimeRequest: async () => { throw new Error("unexpected live request"); },
+        acquireAuthority: async () => authority([]),
+      });
+      reportCliNativeDiscoveryNotice(result);
+      expect(result.ok).toBe(true);
+      expect(lines.filter(line => line.includes("discovery"))).toEqual([notice]);
+    } finally { printed.mockRestore(); resetNativeLiveCatalogStateForTests(); rmSync(dir, { recursive: true, force: true }); }
   });
 
   test("an unreachable live proxy fails closed instead of starting a competing local sync", async () => {
@@ -270,6 +315,7 @@ describe("CLI catalog activation orchestration", () => {
     expect(catalogSyncCanApply(syncResult(), true)).toBe(false);
     expect(catalogSyncCanApply(syncResult(), false)).toBe(true);
     expect(catalogSyncCanApply(liveSyncResult({ warning: "degraded evidence" }), true)).toBe(false);
+    expect(catalogSyncCanApply(liveSyncResult({ notice: "Native discovery carried two rows" }), true)).toBe(true);
   });
 
   for (const drift of ["native", "custom-remote"] as const) {
