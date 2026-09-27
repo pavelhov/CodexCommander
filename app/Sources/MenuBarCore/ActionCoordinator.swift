@@ -64,6 +64,29 @@ public enum CompanionLaunchPolicy {
             await actions.start()
         }
     }
+
+    /// Startup can reach catalog sync while another native-main or catalog
+    /// operation still owns admission. Retry that transient refusal without
+    /// turning a passive launch into an explicit Start.
+    public static func runWithCatalogBusyRetry(
+        using actions: ActionCoordinator?,
+        arguments: [String] = CommandLine.arguments,
+        maxRetries: Int = 8,
+        delay: @Sendable () async -> Void = {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+    ) async -> ProxyControlOutcome {
+        var outcome = await run(using: actions, arguments: arguments)
+        for _ in 0..<max(0, maxRetries) {
+            guard case .failed(let message) = outcome,
+                  message.contains("catalog convergence is busy") || message.contains("catalog_busy"),
+                  !Task.isCancelled else { break }
+            await delay()
+            guard !Task.isCancelled else { break }
+            outcome = await run(using: actions, arguments: arguments)
+        }
+        return outcome
+    }
 }
 
 /// Executes confirm-gated lifecycle actions through the fixed structured helper.

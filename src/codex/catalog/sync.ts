@@ -201,7 +201,9 @@ export function nativeCatalogEntryPriority(
   const featuredRank = rank.get(slug);
   if (featuredRank !== undefined) return featuredRank;
   if (featuredCount > 0) {
-    return Math.max(typeof baselinePriority === "number" ? baselinePriority : 9, featuredCount + 100);
+    // Keep native rows directly behind the featured block. A 100-slot gap
+    // placed every native below a long routed tail in the desktop picker.
+    return featuredCount + Math.max(0, typeof baselinePriority === "number" ? baselinePriority : 9);
   }
   return baselinePriority;
 }
@@ -385,7 +387,7 @@ export function buildCatalogEntries(
     routed.codexcommander_catalog_kind = CODEX_NATIVE_ALIAS_CATALOG_KIND;
     const rankHit = rank.get(slug);
     if (rankHit !== undefined) routed.priority = rankHit * priorityStride;
-    else if (accountSelectors.length > 0) {
+    else if (accountSelectors.length > 0 || (featured?.length ?? 0) > 0) {
       routed.priority = 1_000 + (typeof routed.priority === "number" ? routed.priority : 5);
     }
     out.push(routed);
@@ -440,7 +442,7 @@ export function buildCatalogEntries(
     // Featured picks are canonical Codex-facing selectors.
     const rankHit = rank.get(slug);
     if (rankHit !== undefined) e.priority = rankHit * priorityStride;
-    else if (accountSelectors.length > 0) {
+    else if (accountSelectors.length > 0 || (featured?.length ?? 0) > 0) {
       // Keep the generated account rows together in Codex's priority-sorted flat picker.
       e.priority = 1_000 + (typeof e.priority === "number" ? e.priority : 5);
     }

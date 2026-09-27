@@ -51,7 +51,9 @@ After verified installation and recovery, the app restores your previous proxy, 
 supervision choices: a stopped proxy stays stopped, and native routing stays native. It preserves
 independently selected external routing and Launch at Login preferences, subject to macOS approval.
 A newer explicit stop, routing, or service choice takes precedence over the state captured for the
-update. **Stop CodexCommander and Quit…**, including **⌘Q**, remains the single normal quit action.
+update. **Stop CodexCommander and Quit…**, including **⌘Q**, remains the menu bar's explicit stop action.
+macOS logout, restart, and shutdown close the companion without recording a Stop choice or changing
+Codex routing; the app reconciles the existing choices when it next launches.
 
 If preparation, download, installation, or recovery is interrupted, use **Finish Update…** in the
 panel. Recovery uses the release captured by the pending update rather than switching to a newer
@@ -120,6 +122,10 @@ installs, removes, starts, or stops the background service.
 The quit action remains available while status is loading. If the stop cannot be verified, the app
 shows the error and offers **Quit App Anyway**. That choice closes only the menu bar app; the proxy or
 background service may still be running.
+When macOS closes the app during logout, restart, or shutdown, it also leaves the proxy and routing
+choices alone. Use **Stop CodexCommander and Quit…** when you intend to stop them.
+On the next ordinary launch, the app retries a temporarily busy catalog sync before showing an
+error. A passive launch keeps the existing routing choice during those retries.
 
 App-managed startup and the background service solve different problems. The app starts or attaches
 to the proxy at sign-in and routes managed Codex through it when Codex configuration exists, which is

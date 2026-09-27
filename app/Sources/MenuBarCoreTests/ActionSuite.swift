@@ -126,6 +126,47 @@ enum ActionSuite {
             t.equal(sync { await lifecycle.recordedActions() }, [.start, .ensure])
         }
 
+        t.test("lifecycle: launch retries transient catalog busy without changing intent") {
+            for (arguments, action) in [
+                (["CodexCommanderMenuBar"], LifecycleAction.start),
+                (["CodexCommanderMenuBar", companionPassiveLaunchArgument], .ensure),
+            ] {
+                let lifecycle = FakeLifecycleRunner(results: [
+                    LifecycleCommandResult(action: action, ok: false, state: .running,
+                        changed: false, message: "catalog sync skipped: catalog convergence is busy; retry."),
+                    LifecycleCommandResult(action: action, ok: true, state: .running,
+                        changed: false, message: "running"),
+                ])
+                let outcome = sync { await CompanionLaunchPolicy.runWithCatalogBusyRetry(
+                    using: ActionCoordinator(lifecycle: lifecycle), arguments: arguments,
+                    delay: {}
+                ) }
+                t.equal(outcome, .running)
+                t.equal(sync { await lifecycle.recordedActions() }, [action, action])
+            }
+        }
+
+        t.test("lifecycle: launch does not retry permanent errors or exceed retry limit") {
+            let permanent = FakeLifecycleRunner(results: [
+                LifecycleCommandResult(action: .start, ok: false, state: .failed,
+                    changed: false, message: "Routing configuration is invalid."),
+            ])
+            t.equal(sync { await CompanionLaunchPolicy.runWithCatalogBusyRetry(
+                using: ActionCoordinator(lifecycle: permanent), arguments: ["app"], delay: {}
+            ) }, .failed("Routing configuration is invalid."))
+            t.equal(sync { await permanent.recordedActions() }, [.start])
+
+            let busy = FakeLifecycleRunner(results: (0..<3).map { _ in
+                LifecycleCommandResult(action: .ensure, ok: false, state: .running,
+                    changed: false, message: "catalog sync skipped: catalog convergence is busy; retry.")
+            })
+            t.equal(sync { await CompanionLaunchPolicy.runWithCatalogBusyRetry(
+                using: ActionCoordinator(lifecycle: busy),
+                arguments: ["app", companionPassiveLaunchArgument], maxRetries: 2, delay: {}
+            ) }, .failed("catalog sync skipped: catalog convergence is busy; retry."))
+            t.equal(sync { await busy.recordedActions() }, [.ensure, .ensure, .ensure])
+        }
+
         t.test("lifecycle: a helper refusal is surfaced without changing its message") {
             let lifecycle = FakeLifecycleRunner(results: [
                 LifecycleCommandResult(

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
@@ -38,6 +38,7 @@ import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { LEGACY_NATIVE_OPENAI_MODELS } from "./native-models";
 import { peekNativeLiveCatalog } from "./native-live";
+import { activeCodexModelsCachePath, readCatalog } from "./parsing";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 export {
   LEGACY_NATIVE_OPENAI_MODELS,
@@ -104,9 +105,27 @@ function onDiskBareNativeRecoverySlugs(
     ...bundledNativeCatalogSlugs(deps, mode),
     ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS,
   ]);
-  if (supportedOnDisk.size === 0) return [];
   const cat = readCurrentCatalogOrCache(deps);
-  return unique((cat?.models ?? []).flatMap(entry => {
+  // Codex's own models cache may be newer than the installed CLI's bundled
+  // catalog. Only accept complete, native-shaped rows from that cache; CCX
+  // routed rows and synthetic native fallbacks are never admission evidence.
+  // The cache has no account identifier of its own. Admit its extra rows only
+  // while the native-main gate has admitted an identity-matched live snapshot.
+  const cache = peekNativeLiveCatalog().catalog
+    ? readCatalog(activeCodexModelsCachePath()) : null;
+  const cachedNative = (cache?.models ?? []).filter(entry => {
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    return /^(?:gpt|codex)-[a-z0-9][a-z0-9._-]*$/.test(slug)
+      && isBareBundledNativeCatalogEntry(entry)
+      && matchesNativeCatalogVisibility(entry, mode)
+      && typeof entry.display_name === "string" && entry.display_name.length > 0
+      && Array.isArray(entry.supported_reasoning_levels)
+      && entry.codexcommander_native_source === undefined
+      && entry.codexcommander_catalog_kind === undefined
+      && !(typeof entry.description === "string" && entry.description.startsWith("Routed via "));
+  });
+  for (const entry of cachedNative) supportedOnDisk.add(entry.slug as string);
+  return unique([...(cat?.models ?? []), ...cachedNative].flatMap(entry => {
     const slug = typeof entry.slug === "string" ? entry.slug : "";
     return isBareBundledNativeCatalogEntry(entry)
       && /^(?:gpt|codex)-/.test(slug)
@@ -140,7 +159,12 @@ function hasInjectedNativeCatalogDeps(options: NativeCatalogSelectionOptions): b
 
 function supportedNativeSlugMemoKey(mode: NativeCatalogMode): string {
   const live = peekNativeLiveCatalog();
-  return `${mode}\0${bundledCatalogCacheState().epoch}\0${live.source}\0${live.identity ?? ""}\0${live.fetchedAt ?? ""}`;
+  let cacheStamp = "";
+  try {
+    const stat = statSync(activeCodexModelsCachePath());
+    cacheStamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+  } catch { /* No cache yet. */ }
+  return `${mode}\0${bundledCatalogCacheState().epoch}\0${live.source}\0${live.identity ?? ""}\0${live.fetchedAt ?? ""}\0${cacheStamp}`;
 }
 
 function computeSupportedNativeOpenAiSlugs(
