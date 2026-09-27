@@ -62,6 +62,8 @@ const defaultDeps: RefreshDeps = {
     // A native-main profile switch can temporarily deny the account claim.
     // Keep the last good catalog intact until its retained native rows can be
     // admitted; otherwise this sync would replace them with the older bundle.
+    // Other degraded outcomes (runtime/network/response/snapshot) are handled
+    // by the central no-downgrade guard in gatherCodexCatalogCandidate.
     if (native.source === "unavailable" && native.reason === "busy"
       && existsSync(nativeLiveCatalogSnapshotPath())) throw new Error("native catalog busy");
   },

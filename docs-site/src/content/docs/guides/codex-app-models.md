@@ -150,6 +150,16 @@ bundled catalog and its pinned compatibility metadata. Switching accounts or run
 another identity's snapshot. Model availability remains subject to the selected account and Codex's
 own eligibility rules.
 
+CodexCommander finds the Codex runtime that ships inside the Codex desktop app, including the newer
+`codex-cli` package layout used by current ChatGPT.app builds. This works even when the menu bar app
+starts with a minimal `PATH`. If the saved runtime cannot be probed at startup, CodexCommander keeps
+using the saved runtime selection so the matching last-good snapshot still applies.
+
+If native discovery fails and there is neither a matching snapshot nor a working bundled catalog,
+CodexCommander does not publish a smaller native list. It keeps the current Codex catalog, reports
+the sync as busy, and retries on the next sync or **Apply to Codex**. Models you disabled, native
+models turned off in settings, and a signed-out Codex account still update the catalog normally.
+
 ## Current stable model coverage
 
 The native fallback set includes `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
