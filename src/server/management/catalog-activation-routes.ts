@@ -19,6 +19,7 @@ import type {
 } from "../../codex/catalog-apply";
 import type { CodexCommanderConfig } from "../../types";
 import { getCodexRoutingKind } from "../../codex/inject";
+import { lastNativeDiscoveryStatus } from "../../codex/catalog/native-live";
 import { jsonResponse } from "../auth-cors";
 import {
   acquireProxyLifecycleAuthority,
@@ -217,8 +218,15 @@ async function runApply(
 export async function handleCatalogActivationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config } = ctx;
   if (url.pathname === "/api/codex-catalog/status" && req.method === "GET") {
+    // Credential-free memo of the last refresh: source, reason, fetchedAt only.
+    const discovery = lastNativeDiscoveryStatus();
     return noStore(jsonResponse({
       activation: projectCatalogActivationForPrincipal(collectActivation(ctx), ctx.principal),
+      nativeDiscovery: {
+        source: discovery?.source ?? "unavailable",
+        reason: discovery ? discovery.reason : null,
+        fetchedAt: discovery?.fetchedAt ?? null,
+      },
     }, 200, req, config));
   }
   if (url.pathname !== "/api/codex-catalog/apply" || req.method !== "POST") return null;

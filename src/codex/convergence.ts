@@ -68,13 +68,14 @@ import {
 import {
   desktopAllowlistSuppressedNativeSlugs,
   disabledNativeSlugs,
+  isBareBundledNativeCatalogEntry,
   isNativeAliasCatalogEntry,
   nativeOpenAiSlugs,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
 } from "./catalog/metadata";
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./catalog/account-models";
-import { nativeLiveCatalogSnapshotPath, peekNativeLiveCatalog } from "./catalog/native-live";
+import { lastNativeDiscoveryStatus, nativeLiveCatalogSnapshotPath, peekNativeLiveCatalog } from "./catalog/native-live";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { isMultiAgentV2Enabled } from "./features";
 import {
@@ -236,6 +237,44 @@ function nativeLiveCatalogFrom(
 
 function catalogBytes(catalog: RawCatalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
+}
+
+/** Bare native OpenAI rows (no routed, alias, combo, or account-qualified rows). */
+function bareNativeOpenAiSlugs(catalog: RawCatalog | null): Set<string> {
+  return new Set((catalog?.models ?? []).flatMap(entry => {
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    return isBareBundledNativeCatalogEntry(entry) && /^(?:gpt|codex)-/.test(slug) ? [slug] : [];
+  }));
+}
+
+/**
+ * Native discovery is degraded when neither an identity-matched live nor a
+ * retained native catalog is admitted and the last refresh did not report a
+ * genuine logout, and the bundled runtime catalog is unavailable. Publishing then would shrink the native set to whatever the
+ * (possibly empty) bundled catalog and documented additions happen to cover.
+ * Returns the prior native slugs the candidate would drop; empty means publish.
+ */
+export function degradedNativeDiscoveryDrops(
+  config: Readonly<CodexCommanderConfig>,
+  nativeLive: ReturnType<typeof peekNativeLiveCatalog>,
+  prior: RawCatalog | null,
+  prepared: RawCatalog,
+  bundledCatalogAvailable: boolean,
+  lastReason: ReturnType<typeof lastNativeDiscoveryStatus> = lastNativeDiscoveryStatus(),
+): string[] {
+  if (nativeLive.catalog !== null) return [];
+  // A working bundled runtime catalog is authoritative for retirements.
+  if (bundledCatalogAvailable) return [];
+  // Only a recorded non-auth refresh failure marks discovery as degraded; no
+  // refresh (or a genuine logout) leaves ordinary retirement semantics intact.
+  if (!lastReason?.reason || lastReason.reason === "auth") return [];
+  if (!shouldIncludeNativeOpenAi(config)) return [];
+  const intentional = new Set([
+    ...disabledNativeSlugs(config),
+    ...desktopAllowlistSuppressedNativeSlugs(config),
+  ]);
+  const kept = bareNativeOpenAiSlugs(prepared);
+  return [...bareNativeOpenAiSlugs(prior)].filter(slug => !kept.has(slug) && !intentional.has(slug));
 }
 
 function normalizeJsonValue(value: unknown): unknown {
@@ -616,6 +655,13 @@ export async function gatherCodexCatalogCandidate(
       catalogFrom(keyedBackupBytes)?.models ?? [],
       catalogFrom(cacheBytes)?.models ?? [],
     ]);
+    // No-downgrade guard shared by every publish path. Prior evidence is the
+    // active catalog, or the keyed backup when none is active; Commander's own
+    // models_cache is a projection of the catalog, not independent evidence.
+    const priorNativeEvidence = active ?? catalogFrom(keyedBackupBytes);
+    if (degradedNativeDiscoveryDrops(snapshot.config, nativeLiveStatus, priorNativeEvidence, prepared.catalog, source.source === "bundled-catalog-template").length > 0) {
+      return { kind: "disposition", disposition: { status: "skipped", reason: "busy", retryable: true } };
+    }
     const preparedCatalog = prepared.catalog;
     const preparedCatalogBytes = catalogBytes(preparedCatalog);
     const preparedCache = {

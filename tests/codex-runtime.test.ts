@@ -34,6 +34,67 @@ function tempConfigDir(): string {
   return mkdtempSync(join(tmpdir(), "ccx-runtime-"));
 }
 
+const CHATGPT_RESOURCES = "/Applications/ChatGPT.app/Contents/Resources";
+
+interface FakeBundleEntry {
+  kind: "file" | "dir";
+  mode?: number;
+  content?: string;
+}
+
+/**
+ * Injected fs seams for macOS app-bundle discovery. Paths not listed do not
+ * exist; readFileSync falls through to the real fs so temp config dirs work.
+ */
+function fakeBundleFs(entries: Record<string, FakeBundleEntry>) {
+  const has = (path: string) => Object.prototype.hasOwnProperty.call(entries, path);
+  return {
+    existsSync: (path: string) => has(String(path)),
+    statSync: (path: string) => {
+      const entry = entries[String(path)];
+      if (!entry) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+      return {
+        isFile: () => entry.kind === "file",
+        mode: entry.mode ?? (entry.kind === "dir" ? 0o40755 : 0o100644),
+      };
+    },
+    readdirSync: (path: string) => {
+      const prefix = `${String(path)}/`;
+      const names = new Set<string>();
+      for (const key of Object.keys(entries)) {
+        if (!key.startsWith(prefix)) continue;
+        const name = key.slice(prefix.length).split("/")[0];
+        if (name) names.add(name);
+      }
+      if (names.size === 0 && !has(String(path))) {
+        throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+      }
+      return [...names];
+    },
+    readFileSync: (path: string, encoding: "utf8") => {
+      const entry = entries[String(path)];
+      if (entry?.kind === "file" && entry.content !== undefined) return entry.content;
+      if (String(path).startsWith("/Applications/")) {
+        throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+      }
+      return readFileSync(path, encoding);
+    },
+  };
+}
+
+function newLayoutBundle(manifest: unknown = { entrypoint: "bin/codex", version: "0.158.0-alpha.2.1" }) {
+  return fakeBundleFs({
+    [`${CHATGPT_RESOURCES}/codex-cli`]: { kind: "dir" },
+    [`${CHATGPT_RESOURCES}/codex-cli/codex-package.json`]: {
+      kind: "file",
+      content: typeof manifest === "string" ? manifest : JSON.stringify(manifest),
+    },
+    [`${CHATGPT_RESOURCES}/codex-cli/bin/codex`]: { kind: "file", mode: 0o100755 },
+    [`${CHATGPT_RESOURCES}/codex-classic.wav`]: { kind: "file", mode: 0o100644 },
+    [`${CHATGPT_RESOURCES}/codex-notification.wav`]: { kind: "file", mode: 0o100644 },
+  });
+}
+
 function persistedRuntimeBytes(
   command: string,
   version: string | null = "0.145.0",
@@ -483,11 +544,17 @@ describe("resolveCodexRuntime", () => {
         [bundled]: BUNDLED_CATALOG_FIXTURE,
       },
     });
+    const bundleFs = fakeBundleFs({
+      [bundled]: { kind: "file", mode: 0o100755 },
+      [configured]: { kind: "file", mode: 0o100755 },
+    });
     const result = resolveCodexRuntime({
       configDir,
       env: { PATH: "" },
       platform: "darwin",
       existsSync: path => [configured, bundled].includes(String(path)),
+      statSync: bundleFs.statSync,
+      readdirSync: bundleFs.readdirSync,
       execFileSync,
     });
     expect(result.runtime.command).toBe(bundled);
@@ -513,9 +580,112 @@ describe("resolveCodexRuntime", () => {
       env: { PATH: "/usr/local/bin" },
       platform: "darwin",
       existsSync: path => [bundled, pathCodex].includes(String(path)),
+      ...(() => {
+        const bundleFs = fakeBundleFs({ [bundled]: { kind: "file", mode: 0o100755 } });
+        return { statSync: bundleFs.statSync, readdirSync: bundleFs.readdirSync };
+      })(),
       execFileSync,
     });
     expect(result.runtime.command).toBe(bundled);
+    expect(result.runtime.source).toBe("bundled");
+  });
+
+  test("discovers the ChatGPT.app codex-cli package layout and skips directories and sound files", () => {
+    const entry = `${CHATGPT_RESOURCES}/codex-cli/bin/codex`;
+    const probed: string[] = [];
+    const inner = createBundledCatalogExec({ versionByPath: { [entry]: "codex-cli 0.158.0-alpha.2.1" } });
+    const bundleFs = newLayoutBundle();
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { PATH: "" },
+      platform: "darwin",
+      ...bundleFs,
+      execFileSync: (file, args, options) => {
+        probed.push(String(file));
+        return inner(file, args, options);
+      },
+      discoverAlternatives: false,
+    });
+    expect(result.runtime).toEqual({ command: entry, version: "0.158.0-alpha.2.1", source: "bundled" });
+    expect(probed.every(path => path === entry)).toBe(true);
+    expect(probed.some(path => path.endsWith(".wav") || path.endsWith("/codex-cli"))).toBe(false);
+    expect(result.failures.some(item => item.command.endsWith(".wav") || item.command.endsWith("/codex-cli")))
+      .toBe(false);
+  });
+
+  test("recovers from a failing configured wrapper under the menu-bar bare PATH", () => {
+    const configDir = tempConfigDir();
+    const configured = "/Users/example/.local/bin/codex";
+    persistCodexRuntime({ command: configured, version: "0.157.1", source: "path" }, { configDir });
+    const entry = `${CHATGPT_RESOURCES}/codex-cli/bin/codex`;
+    const bundleFs = newLayoutBundle();
+    const base = createBundledCatalogExec({ versionByPath: { [entry]: "codex-cli 0.158.0-alpha.2.1" } });
+    const deps = {
+      configDir,
+      env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+      platform: "darwin" as const,
+      ...bundleFs,
+      existsSync: (path: string) => path === configured || bundleFs.existsSync(path),
+      execFileSync: ((file, args, options) => {
+        if (String(file) === configured) throw new Error("env: npx: No such file or directory");
+        return base(file, args, options);
+      }) as RuntimeExecFile,
+    };
+    const result = resolveAndPersistCodexRuntime(deps);
+    expect(result.runtime).toEqual({ command: entry, version: "0.158.0-alpha.2.1", source: "bundled" });
+    expect(result.replacedConfigured?.from.command).toBe(configured);
+    const persisted = loadPersistedCodexRuntime({ configDir });
+    expect(persisted?.command).toBe(entry);
+    expect(persisted?.source).toBe("bundled");
+    expect(persisted?.selectedVersion).toBe("0.158.0-alpha.2.1");
+  });
+
+  test("rejects codex-package.json entrypoints that escape the package directory", () => {
+    const fallback = `${CHATGPT_RESOURCES}/codex-cli/bin/codex`;
+    for (const entrypoint of ["../../evil", "/usr/local/bin/evil", "bin/../../codex"]) {
+      const bundleFs = fakeBundleFs({
+        [`${CHATGPT_RESOURCES}/codex-cli/codex-package.json`]: {
+          kind: "file",
+          content: JSON.stringify({ entrypoint }),
+        },
+        [fallback]: { kind: "file", mode: 0o100755 },
+        [`${CHATGPT_RESOURCES}/evil`]: { kind: "file", mode: 0o100755 },
+        ["/Applications/ChatGPT.app/Contents/evil"]: { kind: "file", mode: 0o100755 },
+        ["/usr/local/bin/evil"]: { kind: "file", mode: 0o100755 },
+      });
+      const probed: string[] = [];
+      const inner = createBundledCatalogExec();
+      const result = resolveCodexRuntime({
+        configDir: tempConfigDir(),
+        env: { PATH: "" },
+        platform: "darwin",
+        ...bundleFs,
+        execFileSync: (file, args, options) => {
+          probed.push(String(file));
+          return inner(file, args, options);
+        },
+      });
+      expect(result.runtime.command).toBe(fallback);
+      expect(probed.some(path => path.endsWith("evil"))).toBe(false);
+    }
+  });
+
+  test("prefers the legacy Resources/codex binary when both layouts exist", () => {
+    const legacy = `${CHATGPT_RESOURCES}/codex`;
+    const bundleFs = fakeBundleFs({
+      [legacy]: { kind: "file", mode: 0o100755 },
+      [`${CHATGPT_RESOURCES}/codex-cli/bin/codex`]: { kind: "file", mode: 0o100755 },
+      [`${CHATGPT_RESOURCES}/codex-classic.wav`]: { kind: "file", mode: 0o100644 },
+    });
+    const result = resolveCodexRuntime({
+      configDir: tempConfigDir(),
+      env: { PATH: "" },
+      platform: "darwin",
+      ...bundleFs,
+      execFileSync: createBundledCatalogExec(),
+      discoverAlternatives: false,
+    });
+    expect(result.runtime.command).toBe(legacy);
     expect(result.runtime.source).toBe("bundled");
   });
 
