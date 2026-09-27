@@ -210,7 +210,9 @@ request body falls back to a listener found only through public health or a conf
 ### `ccx sync [--restart-codex]`
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
-Run it after adding a provider or to refresh available models.
+Run it after adding a provider or to refresh available models. If native OpenAI discovery is
+unavailable and previously published models are kept, `ccx sync` prints the informational notice
+once and still exits with code 0.
 
 If long-lived Codex `app-server` processes are still running, `ccx sync` warns that they may keep
 serving the previous in-memory model list even though `codexcommander-catalog.json` / `models_cache.json`
