@@ -8,6 +8,7 @@ import { mergeCatalogEntriesForSync, mergeCatalogModelsWithNativeRecovery } from
 import { nativeEffortClamp } from "../src/codex/catalog/effort";
 import { refreshCodexModelCatalog } from "../src/codex/refresh";
 import { startServer } from "../src/server/index";
+import { drainAndShutdown, resetLifecycleDrainStateForTests } from "../src/server/lifecycle";
 import * as nativeProfileStartup from "../src/codex/native-profile-startup";
 import { saveConfig } from "../src/config";
 import { resetBundledCatalogCacheForTests } from "../src/codex/catalog/bundled";
@@ -18,6 +19,26 @@ const previousHome = process.env.CODEX_HOME;
 const previousConfig = process.env.CODEXCOMMANDER_HOME;
 const previousCli = process.env.CODEX_CLI_PATH;
 const dirs: string[] = [];
+
+/** Windows may release completed cmd.exe or ACL handles just after shutdown. */
+function removeTree(path: string): void {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? String(error.code)
+        : "";
+      if (!new Set(["EPERM", "EBUSY", "ENOTEMPTY"]).has(code)) throw error;
+      lastError = error;
+      Bun.sleepSync(50);
+    }
+  }
+  throw lastError;
+}
+
 beforeEach(() => resetNativeLiveCatalogStateForTests());
 afterEach(() => {
   if (previousHome === undefined) delete process.env.CODEX_HOME;
@@ -29,7 +50,8 @@ afterEach(() => {
   resetBundledCatalogCacheForTests();
   resetNativeLiveCatalogStateForTests();
   resetCodexRuntimeResolveCacheForTests();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  resetLifecycleDrainStateForTests();
+  for (const dir of dirs.splice(0)) removeTree(dir);
 });
 
 test("identity-matched live Sol and Luna reach native roster and sync with distinct ladders", async () => {
@@ -119,7 +141,7 @@ test("identity-matched live Sol and Luna reach native roster and sync with disti
     expect(degraded.models.map(row => row.slug)).toEqual(expect.arrayContaining(["gpt-6-sol", "gpt-6-luna"]));
     openGate.mockReturnValue(false);
   } finally {
-    await server.stop(true);
+    await drainAndShutdown(server, 5_000);
     openGate.mockRestore();
   }
 
@@ -159,7 +181,7 @@ test("identity-matched live Sol and Luna reach native roster and sync with disti
   expect(peekNativeLiveCatalog().source).toBe("unavailable");
   expect(listCatalogNativeSlugs()).not.toContain("gpt-6-sol");
   expect(listCatalogNativeSlugs()).not.toContain("gpt-6-luna");
-});
+}, { timeout: 30_000 });
 
 test("an admitted account can recover newer Codex cache rows absent from the bundled catalog", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ccx-native-cache-recovery-"));
@@ -190,4 +212,4 @@ test("an admitted account can recover newer Codex cache rows absent from the bun
   writeFileSync(join(dir, "models_cache.json"), JSON.stringify({ models: [] }));
   expect(nativeOpenAiSlugs()).not.toContain("gpt-6-sol");
   openGate.mockRestore();
-});
+}, { timeout: 30_000 });

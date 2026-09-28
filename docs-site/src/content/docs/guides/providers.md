@@ -296,12 +296,22 @@ and 30-day observations are local usage estimates, not live remaining quota or b
 authoritative limit event is shown only after the upstream reports a concrete limit event (and, when
 provided, its reset).
 
-The provider pins the current Zen Go lineup (25 model ids) as its static catalog, with live
-`/v1/models` discovery authoritative on the canonical host — ids outside the trusted set are
-quarantined rather than routed. Transports follow the official endpoint table: Qwen and MiniMax
-models go over Anthropic Messages, `gpt-5.6-luna` and `grok-4.5` over OpenAI Responses, and the
+The provider pins 28 verified Zen Go model ids, including `deepseek-v4.1-flash`,
+`glm-5.3-flash`, and `qwen3.8-flash`, as
+its static catalog. Live `/v1/models` discovery is authoritative on the canonical host; ids
+outside the trusted set are quarantined rather than routed. Transports follow the official
+endpoint table: Qwen and MiniMax models go over Anthropic Messages, `gpt-5.6-luna` and `grok-4.5`
+over OpenAI Responses, and the
 remaining models over OpenAI Chat Completions. These trust facts attach only to the canonical
 `https://opencode.ai/zen/go/v1` destination; a same-named custom provider keeps its own behavior.
+
+OpenCode Go requires a session identifier for each conversation. CodexCommander derives an opaque
+`x-opencode-session` from the Codex task or session header and keeps it stable through that
+conversation, including subagent turns. Claude Code turns use their per-session metadata when available.
+An explicit `x-opencode-session` from a Responses, Chat Completions, or Messages client is used when no Codex identity is available. Requests without either identifier receive a distinct temporary
+session, and a configured provider header takes precedence. This behavior applies only to the
+canonical OpenCode Go destination. The proxy identifies itself with a CodexCommander user agent
+unless the provider configuration sets one explicitly.
 
 The built-in preset is key-based, so Add Provider groups it under **Paid**, not account-login
 providers, and CodexCommander does not offer an OpenCode Go OAuth flow. It is also separate from both the

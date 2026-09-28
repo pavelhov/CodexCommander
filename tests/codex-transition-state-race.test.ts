@@ -35,14 +35,13 @@ const transitionProbe = `
   } from ${JSON.stringify(transitionStateModuleUrl)};
   import {
     resolveCodexCoordinatorDatabasePath,
-    resolveEffectiveUserIdentity,
   } from ${JSON.stringify(userIdentityModuleUrl)};
   import { existsSync, realpathSync, writeFileSync } from "node:fs";
 
   const payload = JSON.parse(process.env.CCX_TEST_PAYLOAD);
   const canonicalCodexHome = realpathSync.native(payload.codexHome);
   const databasePath = resolveCodexCoordinatorDatabasePath(
-    resolveEffectiveUserIdentity(),
+    payload.identity,
     canonicalCodexHome,
   );
   const next = txId => ({ txId });
@@ -111,7 +110,10 @@ interface Sandbox {
   codexHome: string;
   codexCommanderHomes: [string, string];
   coordinatorPath: string;
+  identity: ReturnType<typeof resolveEffectiveUserIdentity>;
 }
+
+let sandboxUserIdentity: ReturnType<typeof resolveEffectiveUserIdentity> | undefined;
 
 function createSandbox(label: string): Sandbox {
   const root = mkdtempSync(join(tmpdir(), `ccx-transition-race-${label}-`));
@@ -119,11 +121,15 @@ function createSandbox(label: string): Sandbox {
   const codexCommanderHomes: [string, string] = [join(root, "ccx-a"), join(root, "ccx-b")];
   mkdirSync(codexHome);
   for (const path of codexCommanderHomes) mkdirSync(path);
+  // A sandbox's identity is process-wide. On Windows this lookup starts
+  // PowerShell, so reuse the verified identity across sandboxes in this test
+  // file instead of repeating that subprocess under full-suite load.
+  sandboxUserIdentity ??= resolveEffectiveUserIdentity();
   const coordinatorPath = resolveCodexCoordinatorDatabasePath(
-    resolveEffectiveUserIdentity(),
+    sandboxUserIdentity,
     realpathSync.native(codexHome),
   );
-  return { root, codexHome, codexCommanderHomes, coordinatorPath };
+  return { root, codexHome, codexCommanderHomes, coordinatorPath, identity: sandboxUserIdentity };
 }
 
 function cleanupSandbox(sandbox: Sandbox): void {
@@ -139,7 +145,11 @@ function spawnProbe(sandbox: Sandbox, codexCommanderHome: string, payload: Recor
       ...process.env,
       CODEX_HOME: sandbox.codexHome,
       CODEXCOMMANDER_HOME: codexCommanderHome,
-      CCX_TEST_PAYLOAD: JSON.stringify({ ...payload, codexHome: sandbox.codexHome }),
+      CCX_TEST_PAYLOAD: JSON.stringify({
+        ...payload,
+        codexHome: sandbox.codexHome,
+        identity: sandbox.identity,
+      }),
     },
     stdin: "ignore",
     stdout: "pipe",

@@ -126,6 +126,7 @@ import {
 import { noteProviderCredentialVerified } from "../../providers/credential-verification";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
+import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import type { WsData } from "../ws-bridge";
 import { codexAccountSelectionForTurn, registerTurn, trackStreamLifetime, unregisterTurn, type ActiveTurnLease } from "../lifecycle";
 import { redactSecretString } from "../../lib/redact";
@@ -1788,6 +1789,12 @@ async function handleResponsesInner(
     route.provider,
     parsed.options.promptCacheKey,
     route.providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(route.providerName) : undefined,
+  );
+  route.provider = resolveOpenCodeGoTransport(
+    route.providerName,
+    route.provider,
+    req.headers,
+    nativeClientMetadata(parsed._rawBody),
   );
   requestDispatchContext(logCtx, options.abortSignal ?? req.signal, undefined, config.providers[route.providerName]);
   const adapterProvider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
