@@ -30,6 +30,7 @@ import {
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, routeModel } from "../router";
+import { providerMatchesRegistryTransport } from "../providers/registry";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { CodexCommanderConfig } from "../types";
@@ -706,11 +707,15 @@ async function handleClaudeMessagesWithBudget(
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   let nativeRoute = false;
+  let openCodeGoRoute = false;
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
+    openCodeGoRoute = route.providerName === "opencode-go"
+      && ["openai-chat", "anthropic", "openai-responses"].includes(route.provider.adapter)
+      && providerMatchesRegistryTransport(route.providerName, { ...route.provider, adapter: "openai-chat" });
     logCtx.routeDecision = route.routeDecision;
     if (route.provider.adapter === "openai-responses") {
       nativeRoute = true;
@@ -754,6 +759,13 @@ async function handleClaudeMessagesWithBudget(
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
+  // The Messages replay uses Responses routing; carry an explicit Go lane across
+  // that internal boundary only for the canonical Go destination. Its transport
+  // hashes the value before sending it upstream.
+  if (openCodeGoRoute) {
+    const goSession = req.headers.get("x-opencode-session");
+    if (goSession) headers.set("x-opencode-session", goSession);
+  }
   // Routed replays need main ChatGPT auth so OpenAI-backed sidecars remain reachable;
   // native replays have no caller ChatGPT credential. This enrichment is optional:
   // auth-context later rejects a real physical-main selection, while routed/pool
@@ -766,7 +778,7 @@ async function handleClaudeMessagesWithBudget(
       headers.set("chatgpt-account-id", token.chatgptAccountId);
     }
   }
-  if (nativeRoute) {
+  if (nativeRoute || (openCodeGoRoute && !headers.has("x-opencode-session"))) {
     // ChatGPT-backend prompt-cache affinity rides the session_id HEADER (codex
     // clients always send their session uuid; implementation contract follow-up: body-level
     // prompt_cache_key alone still yielded cached_tokens:0). Claude Code never sends
@@ -774,6 +786,8 @@ async function handleClaudeMessagesWithBudget(
     // but ONLY for a real per-session key (metadata.user_id). The system-hash fallback
     // key is shared across Desktop conversations, and a shared session_id's backend
     // semantics are unproven (audit 133 R2#3): body prompt_cache_key only there.
+    // Go also needs a per-session identity on routed Claude Code turns. Never
+    // derive it from the shared system fallback or override an explicit Go lane.
     if (cacheKeySource === "metadata" && !headers.has("session_id") && typeof internalBody.prompt_cache_key === "string") {
       headers.set("session_id", uuidFromHex(internalBody.prompt_cache_key));
     }

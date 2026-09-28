@@ -2,13 +2,15 @@
  * OpenCode Go provider catalog + trusted transport registry drift guard.
  *
  * The registry pins the last-known-good Zen Go lineup (25 ids from
- * `GET https://opencode.ai/zen/go/v1/models`, verified 2026-08-05) and every trusted id owns
+ * `GET https://opencode.ai/zen/go/v1/models`, verified 2026-08-05, plus DeepSeek V4.1 Flash,
+ * GLM-5.3 Flash, and Qwen3.8 Flash, verified 2026-09-27)
+ * and every trusted id owns
  * an explicit wire fact from the official endpoint table
  * (https://opencode.ai/docs/go/#endpoints):
  *
  * - Qwen 3.5/3.6/3.7/3.8 and MiniMax M2.5/M2.7/M3 -> Anthropic Messages (hard pin, types.ts)
  * - GPT-5.6 Luna and Grok 4.5                      -> OpenAI Responses (registry wire default)
- * - the remaining 15 known-compatible rows         -> OpenAI Chat Completions (wire default)
+ * - the remaining known-compatible rows            -> OpenAI Chat Completions (wire default)
  *
  * The trust policy is registry-only and canonical-host-only: a same-named provider pointed at
  * any other destination receives none of it, and live-discovered ids outside the trusted set
@@ -39,16 +41,16 @@ const CANONICAL_MODELS_URL = "https://opencode.ai/zen/go/v1/models";
 const TRUSTED_MODEL_IDS = [
   "minimax-m3", "minimax-m2.7", "minimax-m2.5",
   "kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
-  "glm-5.2", "glm-5.1", "glm-5",
-  "deepseek-v4-pro", "deepseek-v4-flash",
-  "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
+  "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
+  "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash",
+  "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
   "mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
   "hy3", "hy3-preview",
   "gpt-5.6-luna", "grok-4.5",
 ];
 const ANTHROPIC_WIRE_MODEL_IDS = [
   "minimax-m2.5", "minimax-m2.7", "minimax-m3",
-  "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max",
+  "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max", "qwen3.8-flash",
 ];
 const RESPONSES_WIRE_MODEL_IDS = ["gpt-5.6-luna", "grok-4.5"];
 const CHAT_WIRE_MODEL_IDS = TRUSTED_MODEL_IDS.filter(id =>
@@ -56,7 +58,7 @@ const CHAT_WIRE_MODEL_IDS = TRUSTED_MODEL_IDS.filter(id =>
 /** Advertised but not Go-plan callable (issue #82): trusted id, compatibility-excluded from pickers. */
 const COMPATIBILITY_EXCLUDED_IDS = ["hy3-preview"];
 /** Trusted ids with no generated jawcode bundle row yet; the registry owns their metadata. */
-const REGISTRY_OWNED_METADATA_IDS = ["gpt-5.6-luna", "hy3-preview", "qwen3.8-max"];
+const REGISTRY_OWNED_METADATA_IDS = ["deepseek-v4.1-flash", "glm-5.3-flash", "gpt-5.6-luna", "hy3-preview", "qwen3.8-max", "qwen3.8-flash"];
 
 const originalFetch = globalThis.fetch;
 
@@ -97,7 +99,7 @@ function liveCatalogPayload(extraIds: string[] = []): string {
 }
 
 describe("OpenCode Go trusted catalog", () => {
-  test("pins the canonical destination and the exact last-good 25 model ids", () => {
+  test("pins the canonical destination and the exact last-good 28 model ids", () => {
     const entry = registryEntry();
     expect(entry).toMatchObject({
       id: "opencode-go",
@@ -107,9 +109,9 @@ describe("OpenCode Go trusted catalog", () => {
       liveModels: true,
       preserveCustomDestination: true,
     });
-    expect(entry.models).toHaveLength(25);
+    expect(entry.models).toHaveLength(28);
     expect([...(entry.models ?? [])].sort()).toEqual([...TRUSTED_MODEL_IDS].sort());
-    expect(new Set(entry.models).size).toBe(25);
+    expect(new Set(entry.models).size).toBe(28);
     expect(entry.models).toContain(entry.defaultModel);
   });
 
@@ -124,7 +126,7 @@ describe("OpenCode Go trusted catalog", () => {
 
   test("config seeds and key-login derivations never persist the trust policy", () => {
     const seed = providerConfigSeed(registryEntry());
-    expect(seed.models).toHaveLength(25);
+    expect(seed.models).toHaveLength(28);
     expect(seed.liveModels).toBe(true);
     for (const forbidden of ["modelDiscovery", "modelWireDefaults", "preserveCustomDestination"]) {
       expect(seed).not.toHaveProperty(forbidden);
@@ -135,9 +137,9 @@ describe("OpenCode Go trusted catalog", () => {
 
 describe("OpenCode Go per-model transport registry", () => {
   test("every trusted id owns exactly one explicit wire fact", () => {
-    expect(ANTHROPIC_WIRE_MODEL_IDS).toHaveLength(8);
+    expect(ANTHROPIC_WIRE_MODEL_IDS).toHaveLength(9);
     expect(RESPONSES_WIRE_MODEL_IDS).toHaveLength(2);
-    expect(CHAT_WIRE_MODEL_IDS).toHaveLength(15);
+    expect(CHAT_WIRE_MODEL_IDS).toHaveLength(17);
     expect([
       ...ANTHROPIC_WIRE_MODEL_IDS,
       ...RESPONSES_WIRE_MODEL_IDS,
@@ -228,8 +230,20 @@ describe("OpenCode Go live-catalog quarantine", () => {
       contextWindow: 1_000_000,
       inputModalities: ["text", "image"],
     });
+    expect(models.find(row => row.id === "qwen3.8-flash")).toMatchObject({
+      contextWindow: 1_000_000,
+      inputModalities: ["text", "image"],
+    });
+    expect(models.find(row => row.id === "glm-5.3-flash")).toMatchObject({
+      contextWindow: 1_000_000,
+      inputModalities: ["text", "image"],
+    });
     expect(models.find(row => row.id === "gpt-5.6-luna")).toMatchObject({
       contextWindow: 1_050_000,
+      inputModalities: ["text", "image"],
+    });
+    expect(models.find(row => row.id === "deepseek-v4.1-flash")).toMatchObject({
+      contextWindow: 1_000_000,
       inputModalities: ["text", "image"],
     });
   });

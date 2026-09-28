@@ -167,6 +167,10 @@ async function handleChatCompletionsWithBudget(
     const value = req.headers.get(name);
     if (value) headers.set(name, value);
   }
+  // Keep an explicit Go session through the Chat-to-Responses bridge. Only the
+  // canonical Go destination turns it into an upstream header.
+  const goSession = req.headers.get("x-opencode-session");
+  if (goSession) headers.set("x-opencode-session", goSession);
   // Prefer main ChatGPT auth so OpenAI-backed sidecars remain reachable on routed turns.
   if (!directRoute) {
     // This enrichment is optional for routed/non-main providers. If native main
