@@ -1181,8 +1181,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ...Object.fromEntries(OPENCODE_GO_RESPONSES_WIRE_MODELS.map(id => [id, "openai-responses"])),
     },
     // Zen Go context windows not covered by the generated jawcode bundle:
-    // https://stats.opencode.ai/data/zhipu/glm-5-3-flash and
-    // https://stats.opencode.ai/data/qwen/qwen3-8-flash (both 1M), plus the
+    // https://opencode.ai/data/deepseek/deepseek-v4-1-flash,
+    // https://stats.opencode.ai/data/zhipu/glm-5-3-flash, and
+    // https://stats.opencode.ai/data/qwen/qwen3-8-flash (all 1M), plus the
     // previously pinned Qwen3.8 Max and GPT-5.6 Luna values.
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,

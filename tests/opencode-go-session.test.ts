@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { handleResponses } from "../src/server/responses/core";
 import { handleChatCompletions } from "../src/server/chat-completions";
+import { handleClaudeMessages } from "../src/server/claude-messages";
 import { providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { resolveOpenCodeGoTransport } from "../src/providers/opencode-go-transport";
@@ -120,5 +121,52 @@ describe("OpenCode Go session affinity", () => {
       "opencode-go", goProvider(), new Headers({ "x-opencode-session": "chat-client-session" }),
     ).headers?.["x-opencode-session"];
     expect(outbound[0]?.get("x-opencode-session")).toBe(expected);
+  });
+
+  test("keeps Claude Code turns together and forwards an explicit Messages session", async () => {
+    const outbound: Headers[] = [];
+    const outboundBodies: string[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      outbound.push(new Headers(init?.headers));
+      outboundBodies.push(String(init?.body ?? ""));
+      return Response.json({ choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }] });
+    }) as typeof fetch;
+    const config = { providers: { "opencode-go": goProvider() } } as unknown as CodexCommanderConfig;
+    const invoke = async (metadata?: Record<string, string>, session?: string) => {
+      const request = new Request("http://localhost/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(session ? { "x-opencode-session": session } : {}),
+        },
+        body: JSON.stringify({
+          model: "opencode-go/deepseek-v4.1-flash",
+          max_tokens: 32,
+          messages: [{ role: "user", content: "Say OK" }],
+          ...(metadata ? { metadata } : {}),
+        }),
+      });
+      const response = await handleClaudeMessages(request, config, { model: "", provider: "" });
+      await response.text();
+    };
+
+    await invoke({ user_id: "user_abcd_session_1111" });
+    await invoke({ user_id: "user_abcd_session_1111" });
+    await invoke({ user_id: "user_abcd_session_2222" });
+    await invoke(undefined, "explicit-messages-session");
+    await invoke({ user_id: "user_abcd_session_1111" }, "explicit-messages-session");
+    expect(outbound).toHaveLength(5);
+    const sessions = outbound.map(headers => headers.get("x-opencode-session"));
+    expect(sessions[0]).toMatch(/^ccx_[0-9a-f]{32}$/);
+    expect(sessions[1]).toBe(sessions[0]);
+    expect(sessions[2]).not.toBe(sessions[0]);
+    expect(sessions[3]).toBe(resolveOpenCodeGoTransport(
+      "opencode-go", goProvider(), new Headers({ "x-opencode-session": "explicit-messages-session" }),
+    ).headers?.["x-opencode-session"]);
+    expect(sessions[4]).toBe(sessions[3]);
+    for (const headers of outbound) {
+      expect(headers.get("x-opencode-session")).not.toContain("user_abcd");
+    }
+    expect(outboundBodies.join("\n")).not.toContain("user_abcd");
   });
 });

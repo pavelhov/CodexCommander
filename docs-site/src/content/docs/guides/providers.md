@@ -307,8 +307,8 @@ remaining models over OpenAI Chat Completions. These trust facts attach only to 
 
 OpenCode Go requires a session identifier for each conversation. CodexCommander derives an opaque
 `x-opencode-session` from the Codex task or session header and keeps it stable through that
-conversation, including subagent turns. An explicit `x-opencode-session` from a Responses or
-Chat Completions client is used when no Codex identity is available. Requests without either identifier receive a distinct temporary
+conversation, including subagent turns. Claude Code turns use their per-session metadata when available.
+An explicit `x-opencode-session` from a Responses, Chat Completions, or Messages client is used when no Codex identity is available. Requests without either identifier receive a distinct temporary
 session, and a configured provider header takes precedence. This behavior applies only to the
 canonical OpenCode Go destination. The proxy identifies itself with a CodexCommander user agent
 unless the provider configuration sets one explicitly.
