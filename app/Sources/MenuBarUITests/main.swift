@@ -143,6 +143,8 @@ func makeSnapshot(
     quotaAvailability: [ProviderQuotaAvailability] = [],
     activity: AgentActivitySnapshot? = nil,
     providers: [ProviderSummary] = [],
+    openCodeGoModelUsage: [ProviderModelUsage] = [],
+    openCodeGoUsageLoaded: Bool = false,
     health: StartupHealth = currentHealth(),
     readiness: ProxyReadinessState = .unknown,
     recommendedCommand: String? = nil,
@@ -158,6 +160,8 @@ func makeSnapshot(
         quotaAvailability: quotaAvailability,
         activity: activity,
         providers: providers,
+        openCodeGoModelUsage: openCodeGoModelUsage,
+        openCodeGoUsageLoaded: openCodeGoUsageLoaded,
         lastUpdated: Date(),
         recommendedCommand: recommendedCommand,
         providersLoaded: providersLoaded,
@@ -657,20 +661,20 @@ runner.test("ui: overflowing provider content fits the scroll viewport") {
     )
 }
 
-runner.test("ui: OpenCode Go renders published caps and honest local observation semantics") {
+runner.test("ui: OpenCode Go renders local observations without obsolete caps") {
     let quotas = decodeQuotas("""
     [{"provider":"opencode-go","label":"OpenCode Go","source":"test","updatedAt":1,"quota":{"updatedAt":1,
       "referenceWindows":[
         {"id":"five_hour","label":"5-hour","windowSeconds":18000,
-         "publishedLimitUsd":12,"observedSpendUsd":0.3,"observedTokens":1000120,
+         "observedSpendUsd":0.3,"observedTokens":1000120,
          "observedRequests":3,"pricedRequests":3,"unpricedRequests":0,
          "unmeasuredRequests":0,"coverage":"complete"},
         {"id":"weekly","label":"7-day","windowSeconds":604800,
-         "publishedLimitUsd":30,"observedSpendUsd":1.1,"observedTokens":2400000,
+         "observedSpendUsd":1.1,"observedTokens":2400000,
          "observedRequests":4,"pricedRequests":2,"unpricedRequests":1,
          "unmeasuredRequests":1,"coverage":"partial"},
         {"id":"monthly","label":"30-day","windowSeconds":2592000,
-         "publishedLimitUsd":60,"observedTokens":0,"observedRequests":0,
+         "observedTokens":0,"observedRequests":0,
          "pricedRequests":0,"unpricedRequests":0,"unmeasuredRequests":0,
          "coverage":"none"}],
       "observedLimitEvent":{"limitName":"weekly","observedAt":1784915000000,
@@ -678,9 +682,12 @@ runner.test("ui: OpenCode Go renders published caps and honest local observation
     """)
     let report = quotas[0]
     let references = report.referenceWindows
-    runner.equal(ReferenceQuotaPresentation.capText(references[0]), "5h · Published cap $12")
-    runner.equal(ReferenceQuotaPresentation.capText(references[1]), "7d · Published cap $30")
-    runner.equal(ReferenceQuotaPresentation.capText(references[2]), "30d · Published cap $60")
+    runner.equal(ReferenceQuotaPresentation.title(references[0]), "5h · Local usage")
+    runner.equal(ReferenceQuotaPresentation.title(references[1]), "7d · Local usage")
+    runner.equal(ReferenceQuotaPresentation.title(references[2]), "30d · Local usage")
+    runner.equal(ReferenceQuotaPresentation.compactObservationText(references[0]), "5h estimated $0.30")
+    runner.equal(ReferenceQuotaPresentation.compactObservationText(references[1]), "7d partial estimate $1.10")
+    runner.equal(ReferenceQuotaPresentation.compactObservationText(references[2]), "30d no local usage")
     runner.equal(
         ReferenceQuotaPresentation.observationText(references[0]),
         "Estimate $0.30 · 1,000,120 tokens · 3 requests"
@@ -704,14 +711,64 @@ runner.test("ui: OpenCode Go renders published caps and honest local observation
     )
 
     let rendered = references.flatMap {
-        [ReferenceQuotaPresentation.capText($0), ReferenceQuotaPresentation.observationText($0)]
+        [ReferenceQuotaPresentation.title($0), ReferenceQuotaPresentation.observationText($0)]
     }.joined(separator: " ")
     runner.expect(!rendered.contains("%"), "reference data must not manufacture a percentage")
+    runner.expect(!rendered.contains("cap"), "local observations must not claim a current cap")
 
     let accordion = ProviderQuotaAccordionView()
     accordion.apply(makeSnapshot(quotas: quotas))
     runner.equal(accordion.providerRowCount, 1, "reference-only quota stays visible")
     runner.expect(accordion.expandedProviderIDs.contains("opencode-go"), "reference provider expands")
+}
+
+runner.test("ui: OpenCode Go ignores obsolete caps in an older proxy payload") {
+    let quotas = decodeQuotas("""
+    [{"provider":"opencode-go","label":"OpenCode Go","source":"test","updatedAt":1,
+      "quota":{"updatedAt":1,"referenceWindows":[{
+        "id":"five_hour","label":"5-hour","windowSeconds":18000,
+        "publishedLimitUsd":12,"observedSpendUsd":0.3,"observedTokens":100,
+        "observedRequests":1,"pricedRequests":1,"unpricedRequests":0,
+        "unmeasuredRequests":0,"coverage":"complete"}]}}]
+    """)
+    let window = quotas[0].referenceWindows[0]
+    runner.equal(window.publishedLimitUsd, 12)
+    let presentation = "\(ReferenceQuotaPresentation.title(window)) · \(ReferenceQuotaPresentation.observationText(window))"
+    runner.expect(!presentation.contains("$12"), "legacy caps must not appear as current limits")
+    runner.expect(presentation.contains("$0.30"), "local estimate remains visible")
+}
+
+runner.test("ui: OpenCode Go shows the active model and completed per-model usage") {
+    let quotas = decodeQuotas("""
+    [{"provider":"opencode-go","label":"OpenCode Go","source":"test","updatedAt":1,
+      "quota":{"updatedAt":1,"fiveHourPercent":12,"weeklyPercent":40,
+               "monthlyPercent":65}}]
+    """)
+    let usage = try! JSONDecoder().decode(ProviderUsageEnvelope.self, from: Data("""
+    {"generatedAt":1784915336899,"models":[
+      {"provider":"opencode-go","model":"glm-5.2","requests":3,"measuredRequests":2,
+       "totalTokens":1200,"inputTokens":1000,"outputTokens":200,"estimatedCostUsd":0.4},
+      {"provider":"opencode-go","model":"new-unpriced","requests":1,"measuredRequests":0,
+       "totalTokens":0,"inputTokens":0,"outputTokens":0}]}
+    """.utf8))
+    let activity = activitySnapshot(activities: """
+      {"id":"go","role":"primary","provider":"opencode-go","model":"glm-5.2",
+       "phase":"running","startedAt":1}
+    """, activeTurnCount: 1)
+    let accordion = ProviderQuotaAccordionView()
+    accordion.apply(makeSnapshot(
+        quotas: quotas,
+        activity: activity,
+        openCodeGoModelUsage: usage.models,
+        openCodeGoUsageLoaded: true
+    ))
+    let text = accordion.modelUsageTextForTesting("opencode-go")
+    runner.equal(quotas[0].normalizedWindows().count, 3, "live Go quota windows are present")
+    runner.expect(text.contains("In flight · glm-5.2"), "live model is separate from completed usage")
+    runner.expect(text.contains("glm-5.2 · 3 completed requests · 1,200 measured tokens (partial) · estimated $0.40"),
+                  "partially measured totals")
+    runner.expect(text.contains("new-unpriced · 1 completed request · tokens unknown"),
+                  "unmeasured and unpriced usage is not a false zero")
 }
 
 // MARK: - Deep links

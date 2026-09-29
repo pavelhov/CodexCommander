@@ -356,6 +356,13 @@ public actor ProxyClient {
         )
     }
 
+    public func usageLast30Days() async throws -> ProviderUsageEnvelope {
+        try await authenticatedGet(
+            "api/usage",
+            query: [URLQueryItem(name: "range", value: "30d")]
+        )
+    }
+
     public func restart() async throws -> RestartAccepted {
         let data = try await authenticatedSend(
             method: "POST",

@@ -158,9 +158,14 @@ override it.
   persistent Codex agent-lifecycle view, and the companion never invents queued, reviewing,
   rate-limited, or completed history.
 - **Provider quotas** — provider-reported 5-hour, weekly, monthly, or provider-specific credit
-  windows and reset times when available. OpenCode Go instead shows its published caps and local
-  observations, never an invented live balance. Missing data is shown as unavailable, never as zero
-  usage or unlimited capacity.
+  windows and reset times when available. OpenCode Go shows its account-wide rolling, weekly, and
+  monthly used percentages from its Go usage endpoint. If that endpoint is unavailable, the menu
+  shows locally observed requests, tokens, and estimated cost without a limit or remaining balance.
+  Missing data is never shown as zero usage or unlimited capacity.
+- **OpenCode Go model usage** — expand the provider to see each model's completed requests and
+  measured tokens over the last 30 days. An active model is marked **In flight** separately; its
+  final usage is recorded when the request completes. The dashboard's OpenCode Go Overview and Usage
+  tab show the same 30-day model totals. These local observations are not a live provider balance.
 - **Dashboard and Logs** — open the corresponding local dashboard view in your default browser with
   a one-time launch authorization for full dashboard changes, including catalog Apply.
 - **Startup options…** — opens the dashboard's Startup page when an optional startup upgrade or

@@ -27,6 +27,7 @@ import { ProviderIcon } from "./ProviderRail";
 import { formatProviderDisplayName } from "../../provider-icons";
 import QuotaBars from "../QuotaBars";
 import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
+import { referenceCoverageLabel, referenceObservedLabels } from "../../provider-workspace/reference-observation";
 
 export default function ProviderOverviewDashboard({
   sections,
@@ -181,15 +182,16 @@ export default function ProviderOverviewDashboard({
                   <IconChevron className="pws-dashboard-row-chevron" aria-hidden="true" />
                   <div className="pws-dashboard-row-bars">
                     {referenceQuotaFromReport(report) ? (
-                      <div className="pws-dashboard-reference-caps">
+                      <div className="pws-dashboard-reference-observations">
                         {referenceQuotaFromReport(report)!.windows.map(window => (
                           <span key={window.id}>
-                            <strong>{new Intl.NumberFormat(locale, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(window.publishedLimitUsd)}</strong>
-                            {t(window.id === "five_hour"
-                              ? "pws.reference.fiveHourShort"
+                            <strong>{t(window.id === "five_hour"
+                              ? "pws.reference.fiveHour"
                               : window.id === "weekly"
-                                ? "pws.reference.weeklyShort"
-                                : "pws.reference.monthlyShort")}
+                                ? "pws.reference.weekly"
+                                : "pws.reference.monthly")}</strong>
+                            {referenceObservedLabels(window, locale, t).join(" · ")}
+                            {referenceCoverageLabel(window.coverage, t) && ` · ${referenceCoverageLabel(window.coverage, t)}`}
                           </span>
                         ))}
                         <small>{t("pws.reference.dashboardHint")}</small>

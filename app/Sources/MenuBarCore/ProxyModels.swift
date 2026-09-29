@@ -265,13 +265,13 @@ public struct QuotaWindow: Decodable, Equatable, Sendable {
     public let resetAt: Double?
 }
 
-/// A published provider cap paired with observations from this local CodexCommander usage
-/// log. This is reference data, not a provider-reported balance or remaining percent.
+/// Observations from this local CodexCommander usage log. Older proxy versions may
+/// include a published cap, but it is not a provider-reported balance or current limit.
 public struct QuotaReferenceWindow: Decodable, Equatable, Sendable {
     public let id: String
     public let label: String
     public let windowSeconds: Double
-    public let publishedLimitUsd: Double
+    public let publishedLimitUsd: Double?
     public let observedSpendUsd: Double?
     public let observedTokens: Int64
     public let observedRequests: Int
@@ -379,6 +379,24 @@ public struct ProviderQuotaEnvelope: Decodable, Equatable, Sendable {
     public let generatedAt: Double
     public let reports: [QuotaReport]
     public let availability: [ProviderQuotaAvailability]
+}
+
+/// Completed local requests in the management usage log. These are observations,
+/// not an OpenCode Go account balance or a live token counter.
+public struct ProviderModelUsage: Decodable, Equatable, Sendable {
+    public let provider: String
+    public let model: String
+    public let requests: Int
+    public let measuredRequests: Int
+    public let totalTokens: Int64
+    public let inputTokens: Int64
+    public let outputTokens: Int64
+    public let estimatedCostUsd: Double?
+}
+
+public struct ProviderUsageEnvelope: Decodable, Equatable, Sendable {
+    public let generatedAt: Double
+    public let models: [ProviderModelUsage]
 }
 
 public enum AgentActivityRole: String, Decodable, Equatable, Sendable {

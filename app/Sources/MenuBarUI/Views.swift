@@ -654,7 +654,7 @@ final class QuotaWindowRowView: NSView {
     }
 }
 
-/// Text contract for published caps and local observations. Kept separate from
+/// Text contract for local observations. Kept separate from
 /// `NormalizedQuota`: these values must never acquire a percentage bar unless the
 /// upstream provider actually supplied one.
 package enum ReferenceQuotaPresentation {
@@ -669,12 +669,23 @@ package enum ReferenceQuotaPresentation {
         }
     }
 
-    package static func capText(_ window: QuotaReferenceWindow) -> String {
-        "\(horizon(window)) · Published cap \(Format.usdCap(window.publishedLimitUsd))"
+    package static func title(_ window: QuotaReferenceWindow) -> String {
+        "\(horizon(window)) · Local usage"
     }
 
-    package static func compactCapText(_ window: QuotaReferenceWindow) -> String {
-        "\(Format.usdCap(window.publishedLimitUsd))/\(horizon(window))"
+    package static func compactObservationText(_ window: QuotaReferenceWindow) -> String {
+        let horizon = horizon(window)
+        switch window.observationQuality {
+        case .none:
+            return "\(horizon) no local usage"
+        case .estimate:
+            return "\(horizon) estimated \(Format.usdEstimate(window.observedSpendUsd))"
+        case .partial:
+            if let spend = window.observedSpendUsd {
+                return "\(horizon) partial estimate \(Format.usdEstimate(spend))"
+            }
+            return "\(horizon) partial · \(Format.count(window.observedTokens)) tokens"
+        }
     }
 
     package static func observationText(_ window: QuotaReferenceWindow) -> String {
@@ -719,14 +730,14 @@ package enum ReferenceQuotaPresentation {
     }
 }
 
-/// A published cap with local estimate/coverage text. No progress bar is rendered:
-/// dividing observed spend by this cap would manufacture provider quota state.
+/// Local estimate/coverage text. No progress bar is rendered because local
+/// observations cannot establish a provider quota percentage.
 final class ReferenceQuotaWindowRowView: NSView {
     init(window: QuotaReferenceWindow) {
         super.init(frame: .zero)
 
-        let cap = makeLabel(
-            ReferenceQuotaPresentation.capText(window),
+        let title = makeLabel(
+            ReferenceQuotaPresentation.title(window),
             font: Theme.captionMedium,
             color: Theme.text
         )
@@ -736,7 +747,7 @@ final class ReferenceQuotaWindowRowView: NSView {
             color: Theme.muted
         )
         observation.lineBreakMode = .byTruncatingTail
-        let column = NSStackView(views: [cap, observation])
+        let column = NSStackView(views: [title, observation])
         column.orientation = .vertical
         column.alignment = .leading
         column.spacing = 2
@@ -754,7 +765,7 @@ final class ReferenceQuotaWindowRowView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel(
-            "\(ReferenceQuotaPresentation.capText(window)). \(ReferenceQuotaPresentation.observationText(window))."
+            "\(ReferenceQuotaPresentation.title(window)). \(ReferenceQuotaPresentation.observationText(window))."
         )
     }
 

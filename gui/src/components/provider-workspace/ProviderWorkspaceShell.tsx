@@ -193,11 +193,14 @@ export default function ProviderWorkspaceShell({
 
   useEffect(() => {
     let cancelled = false;
-    const timeout = window.setTimeout(() => {
+    let inFlight = false;
+    const refreshUsage = (initial: boolean) => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       // Keep last-good paint when sessionStorage already seeded — don't flash loading skeletons.
       // Read inside the effect (keyed by usageCacheKey) so the seed check stays correct without
       // closing over an unstable cachedUsage render value.
-      if (!readSessionListCache(usageCacheKey)) setUsageLoading(true);
+      if (initial && !readSessionListCache(usageCacheKey)) setUsageLoading(true);
       void fetch(`${apiBase}/api/usage?range=30d`)
         .then(r => readJsonIfOk<{
           providers?: Array<{ provider: string; requests: number; totalTokens?: number }>;
@@ -228,11 +231,19 @@ export default function ProviderWorkspaceShell({
           writeSessionListCache(usageCacheKey, { totals: byProvider, models: byProviderModels });
         })
         .catch(() => {})
-        .finally(() => { if (!cancelled) setUsageLoading(false); });
-    }, 0);
+        .finally(() => {
+          inFlight = false;
+          if (!cancelled && initial) setUsageLoading(false);
+        });
+    };
+    const timeout = window.setTimeout(() => refreshUsage(true), 0);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") refreshUsage(false);
+    }, 60_000);
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
+      window.clearInterval(interval);
     };
   }, [apiBase, usageCacheKey]);
 

@@ -125,6 +125,10 @@ public struct ProxySnapshot: Equatable, Sendable {
     public var quotaAvailability: [ProviderQuotaAvailability]
     public var activity: AgentActivitySnapshot?
     public var providers: [ProviderSummary]
+    /// Completed OpenCode Go requests over the last 30 days, from /api/usage.
+    public var openCodeGoModelUsage: [ProviderModelUsage]
+    public var openCodeGoUsageLoaded: Bool
+    public var openCodeGoUsageUpdatedAt: Date?
     public var lastUpdated: Date?
     public var consecutiveFailures: Int
     /// Remembered from the last successful health read, so a stopped proxy can still
@@ -149,6 +153,9 @@ public struct ProxySnapshot: Equatable, Sendable {
         quotaAvailability: [ProviderQuotaAvailability] = [],
         activity: AgentActivitySnapshot? = nil,
         providers: [ProviderSummary] = [],
+        openCodeGoModelUsage: [ProviderModelUsage] = [],
+        openCodeGoUsageLoaded: Bool = false,
+        openCodeGoUsageUpdatedAt: Date? = nil,
         lastUpdated: Date? = nil,
         consecutiveFailures: Int = 0,
         lastKnownStartCommand: String? = nil,
@@ -166,6 +173,9 @@ public struct ProxySnapshot: Equatable, Sendable {
         self.quotaAvailability = quotaAvailability
         self.activity = activity
         self.providers = providers
+        self.openCodeGoModelUsage = openCodeGoModelUsage
+        self.openCodeGoUsageLoaded = openCodeGoUsageLoaded
+        self.openCodeGoUsageUpdatedAt = openCodeGoUsageUpdatedAt
         self.lastUpdated = lastUpdated
         self.consecutiveFailures = consecutiveFailures
         self.lastKnownStartCommand = lastKnownStartCommand

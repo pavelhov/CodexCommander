@@ -91,9 +91,9 @@ on. **Logs** works the same way with `#logs` and `#logs/debug`.
 Cost values in **Dashboard**, **Logs**, and **Usage** are API list-price equivalents calculated from
 reported tokens. They are not billing receipts or evidence of an actual charge; subscription usage
 or provider credits may apply instead. The Dashboard's **Plan & quota** section shows
-provider-reported limits (5-hour / weekly / monthly windows), the provider plan, and observed
-reference spend versus published caps — always labeled as provider-reported estimates, never billed
-spend.
+provider-reported limits (5-hour / weekly / monthly windows) and the provider plan when available.
+If OpenCode Go's live meter is unavailable, it shows only locally observed traffic and estimated
+cost, without a claimed cap or remaining balance. Estimated cost is not billed spend.
 
 ### Request usage and dispatch evidence
 

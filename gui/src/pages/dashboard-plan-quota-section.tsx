@@ -6,14 +6,14 @@
  * last-known-good data. Reuses the workspace parsing (accountQuotaFromReport /
  * capacityAggregationFromReport / referenceQuotaFromReport) and the
  * ProviderCapacityQuota presentation so both surfaces share semantics: per-provider
- * plan, 5h/week/month windows, and observed reference spend vs published caps —
+ * plan, 5h/week/month windows, and locally observed fallback usage —
  * always labeled provider-reported / estimates, never billed spend.
  *
  * Styling reuses existing dashboard tokens/classes (panel, dash-sidecar-grid,
  * pws-capacity-*, muted/text-caption/mono); no new stylesheet is introduced.
  */
 import { useEffect } from "react";
-import { useI18n, useT, type TFn, type TKey } from "../i18n/shared";
+import { useI18n, useT, type TKey } from "../i18n/shared";
 import { useProviderQuota } from "../provider-quota-store";
 import { formatProviderDisplayName } from "../provider-icons";
 import { quotaUnavailableReasonKey } from "../quota-unavailable";
@@ -24,7 +24,7 @@ import {
   type ProviderQuotaReferenceWindowView,
   type ProviderQuotaReportView,
 } from "../provider-workspace/report";
-import { formatRequestCount, formatTokenCount } from "../provider-workspace/usage";
+import { referenceCoverageLabel, referenceObservedLabels } from "../provider-workspace/reference-observation";
 import { ProviderCapacityQuota } from "../components/provider-workspace/ProviderCapacityQuota";
 
 const REFERENCE_WINDOW_KEYS: Record<ProviderQuotaReferenceWindowView["id"], TKey> = {
@@ -33,46 +33,20 @@ const REFERENCE_WINDOW_KEYS: Record<ProviderQuotaReferenceWindowView["id"], TKey
   monthly: "pws.reference.monthly",
 };
 
-function referenceObservedLabel(
-  window: ProviderQuotaReferenceWindowView,
-  locale: string,
-  t: TFn,
-): string {
-  if (window.observedRequests === 0) return t("pws.reference.noTraffic");
-  if (window.observedSpendUsd !== undefined) {
-    const amount = new Intl.NumberFormat(locale, {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: window.observedSpendUsd < 0.01 ? 4 : 2,
-    }).format(window.observedSpendUsd);
-    return t("pws.reference.spendObserved", { amount });
-  }
-  if (window.observedTokens > 0) {
-    return t("pws.reference.tokensObserved", { tokens: formatTokenCount(window.observedTokens, locale) });
-  }
-  return t("pws.reference.requestsObserved", { requests: formatRequestCount(window.observedRequests, locale) });
-}
-
 function PlanQuotaReference({ report, locale }: { report: ProviderQuotaReportView; locale: string }) {
   const t = useT();
   const reference = referenceQuotaFromReport(report);
   if (!reference) return null;
-  const money = (amount: number) => new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: amount >= 10 ? 0 : 2,
-  }).format(amount);
   return (
     <div className="pws-reference-quota" style={{ marginTop: 10 }}>
       <div className="muted text-caption" style={{ marginBottom: 6 }}>{t("dash.planQuota.referenceIntro")}</div>
       {reference.windows.map(window => (
         <div key={window.id} style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
           <strong className="text-caption">{t(REFERENCE_WINDOW_KEYS[window.id])}</strong>
-          <span className="mono text-caption">
-            {t("pws.reference.publishedCap", { amount: money(window.publishedLimitUsd) })}
-          </span>
-          <span className="muted text-caption">{referenceObservedLabel(window, locale, t)}</span>
+          <span className="muted text-caption">{referenceObservedLabels(window, locale, t).join(" · ")}</span>
+          {referenceCoverageLabel(window.coverage, t) && (
+            <span className="muted text-caption">{referenceCoverageLabel(window.coverage, t)}</span>
+          )}
         </div>
       ))}
     </div>

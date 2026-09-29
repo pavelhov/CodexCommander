@@ -263,6 +263,7 @@ export default function ProviderDetails({
             apiBase={apiBase}
             connectionIdentity={connectionIdentity}
             usageTotals={usageTotals}
+            modelUsage={modelUsage}
             quotaReport={quotaReport}
             quotaUnavailableReason={quotaUnavailableReason}
             onRetryQuota={onRetryQuota}

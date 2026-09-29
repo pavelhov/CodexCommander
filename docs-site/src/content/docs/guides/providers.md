@@ -290,11 +290,19 @@ Volcengine Agent Plan uses its native Responses endpoint through `openai-respons
 OpenCode authentication store or Keychain for this key.
 
 The public model catalog is not evidence that a key works, so a saved key is **unverified** until the
-first successful inference using that active key. The provider's published caps are reference caps —
-**$12 / 5 hours**, **$30 / 7 days**, and **$60 / 30 days**. The dashboard's matching 5-hour, 7-day,
-and 30-day observations are local usage estimates, not live remaining quota or billing. An
-authoritative limit event is shown only after the upstream reports a concrete limit event (and, when
-provided, its reset).
+first successful inference using that active key. With a configured Go key, CodexCommander reads
+OpenCode's Go usage endpoint and shows its account-wide rolling, weekly, and monthly **used
+percentages** and reset times in the dashboard and macOS menu. When the endpoint is unavailable,
+the quota view shows only traffic observed through this proxy in the corresponding time windows.
+Those local request, token, and estimated-cost totals are not the provider's current balance or
+per-model allowance. A concrete upstream limit event can also be shown with its reported reset.
+
+OpenCode Go's **Overview** in the dashboard also shows completed requests and tokens for each model
+over the last 30 days; the **Usage** tab retains the full model breakdown. Expanding OpenCode Go in
+the macOS menu shows the same per-model completed usage beside the provider quota. While
+a request is active, the menu identifies its model as **In flight**; its final token count appears
+only after the request completes and the proxy records it. Unmeasured token totals are shown as
+unknown rather than zero, and estimated cost appears only when pricing is available for that model.
 
 The provider pins 28 verified Zen Go model ids, including `deepseek-v4.1-flash`,
 `glm-5.3-flash`, and `qwen3.8-flash`, as

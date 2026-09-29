@@ -10,7 +10,7 @@ import { binProviderStatus, type WorkspaceItem } from "../../provider-workspace/
 import { formatRelativeTime, relativeTimeLabelsFromT, formatRequestCount, formatTokenCount } from "../../provider-workspace/usage";
 import { accountQuotaFromReport, formatQuotaSourceLabel, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import { quotaUnavailableReasonKey } from "../../quota-unavailable";
-import type { ProviderUsageTotals } from "./types";
+import type { ProviderModelUsageRow, ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
 import type { ProviderUpdatePatch } from "./types";
 import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
@@ -31,7 +31,7 @@ type ConnectionTestState = {
 };
 
 export default function ProviderOverview({
-  item, usageTotals, quotaReport, quotaUnavailableReason, onRetryQuota, oauthEmail, oauth,
+  item, usageTotals, modelUsage, quotaReport, quotaUnavailableReason, onRetryQuota, oauthEmail, oauth,
   accountNeedsReauth = false,
   apiBase, connectionIdentity,
   onEditSettings, onViewUsage, onUpdateProvider,
@@ -39,6 +39,7 @@ export default function ProviderOverview({
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
+  modelUsage?: ProviderModelUsageRow[];
   quotaReport?: ProviderQuotaReportView;
   /** Provider quota is unavailable (no report); reason drives the notice copy. */
   quotaUnavailableReason?: string;
@@ -86,6 +87,9 @@ export default function ProviderOverview({
       : t("prov.disabledBadge");
   const requests = usageTotals?.requests;
   const tokens = usageTotals?.totalTokens;
+  const openCodeGoModels = item.name === "opencode-go"
+    ? (modelUsage ?? []).toSorted((a, b) => b.totalTokens - a.totalTokens)
+    : [];
   const quota = quotaReport ? accountQuotaFromReport(quotaReport) : null;
   const connectionProbeKey = JSON.stringify([
     apiBase ?? null,
@@ -245,6 +249,51 @@ export default function ProviderOverview({
           </div>
         </section>
       ) : null}
+
+      {item.name === "opencode-go" && (
+        <section className="pws-section" aria-label={t("pws.usageLast30d")}>
+          <h3 className="pws-section-title">{t("pws.usageLast30d")}</h3>
+          {typeof requests === "number" && (
+            <div className="pws-usage-metrics" role="group" aria-label={t("pws.usageLast30d")}>
+              <div className="pws-usage-metric">
+                <span className="pws-usage-metric-value">{formatRequestCount(requests, locale)}</span>
+                <span className="muted pws-usage-metric-label">{t("pws.metricRequests")}</span>
+              </div>
+              {typeof tokens === "number" && (
+                <div className="pws-usage-metric">
+                  <span className="pws-usage-metric-value">{formatTokenCount(tokens, locale)}</span>
+                  <span className="muted pws-usage-metric-label">{t("pws.metricTokens")}</span>
+                </div>
+              )}
+            </div>
+          )}
+          {openCodeGoModels.length > 0 ? (
+            <div className="tbl-wrap">
+              <table className="pws-model-table">
+                <caption>{t("pws.modelBreakdown")}</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">{t("pws.col.model")}</th>
+                    <th scope="col" className="num">{t("pws.col.requests")}</th>
+                    <th scope="col" className="num">{t("pws.col.tokens")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {openCodeGoModels.map(row => (
+                    <tr key={row.model}>
+                      <td className="mono">{row.model}</td>
+                      <td className="num">{formatRequestCount(row.requests, locale)}</td>
+                      <td className="num mono">{formatTokenCount(row.totalTokens, locale)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : typeof requests !== "number" ? (
+            <p className="muted">{t("pws.usageUnavailable")}</p>
+          ) : null}
+        </section>
+      )}
 
       <section className="pws-section" aria-label={t("pws.authSummary")}>
         <h3 className="pws-section-title">{t("pws.authSummary")}</h3>

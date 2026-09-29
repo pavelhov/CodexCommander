@@ -40,6 +40,7 @@ public actor PollingCoordinator {
     /// Attempt time, distinct from success time: a persistently failing quota endpoint
     /// must still respect the slower cadence.
     private var lastQuotaAttempt: Date?
+    private var lastUsageAttempt: Date?
 
     public init(client: ProxyClient, endpoint: ProxyEndpoint) {
         self.client = client
@@ -174,6 +175,9 @@ public actor PollingCoordinator {
         }
 
         if popoverOpen {
+            let previousOpenCodeGoActivity = Set(snapshot.activity?.activities.compactMap { activity in
+                activity.provider?.lowercased() == "opencode-go" ? activity.id : nil
+            } ?? [])
             await refreshActivity(cycle: cycle)
             guard isCurrent(cycle) else {
                 refreshInFlight = false
@@ -184,6 +188,12 @@ public actor PollingCoordinator {
             // tick would turn a rarely changing endpoint into a two-second poller.
             if includeHeavy { await refreshOnOpen(cycle: cycle) }
 
+            let currentOpenCodeGoActivity = Set(snapshot.activity?.activities.compactMap { activity in
+                activity.provider?.lowercased() == "opencode-go" ? activity.id : nil
+            } ?? [])
+            let completedOpenCodeGoRequest = snapshot.activityLoaded
+                && !previousOpenCodeGoActivity.isSubset(of: currentOpenCodeGoActivity)
+
             // Rate-limit on ATTEMPT, not success, so a persistently failing endpoint is
             // not retried on every two-second activity cycle.
             let quotaDue = forceQuotaRefresh || (lastQuotaAttempt.map {
@@ -192,6 +202,12 @@ public actor PollingCoordinator {
             if quotaDue, isCurrent(cycle) {
                 lastQuotaAttempt = Date()
                 await refreshQuotas(cycle: cycle, forceRefresh: forceQuotaRefresh)
+            }
+            let usageDue = includeHeavy || forceQuotaRefresh || completedOpenCodeGoRequest || (lastUsageAttempt.map {
+                Date().timeIntervalSince($0) >= Self.heavyInterval
+            } ?? true)
+            if usageDue, isCurrent(cycle) {
+                await refreshOpenCodeGoUsage(cycle: cycle)
             }
         }
 
@@ -290,6 +306,29 @@ public actor PollingCoordinator {
             snapshot.quotaAvailability = envelope.availability
             snapshot.quotasLoaded = true
         }
+    }
+
+    /// Usage is a completed-request ledger. Fetch on open, on a finished Go
+    /// request, and at the heavy cadence; never poll it every two seconds.
+    private func refreshOpenCodeGoUsage(cycle: Int) async {
+        guard isCurrent(cycle) else { return }
+        guard snapshot.providersLoaded else { return }
+        guard snapshot.providers.contains(where: { $0.name.lowercased() == "opencode-go" && $0.isEnabled }) else {
+            snapshot.openCodeGoModelUsage = []
+            snapshot.openCodeGoUsageLoaded = false
+            snapshot.openCodeGoUsageUpdatedAt = nil
+            return
+        }
+        lastUsageAttempt = Date()
+        guard let usage = try? await client.usageLast30Days(), isCurrent(cycle) else { return }
+        snapshot.openCodeGoModelUsage = usage.models.filter {
+            $0.provider.lowercased() == "opencode-go"
+                && !$0.model.isEmpty
+                && $0.requests >= 0
+                && $0.totalTokens >= 0
+        }
+        snapshot.openCodeGoUsageLoaded = true
+        snapshot.openCodeGoUsageUpdatedAt = Date()
     }
 
     /// Readiness is an orthogonal observation. Once authenticated startup health has

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { accountQuotaFromReport, referenceQuotaFromReport } from "../src/provider-workspace/report";
+import { accountQuotaFromReport, formatQuotaSourceLabel, referenceQuotaFromReport } from "../src/provider-workspace/report";
 
 const currentAggregation = () => ({
   kind: "capacity-weighted-v1",
@@ -38,12 +38,11 @@ describe("OpenCode Go reference quota reports", () => {
     },
   };
 
-  test("keeps published caps and observations distinct from percentage quota bars", () => {
+  test("ignores stale legacy caps and keeps observations distinct from percentage quota bars", () => {
     expect(accountQuotaFromReport(report)).toBeNull();
     expect(referenceQuotaFromReport(report)).toEqual({
       windows: [expect.objectContaining({
         id: "five_hour",
-        publishedLimitUsd: 12,
         observedSpendUsd: 1.25,
         coverage: "partial",
       })],
@@ -53,6 +52,44 @@ describe("OpenCode Go reference quota reports", () => {
         resetAt: 1_700_018_000_000,
       },
     });
+    expect(referenceQuotaFromReport(report)?.windows[0]).not.toHaveProperty("publishedLimitUsd");
+    expect(formatQuotaSourceLabel(report.source)).toBe("opencode-go · local observations");
+  });
+
+  test("accepts local observation rows without a published cap", () => {
+    const { publishedLimitUsd: _legacyCap, ...currentWindow } = report.quota.referenceWindows[0];
+    const parsed = referenceQuotaFromReport({
+      source: "opencode-go:local-observations",
+      aggregation: currentAggregation(),
+      quota: { referenceWindows: [currentWindow] },
+    });
+    expect(parsed?.windows[0]).toEqual(expect.objectContaining({
+      id: "five_hour",
+      observedSpendUsd: 1.25,
+      observedTokens: 42_000,
+      observedRequests: 3,
+    }));
+  });
+
+  test("adapts live Go usage windows to the same quota bars as Codex", () => {
+    const quota = accountQuotaFromReport({
+      source: "opencode-go:usage-api",
+      aggregation: null,
+      quota: {
+        fiveHourPercent: 12.5,
+        fiveHourResetAt: 1_780_000_000_000,
+        weeklyPercent: 40,
+        weeklyResetAt: 1_780_100_000_000,
+        monthlyPercent: 65,
+        monthlyResetAt: 1_780_200_000_000,
+        updatedAt: 1_779_900_000_000,
+      },
+    });
+    expect(quota).toEqual(expect.objectContaining({
+      fiveHourPercent: 12.5,
+      weeklyPercent: 40,
+      monthlyPercent: 65,
+    }));
   });
 
   test("drops malformed rows instead of inventing values", () => {
@@ -60,7 +97,6 @@ describe("OpenCode Go reference quota reports", () => {
       id: "five_hour",
       label: "5-hour",
       windowSeconds: 18_000,
-      publishedLimitUsd: -12,
       coverage: "complete",
     }] } })).toBeNull();
   });

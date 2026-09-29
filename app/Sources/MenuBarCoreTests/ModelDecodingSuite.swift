@@ -280,6 +280,15 @@ enum ModelDecodingSuite {
             t.equal(report.normalized().percent, 61)
         }
 
+        t.test("quotas: OpenCode Go live usage exposes rolling, weekly, and monthly windows") {
+            let json = report(provider: "opencode-go", label: "OpenCode Go", quota: #"{"updatedAt":1,"fiveHourPercent":12.5,"fiveHourResetAt":1784928599718,"weeklyPercent":40,"weeklyResetAt":1785265199718,"monthlyPercent":65,"monthlyResetAt":1785542400000}"#)
+            let quota = try decode(QuotaReport.self, json)
+            let windows = quota.normalizedWindows()
+            t.equal(windows.map(\.windowLabel), ["5h", "week", "month"])
+            t.equal(windows.map(\.percent), [12.5, 40, 65])
+            t.equal(quota.normalized().windowLabel, "month")
+        }
+
         t.test("quotas: multiple custom windows are all retained") {
             let json = report(provider: "cursor", label: "Cursor", quota: #"{"updatedAt":1,"monthlyPercent":10,"monthlyResetAt":1785256304000,"customWindows":[{"label":"First-party models","percent":4,"resetAt":1785256304000},{"label":"API usage","percent":1,"resetAt":1785256304000}]}"#)
             let report = try decode(QuotaReport.self, json)
@@ -327,22 +336,22 @@ enum ModelDecodingSuite {
             t.isNil(normalized.resetAt, "resetAt")
         }
 
-        t.test("quotas: OpenCode Go reference caps decode without inventing a percentage") {
+        t.test("quotas: OpenCode Go local observations decode without inventing a percentage") {
             let json = """
             {"provider":"opencode-go","label":"OpenCode Go","updatedAt":1784915090763,
-             "source":"opencode-go:published-caps+local-estimate","quota":{
+             "source":"opencode-go:local-observation","quota":{
                "updatedAt":1784915090763,
                "referenceWindows":[
                  {"id":"five_hour","label":"5-hour","windowSeconds":18000,
-                  "publishedLimitUsd":12,"observedSpendUsd":0.3,
+                  "observedSpendUsd":0.3,
                   "observedTokens":1000120,"observedRequests":3,"pricedRequests":3,
                   "unpricedRequests":0,"unmeasuredRequests":0,"coverage":"complete"},
                  {"id":"weekly","label":"7-day","windowSeconds":604800,
-                  "publishedLimitUsd":30,"observedSpendUsd":1.1,
+                  "observedSpendUsd":1.1,
                   "observedTokens":2400000,"observedRequests":4,"pricedRequests":2,
                   "unpricedRequests":1,"unmeasuredRequests":1,"coverage":"partial"},
                  {"id":"monthly","label":"30-day","windowSeconds":2592000,
-                  "publishedLimitUsd":60,"observedTokens":0,"observedRequests":0,
+                  "observedTokens":0,"observedRequests":0,
                   "pricedRequests":0,"unpricedRequests":0,"unmeasuredRequests":0,
                   "coverage":"none"}],
                "observedLimitEvent":{"limitName":"weekly","observedAt":1784915090763,
@@ -350,13 +359,27 @@ enum ModelDecodingSuite {
             """
             let report = try decode(QuotaReport.self, json)
             t.equal(report.referenceWindows.count, 3)
-            t.equal(report.referenceWindows.map(\.publishedLimitUsd), [12, 30, 60])
+            t.expect(report.referenceWindows.allSatisfy { $0.publishedLimitUsd == nil }, "new observations omit obsolete caps")
             t.equal(report.referenceWindows.map(\.observationQuality), [.estimate, .partial, .none])
             t.equal(report.observedLimitEvent?.limitName, "weekly")
 
             // Reference spend is local evidence, not provider usage or remaining quota.
             t.equal(report.normalizedWindows().count, 0)
             t.isNil(report.normalized().percent, "reference percent")
+        }
+
+        t.test("quotas: older OpenCode Go payloads with caps still decode") {
+            let json = """
+            {"provider":"opencode-go","label":"OpenCode Go","source":"test","updatedAt":1,
+             "quota":{"updatedAt":1,"referenceWindows":[{
+               "id":"five_hour","label":"5-hour","windowSeconds":18000,
+               "publishedLimitUsd":12,"observedSpendUsd":0.3,"observedTokens":100,
+               "observedRequests":1,"pricedRequests":1,"unpricedRequests":0,
+               "unmeasuredRequests":0,"coverage":"complete"}]}}
+            """
+            let report = try decode(QuotaReport.self, json)
+            t.equal(report.referenceWindows.first?.publishedLimitUsd, 12)
+            t.equal(report.referenceWindows.first?.observationQuality, .estimate)
         }
 
         t.test("quotas: inconsistent complete coverage degrades to Partial") {
