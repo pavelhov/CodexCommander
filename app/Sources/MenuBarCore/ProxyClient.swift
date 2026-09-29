@@ -299,6 +299,21 @@ public actor ProxyClient {
         try await authenticatedGet("api/codex-routing")
     }
 
+    public func codexCatalogStatus() async throws -> CodexCatalogStatus {
+        try await authenticatedGet("api/codex-catalog/status")
+    }
+
+    /// Explicit panel refresh uses the same non-disruptive sync as `ccx sync`.
+    /// Catalog gathering can exceed ordinary management mutation timeouts.
+    public func syncCodexCatalog() async throws {
+        _ = try await authenticatedSend(
+            method: "POST",
+            path: "api/sync",
+            body: nil as EmptyBody?,
+            timeout: 90
+        )
+    }
+
     /// Public post-startup readiness. This request intentionally carries no management
     /// credential, and accepts the endpoint's contractually meaningful 503 response for
     /// `pending` and `failed` observations.
@@ -501,7 +516,8 @@ public actor ProxyClient {
         method: String,
         path: String,
         query: [URLQueryItem] = [],
-        body: Body?
+        body: Body?,
+        timeout: TimeInterval? = nil
     ) async throws -> Data {
         // First attempt: fresh descriptors + identity check immediately before the
         // credential-bearing request.
@@ -512,7 +528,8 @@ public actor ProxyClient {
                 method: method,
                 path: path,
                 query: query,
-                body: body
+                body: body,
+                timeout: timeout
             )
         } catch ProxyError.unauthorized {
             // Exactly one retry. Rediscovery may pick up a rotated token or replacement
@@ -523,7 +540,8 @@ public actor ProxyClient {
                 method: method,
                 path: path,
                 query: query,
-                body: body
+                body: body,
+                timeout: timeout
             )
         }
     }
@@ -533,7 +551,8 @@ public actor ProxyClient {
         method: String,
         path: String,
         query: [URLQueryItem],
-        body: Body?
+        body: Body?,
+        timeout: TimeInterval?
     ) async throws -> Data {
         guard installation.credential?.isEmpty == false else {
             throw ProxyError.authenticationUnavailable
@@ -565,7 +584,7 @@ public actor ProxyClient {
             query: query,
             body: body,
             credential: credential,
-            timeout: method == "GET" ? 4 : 8
+            timeout: timeout ?? (method == "GET" ? 4 : 8)
         )
     }
 

@@ -356,6 +356,28 @@ enum TransportSuite {
             t.equal(requests[1].cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
         }
 
+        t.test("transport: catalog check and manual sync use attested management paths") {
+            StubProtocol.reset([
+                .init(status: 200, body: identity),
+                .init(status: 200, body: #"{"activation":{"schemaVersion":1,"catalog":{"status":"current"},"routing":{"status":"current"},"workers":{"status":"reload_required","staleCount":1}}}"#),
+                .init(status: 200, body: identity),
+                .init(status: 200, body: #"{"ok":true}"#),
+            ])
+            let client = makeClient(credential: "admin-secret")
+            let status: CodexCatalogStatus? = sync { try? await client.codexCatalogStatus() }
+            t.equal(status?.reloadStatus, .restartRequired(staleWorkerCount: 1))
+            let synced = sync { (try? await client.syncCodexCatalog()) != nil }
+            t.equal(synced, true)
+
+            let requests = StubProtocol.recorded
+            t.equal(requests.map { $0.url?.path ?? "" }, [
+                "/healthz", "/api/codex-catalog/status", "/healthz", "/api/sync",
+            ])
+            t.equal(requests[1].httpMethod, "GET")
+            t.equal(requests[3].httpMethod, "POST")
+            t.equal(requests[3].value(forHTTPHeaderField: "x-codexcommander-api-key"), "admin-secret")
+        }
+
         t.test("transport: public readiness accepts ready, pending, and failed without credentials") {
             StubProtocol.reset([
                 .init(status: 200, body: readinessBody(status: "ready")),

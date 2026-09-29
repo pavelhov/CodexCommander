@@ -120,6 +120,16 @@ providers are capped or their saved values differ. Native OpenAI models always k
 Automatic upstream catalog refresh is configured per provider under **Providers → Settings**. The
 Models page shows that state and links directly to it; it does not keep a second discovery setting.
 
+On **Models**, choose **Refresh models** to run the same explicit, non-disruptive sync as `ccx sync`.
+It rechecks the native Codex account and enabled routed providers, then updates the published Codex
+catalog. Provider models that Commander discovered and enabled but did not publish into Codex's
+current picker catalog appear gray with a **Commander only** badge; use the badge count to filter
+them. This comparison is unavailable when the published catalog cannot be read, and a provider's
+model listing alone does not prove that the account can complete an inference with it. If the
+catalog is current but running Codex workers hold an older version, Models shows a prompt to quit
+and reopen ChatGPT. Opening Models checks the existing local catalog; upstream discovery occurs on
+the explicit sync.
+
 ## Catalog activation
 
 Saving model visibility, the featured roster, or collaboration mode is deliberately non-disruptive:

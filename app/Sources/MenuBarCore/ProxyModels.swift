@@ -148,6 +148,51 @@ public struct CodexRouteStatus: Decodable, Equatable, Sendable {
     }
 }
 
+/// Read-only activation observation from `GET /api/codex-catalog/status`.
+/// A restart prompt requires both a published catalog and confirmed stale workers;
+/// an unknown or pending status must not tell the user a restart will fix it.
+public enum CatalogReloadStatus: Equatable, Sendable {
+    case unknown
+    case current
+    case restartRequired(staleWorkerCount: Int)
+}
+
+public struct CodexCatalogStatus: Decodable, Sendable {
+    public struct Activation: Decodable, Sendable {
+        public struct State: Decodable, Sendable {
+            public let status: String
+        }
+
+        public struct Workers: Decodable, Sendable {
+            public let status: String
+            public let staleCount: Int
+        }
+
+        public let schemaVersion: Int
+        public let catalog: State
+        public let routing: State
+        public let workers: Workers
+    }
+
+    public let activation: Activation
+
+    public var reloadStatus: CatalogReloadStatus {
+        guard activation.schemaVersion == 1,
+              activation.catalog.status == "current",
+              activation.routing.status == "current"
+        else { return .unknown }
+
+        switch activation.workers.status {
+        case "reload_required" where activation.workers.staleCount > 0:
+            return .restartRequired(staleWorkerCount: activation.workers.staleCount)
+        case "current", "not_running":
+            return .current
+        default:
+            return .unknown
+        }
+    }
+}
+
 /// `GET /api/startup-health`
 public struct StartupHealth: Decodable, Equatable, Sendable {
     public let status: String

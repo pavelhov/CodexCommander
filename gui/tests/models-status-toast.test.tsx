@@ -211,3 +211,61 @@ test("success toast expires after 6s and a repeated action re-arms it", async ()
   await fireTimers(6000);
   expect(container.querySelector(".action-toast")).toBeNull();
 });
+
+test("Models refreshes the catalog and distinguishes Commander-only models from stale Codex workers", async () => {
+  const canonicalFetch = globalThis.fetch;
+  let synced = false;
+  let syncCalls = 0;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/catalog")) {
+      return Response.json({ models: [
+        { slug: "anthropic/claude-sonnet-5", visibility: "list" },
+        ...(synced ? [{ slug: "anthropic/claude-opus-4-5", visibility: "list" }] : []),
+      ] });
+    }
+    if (url.endsWith("/api/codex-catalog/status")) {
+      return Response.json({ activation: {
+        schemaVersion: 1,
+        catalog: { status: "current" },
+        routing: { status: "current" },
+        workers: { status: synced ? "reload_required" : "current", staleCount: synced ? 1 : 0 },
+      } });
+    }
+    if (url.endsWith("/api/sync") && init?.method === "POST") {
+      syncCalls += 1;
+      synced = true;
+      return Response.json({ ok: true, status: "applied" });
+    }
+    return canonicalFetch(input, init);
+  }) as typeof fetch;
+
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><Models apiBase="http://localhost" /></LanguageProvider>);
+  });
+  await act(async () => {
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    await Promise.resolve();
+  });
+
+  expect(container.querySelectorAll(".models-chip--commander-only")).toHaveLength(1);
+  expect(container.querySelector(".models-chip--commander-only")?.textContent).toBe("Commander only");
+  const filter = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent?.includes("Commander only (1)"))!;
+  await act(async () => { filter.click(); });
+  expect(container.querySelectorAll(".models-model-row")).toHaveLength(1);
+  await act(async () => { filter.click(); });
+
+  const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")]
+    .find(button => button.textContent === "Refresh models")!;
+  await act(async () => {
+    refresh.click();
+    await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    await Promise.resolve();
+  });
+  expect(syncCalls).toBe(1);
+  expect(container.querySelectorAll(".models-chip--commander-only")).toHaveLength(0);
+  expect(container.textContent).toContain("Quit and reopen ChatGPT");
+});

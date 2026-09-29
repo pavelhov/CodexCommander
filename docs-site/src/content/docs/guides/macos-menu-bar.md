@@ -249,6 +249,12 @@ configured in CodexCommander. If no Codex worker is running, the new roster is r
 task. If a long-lived worker loaded an older roster, CodexCommander stays running and the panel keeps the
 nonfatal **Restart ChatGPT to load models** card visible.
 
+Choose **Refresh Models** in the panel to run the same non-disruptive catalog sync as `ccx sync`.
+This checks the current native Codex account and enabled providers; the panel then checks whether
+running Codex workers still hold an older catalog. The panel also reads catalog status when opened
+and periodically while open, so a sync run from the CLI can show the restart card without relaunching
+the menu app. A model added upstream is discovered on the next sync, not by the status check alone.
+
 Choose **Show restart steps…**, quit ChatGPT completely, and reopen it. Return to the same task and
 check its model picker. This replaces the old worker; CodexCommander and the menu app remain running
 throughout. Some task-scoped collaboration setting changes still require a new task.

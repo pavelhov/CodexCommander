@@ -440,6 +440,18 @@ export const ja: Record<TKey, string> = {
 
   // models
   "models.subtitle": "Codex に表示するモデルとモデルコンテキストの扱いを管理します。",
+  "models.refreshModels": "モデルを更新",
+  "models.refreshing": "モデルを更新中…",
+  "models.syncComplete": "モデルの同期が完了しました。下に案内が表示された場合は ChatGPT を再起動してください。",
+  "models.syncSkipped": "モデルの同期をスキップしました。Codex 連携の設定を確認してください。",
+  "models.syncFailed": "モデルの同期に失敗しました。",
+  "models.commanderOnlyBadge": "Commander のみ",
+  "models.commanderOnlyHint": "Commander では検出されていますが、現在の Codex モデル一覧にはありません。",
+  "models.commanderOnlyFilter": "Commander のみ ({count})",
+  "models.commanderOnlySummary": "有効なモデル {count} 件は Commander で検出されましたが、現在の Codex カタログにはありません。",
+  "models.tipCommanderOnly": "Commander で検出、Codex の一覧にはなし",
+  "models.restartCodex": "実行中の Codex ワーカー {count} 件は古いモデルカタログを使用しています。ChatGPT を完全に終了して開き直してください。",
+  "models.catalogUnavailable": "Codex カタログを読み取れないため、Commander 専用モデルを比較できません。",
   "models.nativeGroupLabel": "OpenAI ネイティブ",
   "models.nativeHint": "パススルーモデルはプロバイダーで選択したプールまたはダイレクトアカウントオプションを使用します。一つオフにすると Codex ピッカーから隠します(カタログエントリは保持されるので、再有効化で正確に復元されます)。",
   "models.active": "{active}/{total} 表示中",

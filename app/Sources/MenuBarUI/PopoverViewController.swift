@@ -206,7 +206,7 @@ public final class PopoverViewController: NSViewController {
         updateMessage.isHidden = true
         styleFooterButton(dashboardButton, title: "Dashboard", symbol: "square.grid.2x2")
         styleFooterButton(logsButton, title: "Logs", symbol: "list.bullet.rectangle")
-        styleFooterButton(refreshButton, title: "Refresh", symbol: "arrow.clockwise")
+        styleFooterButton(refreshButton, title: "Refresh Models", symbol: "arrow.clockwise")
         styleFooterButton(startupOptionsButton, title: "Startup options…", symbol: "gearshape.2")
         styleFooterButton(lifecycleButton, title: "Start Proxy", symbol: "play.fill")
         styleFooterButton(restartButton, title: "Restart Proxy…", symbol: "power")
@@ -242,7 +242,7 @@ public final class PopoverViewController: NSViewController {
 
         dashboardButton.setAccessibilityLabel("Open dashboard")
         logsButton.setAccessibilityLabel("Open logs")
-        refreshButton.setAccessibilityLabel("Refresh")
+        refreshButton.setAccessibilityLabel("Refresh models and proxy status")
         startupOptionsButton.setAccessibilityLabel("Open startup options in the dashboard")
         lifecycleButton.setAccessibilityLabel("Start CodexCommander proxy")
         restartButton.setAccessibilityLabel("Restart CodexCommander proxy")
@@ -390,6 +390,7 @@ public final class PopoverViewController: NSViewController {
 
     public func setLifecycleControlsEnabled(_ enabled: Bool) {
         lifecycleControlsAllowed = enabled
+        refreshButton.isEnabled = enabled && snapshot?.state.isRunning == true
         lifecycleButton.isEnabled = enabled && snapshot.map { lifecycleActionable($0.state) } == true
         restartButton.isEnabled = enabled && snapshot?.state.isRunning == true
         applyCodexRouteAvailability()
@@ -477,7 +478,7 @@ public final class PopoverViewController: NSViewController {
         let stopIntent = lifecycleStops(snapshot.state)
         dashboardButton.isEnabled = !definitelyStopped
         logsButton.isEnabled = !definitelyStopped
-        refreshButton.isEnabled = true
+        refreshButton.isEnabled = lifecycleControlsAllowed && snapshot.state.isRunning
         lifecycleButton.title = stopIntent ? "Stop Proxy…" : "Start Proxy"
         lifecycleButton.image = NSImage(
             systemSymbolName: stopIntent ? "stop.fill" : "play.fill",

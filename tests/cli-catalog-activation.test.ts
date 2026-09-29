@@ -160,10 +160,14 @@ describe("CLI catalog activation orchestration", () => {
 
   test("offline sync uses the canonical local sync facade", async () => {
     let localCalls = 0;
+    let forceNativeLive: boolean | undefined;
+    let forceRoutedLive: boolean | undefined;
     const events: string[] = [];
     const result = await syncCodexCatalogForCli(null, {
-      syncModelsToCodex: async () => {
+      syncModelsToCodex: async (_port, _config, _log, _deps, options) => {
         localCalls += 1;
+        forceNativeLive = options?.forceNativeLive;
+        forceRoutedLive = options?.forceRoutedLive;
         return syncResult();
       },
       runtimeRequest: async () => {
@@ -175,6 +179,8 @@ describe("CLI catalog activation orchestration", () => {
       },
     });
     expect(localCalls).toBe(1);
+    expect(forceNativeLive).toBe(true);
+    expect(forceRoutedLive).toBe(true);
     expect(result.ok).toBe(true);
     expect(events).toEqual(["acquire:true", "release"]);
   });

@@ -149,6 +149,26 @@ enum ModelDecodingSuite {
             }
         }
 
+        t.test("catalog status: restart requires a published catalog and stale workers") {
+            let stale = try decode(
+                CodexCatalogStatus.self,
+                #"{"activation":{"schemaVersion":1,"catalog":{"status":"current"},"routing":{"status":"current"},"workers":{"status":"reload_required","staleCount":2}}}"#
+            )
+            t.equal(stale.reloadStatus, .restartRequired(staleWorkerCount: 2))
+
+            let pending = try decode(
+                CodexCatalogStatus.self,
+                #"{"activation":{"schemaVersion":1,"catalog":{"status":"pending"},"routing":{"status":"current"},"workers":{"status":"reload_required","staleCount":2}}}"#
+            )
+            t.equal(pending.reloadStatus, .unknown)
+
+            let current = try decode(
+                CodexCatalogStatus.self,
+                #"{"activation":{"schemaVersion":1,"catalog":{"status":"current"},"routing":{"status":"current"},"workers":{"status":"current","staleCount":0}}}"#
+            )
+            t.equal(current.reloadStatus, .current)
+        }
+
         t.test("restart: rejects a partial accepted response") {
             t.expect(
                 rejects(RestartAccepted.self, #"{"success":true,"activeTurnCount":0,"drainTimeoutMs":1000,"alreadyDraining":false}"#),

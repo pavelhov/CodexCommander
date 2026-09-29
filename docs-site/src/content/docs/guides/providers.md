@@ -304,13 +304,13 @@ a request is active, the menu identifies its model as **In flight**; its final t
 only after the request completes and the proxy records it. Unmeasured token totals are shown as
 unknown rather than zero, and estimated cost appears only when pricing is available for that model.
 
-The provider pins 28 verified Zen Go model ids, including `deepseek-v4.1-flash`,
-`glm-5.3-flash`, and `qwen3.8-flash`, as
-its static catalog. Live `/v1/models` discovery is authoritative on the canonical host; ids
-outside the trusted set are quarantined rather than routed. Transports follow the official
-endpoint table: Qwen and MiniMax models go over Anthropic Messages, `gpt-5.6-luna` and `grok-4.5`
-over OpenAI Responses, and the
-remaining models over OpenAI Chat Completions. These trust facts attach only to the canonical
+The provider keeps a reviewed fallback catalog of OpenCode Go models, including
+`deepseek-v4.1-flash`, `gpt-6-luna`, and `grok-4.7`. With a Go key, live `/v1/models`
+discovery determines which of those models the account can use. That endpoint returns model ids
+without transport metadata, so a new id appears in Commander after its protocol is verified and
+added to the trusted catalog; unverified ids are held back. The [OpenCode Go endpoint
+table](https://opencode.ai/v2/docs/console/go#endpoints) identifies models using Anthropic Messages,
+OpenAI Responses, or Chat Completions. These transport facts attach only to the canonical
 `https://opencode.ai/zen/go/v1` destination; a same-named custom provider keeps its own behavior.
 
 OpenCode Go requires a session identifier for each conversation. CodexCommander derives an opaque

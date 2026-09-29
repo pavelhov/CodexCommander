@@ -437,6 +437,18 @@ export const zh: Record<TKey, string> = {
 
   // models
   "models.subtitle": "管理 Codex 可见的模型以及模型上下文的处理方式。",
+  "models.refreshModels": "刷新模型",
+  "models.refreshing": "正在刷新模型…",
+  "models.syncComplete": "模型同步已完成。如果下方出现提示，请重启 ChatGPT。",
+  "models.syncSkipped": "已跳过模型同步。请检查 Codex 集成设置。",
+  "models.syncFailed": "模型同步失败。",
+  "models.commanderOnlyBadge": "仅 Commander",
+  "models.commanderOnlyHint": "Commander 已发现此模型，但当前 Codex 模型列表中没有它。",
+  "models.commanderOnlyFilter": "仅 Commander ({count})",
+  "models.commanderOnlySummary": "有 {count} 个已启用模型已被 Commander 发现，但未列入当前 Codex 目录。",
+  "models.tipCommanderOnly": "Commander 已发现；Codex 列表中没有",
+  "models.restartCodex": "有 {count} 个正在运行的 Codex 工作进程仍使用旧模型目录。请完全退出并重新打开 ChatGPT。",
+  "models.catalogUnavailable": "无法读取 Codex 目录，因此暂时无法比较 Commander 专用模型。",
   "models.nativeGroupLabel": "OpenAI 原生",
   "models.nativeHint": "Passthrough 模型使用在提供方页面选择的账户池或直连选项。关闭后会从 Codex 选择器中隐藏（目录条目保留，重新开启即可完整恢复）。",
   "models.active": "{active}/{total} 可见",

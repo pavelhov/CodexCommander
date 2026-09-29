@@ -2,6 +2,8 @@ import { injectCodexConfig } from "./inject";
 import { currentExternalCodexModelProvider } from "./routing-transition";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
 import { refreshCodexModelCatalog, type CodexCatalogRefreshResult } from "./refresh";
+import { refreshNativeLiveCatalog } from "./catalog/native-live";
+import { clearModelCache } from "./model-cache";
 import { applyProxyEnv, loadConfig } from "../config";
 import type { CodexCommanderConfig } from "../types";
 import { collectOrcaCodexHomeDiagnostic } from "./home";
@@ -47,6 +49,10 @@ type CodexSyncAdmission = Extract<CodexAdmission, { kind: "refused" }> | { reado
 
 interface CodexSyncDeps {
   refreshCodexModelCatalog: typeof refreshCodexModelCatalog;
+  /** Native discovery seam; explicit syncs may bypass its five-minute memo. */
+  refreshNativeLiveCatalog?: typeof refreshNativeLiveCatalog;
+  /** Routed discovery seam; explicit syncs may bypass provider model caches. */
+  clearModelCache?: typeof clearModelCache;
   injectCodexConfig: typeof injectCodexConfig;
   /** The sync entry only needs this admission's service-home verdict. */
   admitCodexWrite?: () => CodexSyncAdmission;
@@ -103,6 +109,7 @@ export async function syncModelsToCodex(
   config: CodexCommanderConfig = loadConfig(),
   log: Pick<Console, "log" | "error"> | null = console,
   deps: CodexSyncDeps = defaultDeps,
+  options: Readonly<{ forceNativeLive?: boolean; forceRoutedLive?: boolean }> = {},
 ): Promise<CodexSyncResult> {
   // `config` can be the server's startup object. The decision, however, is a
   // durable user switch and must be read again at this production boundary: a
@@ -220,6 +227,12 @@ export async function syncModelsToCodex(
   let catalogConvergenceChanged = false;
 
   try {
+    if (options.forceNativeLive) {
+      await (deps.refreshNativeLiveCatalog ?? refreshNativeLiveCatalog)({ force: true });
+    }
+    if (options.forceRoutedLive) {
+      (deps.clearModelCache ?? clearModelCache)();
+    }
     const cat = await deps.refreshCodexModelCatalog(config);
     added = cat.added;
     catalogExists = cat.catalogExists;

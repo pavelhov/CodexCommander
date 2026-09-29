@@ -451,6 +451,18 @@ export const en = {
 
   // models
   "models.subtitle": "Manage which models Codex sees and how model context is handled.",
+  "models.refreshModels": "Refresh models",
+  "models.refreshing": "Refreshing models…",
+  "models.syncComplete": "Model sync finished. Restart ChatGPT if prompted below.",
+  "models.syncSkipped": "Model sync skipped. Check the Codex integration settings.",
+  "models.syncFailed": "Model sync failed.",
+  "models.commanderOnlyBadge": "Commander only",
+  "models.commanderOnlyHint": "Discovered by Commander but absent from the current Codex picker catalog.",
+  "models.commanderOnlyFilter": "Commander only ({count})",
+  "models.commanderOnlySummary": "{count} enabled models were discovered by Commander but are not listed in the current Codex catalog.",
+  "models.tipCommanderOnly": "Discovered by Commander; not listed in Codex",
+  "models.restartCodex": "{count} running Codex workers have an older model catalog. Quit and reopen ChatGPT to load the updated catalog.",
+  "models.catalogUnavailable": "Codex catalog could not be read; Commander-only comparison is unavailable.",
   "models.nativeGroupLabel": "OpenAI native",
   "models.nativeHint": "Passthrough models use the Pool or Direct account option selected on Providers. Toggling one off hides it from the Codex picker (the catalog entry is kept, so re-enabling restores it exactly).",
   "models.active": "{active}/{total} visible",

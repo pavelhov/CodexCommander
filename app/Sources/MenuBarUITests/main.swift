@@ -146,6 +146,7 @@ func makeSnapshot(
     openCodeGoModelUsage: [ProviderModelUsage] = [],
     openCodeGoUsageLoaded: Bool = false,
     health: StartupHealth = currentHealth(),
+    state: ProxyState? = nil,
     readiness: ProxyReadinessState = .unknown,
     recommendedCommand: String? = nil,
     providersLoaded: Bool = false,
@@ -153,7 +154,7 @@ func makeSnapshot(
     activityLoaded: Bool = true
 ) -> ProxySnapshot {
     ProxySnapshot(
-        state: .running(health),
+        state: state ?? .running(health),
         readiness: readiness,
         endpoint: .default,
         quotas: quotas,
@@ -228,12 +229,19 @@ runner.test("ui: footer exposes navigation, lifecycle, Codex routing, and a sing
     runner.equal(
         titles,
         [
-            "Dashboard", "Logs", "Refresh", "Start Proxy", "Restart Proxy…",
+            "Dashboard", "Logs", "Refresh Models", "Start Proxy", "Restart Proxy…",
             "Restore Native Codex", "Route Codex Through Proxy",
             "Stop CodexCommander and Quit…",
         ],
         "footer titles"
     )
+    controller.apply(makeSnapshot())
+    runner.equal(controller.footerEnabledStates[2], true, "model refresh is available while proxy runs")
+    controller.setLifecycleControlsEnabled(false)
+    runner.equal(controller.footerEnabledStates[2], false, "model refresh is guarded during lifecycle actions")
+    controller.setLifecycleControlsEnabled(true)
+    controller.apply(makeSnapshot(state: .unreachable))
+    runner.equal(controller.footerEnabledStates[2], false, "model refresh is unavailable when proxy is stopped")
 }
 
 runner.test("ui: catalog update presents manual ChatGPT restart outside the proxy footer") {

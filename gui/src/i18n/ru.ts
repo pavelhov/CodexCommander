@@ -445,6 +445,18 @@ export const ru: Record<TKey, string> = {
 
   // models
   "models.subtitle": "Управляйте моделями, которые видит Codex, и использованием контекста моделей.",
+  "models.refreshModels": "Обновить модели",
+  "models.refreshing": "Обновление моделей…",
+  "models.syncComplete": "Синхронизация моделей завершена. Перезапустите ChatGPT, если ниже появится подсказка.",
+  "models.syncSkipped": "Синхронизация моделей пропущена. Проверьте настройки интеграции Codex.",
+  "models.syncFailed": "Не удалось синхронизировать модели.",
+  "models.commanderOnlyBadge": "Только Commander",
+  "models.commanderOnlyHint": "Модель обнаружена Commander, но отсутствует в текущем каталоге выбора Codex.",
+  "models.commanderOnlyFilter": "Только Commander ({count})",
+  "models.commanderOnlySummary": "{count} включенных моделей обнаружены Commander, но отсутствуют в текущем каталоге Codex.",
+  "models.tipCommanderOnly": "Обнаружена Commander; отсутствует в списке Codex",
+  "models.restartCodex": "{count} запущенных процессов Codex используют старый каталог моделей. Полностью закройте ChatGPT и откройте снова.",
+  "models.catalogUnavailable": "Не удалось прочитать каталог Codex; сравнение с моделями Commander недоступно.",
   "models.nativeGroupLabel": "Нативные OpenAI",
   "models.nativeHint": "Модели сквозного проброса используют режим аккаунта (пул или прямое подключение), выбранный на странице «Провайдеры». Отключение модели скрывает её из селектора Codex (запись в каталоге сохраняется, поэтому при повторном включении она восстанавливается в точности).",
   "models.active": "{active}/{total} видимо",

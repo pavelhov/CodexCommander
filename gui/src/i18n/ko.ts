@@ -440,6 +440,18 @@ export const ko: Record<TKey, string> = {
 
   // models
   "models.subtitle": "Codex에 표시할 모델과 모델 컨텍스트 처리 방식을 관리합니다.",
+  "models.refreshModels": "모델 새로고침",
+  "models.refreshing": "모델 새로고침 중…",
+  "models.syncComplete": "모델 동기화가 완료되었습니다. 아래에 안내가 표시되면 ChatGPT를 다시 시작하세요.",
+  "models.syncSkipped": "모델 동기화를 건너뛰었습니다. Codex 통합 설정을 확인하세요.",
+  "models.syncFailed": "모델 동기화에 실패했습니다.",
+  "models.commanderOnlyBadge": "Commander 전용",
+  "models.commanderOnlyHint": "Commander에서 검색되었지만 현재 Codex 모델 목록에는 없습니다.",
+  "models.commanderOnlyFilter": "Commander 전용 ({count})",
+  "models.commanderOnlySummary": "활성화된 모델 {count}개는 Commander에서 검색되었지만 현재 Codex 카탈로그에는 없습니다.",
+  "models.tipCommanderOnly": "Commander에서 검색됨, Codex 목록에는 없음",
+  "models.restartCodex": "실행 중인 Codex 워커 {count}개가 이전 모델 카탈로그를 사용 중입니다. ChatGPT를 완전히 종료한 뒤 다시 여세요.",
+  "models.catalogUnavailable": "Codex 카탈로그를 읽을 수 없어 Commander 전용 모델을 비교할 수 없습니다.",
   "models.nativeGroupLabel": "OpenAI 네이티브",
   "models.nativeHint": "프로바이더에서 선택한 풀 또는 직접 계정 옵션으로 서빙되는 passthrough 모델입니다. 끄면 Codex 선택기에서 숨겨지고, 카탈로그 항목은 유지되므로 다시 켜면 그대로 복원됩니다.",
   "models.active": "{active}/{total} 표시",
