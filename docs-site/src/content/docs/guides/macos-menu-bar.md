@@ -29,13 +29,12 @@ In-app updates are available starting with the numbered v0.1.6 build. If you ins
 v0.1.6 archive without a build number in its name, install the newer build or a later release manually
 once using the steps above.
 
-![macOS menu with an update action](/macos-updates.png)
-
 The app checks for compatible stable releases quietly in the background. Starting with v0.1.8, it checks
-on launch and every six hours while running. When it finds an update, the menu shows
-**Update Available…**. Closing the update window or choosing **Later** keeps that reminder available
-so you can return to it. Select it to review the version and release notes.
-You can also choose **Check for Updates…** to check manually. Checking, including a failed or
+on launch and every six hours while running. When it finds an update, the panel header shows
+**Update** in the upper right. Closing the update window or choosing **Later** keeps that button available
+so you can return to it. Select it to review the version and release notes. If an installation needs
+attention, the header button changes to **Finish Update**.
+You can also choose **More actions → Check for Updates…** to check manually. Checking, including a failed or
 offline background check, leaves the proxy running and does not open an unsolicited update window.
 
 Downloads and installation require an explicit choice. When you choose to install, a confirmation
@@ -94,7 +93,8 @@ the app and reopen it. The ad-hoc Gatekeeper steps above remain unchanged.
 
 ## Startup modes
 
-The panel has one **Launch at Login** switch and reports the resulting mode:
+The panel has one **Launch at Login** switch. Hover over its label or switch for the normal mode
+summary; approval, errors, and recovery guidance remain visible in the row. The resulting modes are:
 
 - **Desktop** — the CodexCommander menu app launches when you sign in, performs an explicit Start,
   starts or attaches to exactly one proxy, and routes managed Codex through it when Codex
@@ -143,14 +143,27 @@ override it.
 
 ## What the panel shows
 
-- **Proxy status** — reports process liveness without treating a running server as proof that startup
-  synchronization finished or that Codex uses the proxy.
-- **Readiness** — reports startup and catalog synchronization as **Checking**, **Starting**, **Ready**,
-  **Startup failed**, or **Unavailable**. This signal is independent of proxy liveness.
-- **Codex route** — reports whether Codex currently routes through CodexCommander, native OpenAI, or
+Proxy controls and the available Codex route switch share the first action row. Dashboard and More
+actions are compact buttons in the header; Stop and Quit remains visible above the one-line
+Launch at Login control. If the Codex route is uncertain, both recovery choices appear on a separate
+row. More actions contains Refresh Models, Logs, and the manual update check. An
+available update or installation needing attention appears in the upper-right header instead. The
+scroll area contains provider quotas followed by live requests, with the in-flight count beside the
+live-request heading. A one-line status footer
+sits below the scroll area, at the bottom of the panel. When the current Codex route is confirmed,
+the controls show the available route switch instead of a disabled action for the route already in
+use. If the route cannot be confirmed, both recovery actions remain visible.
+
+- **Status footer** — combines proxy liveness and startup readiness into one label: **Checking**,
+  **Starting**, **Ready**, **Sync failed**, **Startup at risk**, **Readiness unavailable**, **Stopped**,
+  **Authentication needed**, or **Connection issue**. **Ready** requires both a running proxy and
+  completed startup synchronization. The footer reports status; actions remain in the controls or
+  guidance above it.
+- **Codex route** — appears beside the footer status and reports whether Codex currently routes through CodexCommander, native OpenAI, or
   another custom route. A running proxy does not by itself mean that Codex is using it. After an
   explicit switch, the companion confirms this value from a fresh uncached read of the route Codex
-  will consume instead of waiting for cached startup diagnostics.
+  will consume instead of waiting for cached startup diagnostics. An unconfirmed or stale route is
+  labeled **Unconfirmed** rather than presented as current.
 - **Live proxy requests** — the current in-flight request count and live model/provider turn rows. A
   spawned-child request is nested only when CodexCommander can prove its in-flight parent from request
   metadata; otherwise it is shown as a standalone subagent turn. A row disappears when that model
@@ -166,7 +179,8 @@ override it.
   measured tokens over the last 30 days. An active model is marked **In flight** separately; its
   final usage is recorded when the request completes. The dashboard's OpenCode Go Overview and Usage
   tab show the same 30-day model totals. These local observations are not a live provider balance.
-- **Dashboard and Logs** — open the corresponding local dashboard view in your default browser with
+- **Dashboard and Logs** — Dashboard opens from the header; Logs is under **More actions**.
+  Both open the corresponding local dashboard view in your default browser with
   a one-time launch authorization for full dashboard changes, including catalog Apply.
 - **Startup options…** — opens the dashboard's Startup page when an optional startup upgrade or
   repair is available; the panel does not make a raw CLI command the primary action.
@@ -249,7 +263,7 @@ configured in CodexCommander. If no Codex worker is running, the new roster is r
 task. If a long-lived worker loaded an older roster, CodexCommander stays running and the panel keeps the
 nonfatal **Restart ChatGPT to load models** card visible.
 
-Choose **Refresh Models** in the panel to run the same non-disruptive catalog sync as `ccx sync`.
+Choose **More actions → Refresh Models** in the panel to run the same non-disruptive catalog sync as `ccx sync`.
 This checks the current native Codex account and enabled providers; the panel then checks whether
 running Codex workers still hold an older catalog. The panel also reads catalog status when opened
 and periodically while open, so a sync run from the CLI can show the restart card without relaunching
@@ -334,8 +348,9 @@ bun run build:macos
 open dist/macos/CodexCommander.app
 ```
 
-Without a release public key, a development build shows **Updates unavailable in this build**;
-normal Start still works. Its default integer build identifier is `1`. Keyed builds require an
+Without a release public key, a development build disables **More actions → Check for Updates…**;
+its tooltip explains that updates are unavailable in this build. Normal Start still works. Its
+default integer build identifier is `1`. Keyed builds require an
 explicit positive-integer `MACOS_BUILD_NUMBER`; release packaging also requires the signing public
 key and a build number above the published inventory. These are maintainer release prerequisites,
 not required for ordinary source development.

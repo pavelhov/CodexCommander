@@ -133,26 +133,18 @@ public final class CatalogUpdateView: NSView {
     package func activateForTesting() { applyButton.performClick(nil) }
 }
 
-// MARK: - Status header
+// MARK: - Brand header and status footer
 
-/// Brand mark + separate proxy-health, readiness, in-flight-request, and Codex-route status.
-public final class StatusHeaderView: NSView {
+/// App identity with a compact update action when a release needs attention.
+public final class BrandHeaderView: NSView {
     private let brand = NSImageView()
     private let title = makeLabel("CodexCommander", font: Theme.title, color: Theme.text)
-    private let dot = StatusDotView()
-    private let status = makeLabel("", font: Theme.captionMedium, color: Theme.muted)
-    private let requestCount = makeLabel("", font: Theme.caption, color: Theme.faint)
-    private let readiness = makeLabel("", font: Theme.micro, color: Theme.faint)
-    private let codexRoute = makeLabel("", font: Theme.micro, color: Theme.faint)
-    private let divider: NSView = {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = Theme.cardBorder.cgColor
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        view.heightAnchor.constraint(equalToConstant: 18).isActive = true
-        return view
-    }()
+    private let dashboardButton = NSButton()
+    private let moreActionsButton = NSButton()
+    private let updateButton = NSButton()
+    var onDashboard: (() -> Void)?
+    var onMoreActions: ((NSButton) -> Void)?
+    var onUpdate: (() -> Void)?
 
     init() {
         super.init(frame: .zero)
@@ -164,16 +156,25 @@ public final class StatusHeaderView: NSView {
         brand.widthAnchor.constraint(equalToConstant: 25).isActive = true
         brand.heightAnchor.constraint(equalToConstant: 25).isActive = true
 
-        let left = makeRow([brand, title], spacing: 8)
-        let proxyState = makeRow([dot, status, divider, requestCount], spacing: 7)
-        let right = NSStackView(views: [proxyState, readiness, codexRoute])
-        right.orientation = .vertical
-        right.alignment = .trailing
-        right.spacing = 1
-        let row = NSStackView(views: [left, NSView(), right])
-        row.orientation = .horizontal
-        row.alignment = .centerY
-        row.distribution = .fill
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        configureIconButton(dashboardButton, symbol: "square.grid.2x2", label: "Open dashboard")
+        dashboardButton.action = #selector(dashboardTapped)
+        configureIconButton(moreActionsButton, symbol: "ellipsis.circle", label: "More actions")
+        moreActionsButton.action = #selector(moreActionsTapped)
+
+        updateButton.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+        updateButton.imagePosition = .imageLeading
+        updateButton.bezelStyle = .recessed
+        updateButton.isBordered = false
+        updateButton.controlSize = .small
+        updateButton.font = Theme.captionMedium
+        updateButton.contentTintColor = Theme.amber
+        updateButton.setButtonType(.momentaryPushIn)
+        updateButton.target = self
+        updateButton.action = #selector(updateTapped)
+        updateButton.isHidden = true
+
+        let row = makeRow([brand, title, NSView(), dashboardButton, moreActionsButton, updateButton], spacing: 7)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         NSLayoutConstraint.activate([
@@ -185,63 +186,141 @@ public final class StatusHeaderView: NSView {
         ])
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("CodexCommander status")
+        setAccessibilityLabel("CodexCommander")
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    private func configureIconButton(_ button: NSButton, symbol: String, label: String) {
+        button.title = ""
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        button.imagePosition = .imageOnly
+        button.bezelStyle = .recessed
+        button.isBordered = false
+        button.controlSize = .small
+        button.contentTintColor = Theme.text
+        button.setButtonType(.momentaryPushIn)
+        button.target = self
+        button.setAccessibilityLabel(label)
+        button.toolTip = label
+        button.widthAnchor.constraint(equalToConstant: 27).isActive = true
+    }
+
+    func setDashboardEnabled(_ enabled: Bool) {
+        dashboardButton.isEnabled = enabled
+        dashboardButton.alphaValue = enabled ? 1 : 0.45
+    }
+
+    func setMoreActionsEnabled(_ enabled: Bool, label: String) {
+        moreActionsButton.isEnabled = enabled
+        moreActionsButton.alphaValue = enabled ? 1 : 0.45
+        moreActionsButton.setAccessibilityLabel(label)
+        moreActionsButton.toolTip = label
+    }
+
+    func setUpdateAction(title: String?, enabled: Bool, message: String) {
+        updateButton.isHidden = title == nil
+        guard let title else { return }
+        updateButton.title = title == "Finish Update…" ? "Finish Update" : "Update"
+        updateButton.isEnabled = enabled
+        updateButton.alphaValue = enabled ? 1 : 0.45
+        updateButton.setAccessibilityLabel(title)
+        updateButton.toolTip = message.isEmpty ? title : message
+    }
+
+    var updateActionTitleForTesting: String? {
+        updateButton.isHidden ? nil : updateButton.accessibilityLabel()
+    }
+    var updateActionEnabledForTesting: Bool { updateButton.isEnabled }
+    var dashboardEnabledForTesting: Bool { dashboardButton.isEnabled }
+    var dashboardAccessibilityLabelForTesting: String? { dashboardButton.accessibilityLabel() }
+    var moreActionsEnabledForTesting: Bool { moreActionsButton.isEnabled }
+    var moreActionsAccessibilityLabelForTesting: String? { moreActionsButton.accessibilityLabel() }
+    package var actionLayoutFitsForTesting: Bool {
+        layoutSubtreeIfNeeded()
+        let controls = [dashboardButton, moreActionsButton, updateButton].filter { !$0.isHidden }
+        return title.frame.width > 0
+            && title.frame.maxX <= dashboardButton.frame.minX
+            && zip(controls, controls.dropFirst()).allSatisfy { pair in
+                pair.0.frame.maxX <= pair.1.frame.minX
+            }
+            && controls.last.map { $0.frame.maxX <= bounds.maxX } == true
+    }
+    func clickDashboardForTesting() { dashboardButton.performClick(nil) }
+    func clickUpdateForTesting() { updateButton.performClick(nil) }
+
+    @objc private func dashboardTapped() { onDashboard?() }
+    @objc private func moreActionsTapped() { onMoreActions?(moreActionsButton) }
+    @objc private func updateTapped() { onUpdate?() }
+}
+
+/// One compact verdict for proxy liveness and readiness, plus independent Codex route context.
+public final class StatusFooterView: NSView {
+    private let dot = StatusDotView()
+    private let status = makeLabel("Checking", font: Theme.captionMedium, color: Theme.muted)
+    private let codexRoute = makeLabel("", font: Theme.micro, color: Theme.faint)
+
+    init() {
+        super.init(frame: .zero)
+        let row = makeRow([dot, status, NSView(), codexRoute], spacing: 7)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.topAnchor.constraint(equalTo: topAnchor),
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            heightAnchor.constraint(greaterThanOrEqualToConstant: 20),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Proxy checking")
     }
 
     required init?(coder: NSCoder) { nil }
 
     func apply(_ snapshot: ProxySnapshot) {
-        let state = snapshot.state
-        let activeCount = snapshot.activity?.activeTurnCount
-        status.stringValue = "Proxy \(state.title.lowercased())"
-        status.textColor = Theme.color(for: bridge(state.tone))
-        dot.tone = bridge(state.tone)
+        let presentation = Self.presentation(for: snapshot)
+        status.stringValue = presentation.label
+        status.textColor = Theme.color(for: presentation.tone)
+        dot.tone = presentation.tone
 
-        if let activeCount, snapshot.activityLoaded {
-            requestCount.stringValue = activeCount == 1 ? "1 in flight" : "\(activeCount) in flight"
-            requestCount.isHidden = false
-            divider.isHidden = false
-        } else {
-            requestCount.stringValue = ""
-            requestCount.isHidden = true
-            divider.isHidden = true
-        }
-
-        let readinessText = "Readiness · \(Self.readinessName(snapshot.readiness))"
-        readiness.stringValue = readinessText
-
-        let routeText: String?
-        switch snapshot.codexRoute {
-        case .confirmed(let route):
-            routeText = "Codex route · \(Self.codexRouteName(route))"
-        case .confirmationUnavailable:
-            routeText = "Codex route · Unconfirmed"
-        case .unobserved:
-            if case .running(let health) = state {
-                routeText = "Codex route · \(Self.codexRouteName(health))"
-            } else {
-                routeText = nil
-            }
-        }
+        let routeText = Self.routeText(for: snapshot)
         codexRoute.stringValue = routeText ?? ""
         codexRoute.isHidden = routeText == nil
-
-        var label = "CodexCommander, proxy \(state.title.lowercased())"
-        if let activeCount, snapshot.activityLoaded {
-            label += ", \(activeCount) request\(activeCount == 1 ? "" : "s") in flight"
-        }
-        label += ", \(readinessText)"
+        var label = "Proxy \(presentation.label.lowercased())"
         if let routeText { label += ", \(routeText)" }
         setAccessibilityLabel(label)
     }
 
-    private static func readinessName(_ state: ProxyReadinessState) -> String {
-        switch state {
-        case .unknown: return "Checking"
-        case .unavailable: return "Unavailable"
-        case .pending: return "Starting"
-        case .ready: return "Ready"
-        case .failed: return "Startup failed"
+    private static func presentation(for snapshot: ProxySnapshot) -> (label: String, tone: ProxyToneBridge) {
+        switch snapshot.state {
+        case .loading: return ("Checking", .neutral)
+        case .unreachable: return ("Stopped", .bad)
+        case .unauthorized: return ("Authentication needed", .warning)
+        case .degraded: return ("Connection issue", .warning)
+        case .running(let health):
+            if snapshot.readiness == .failed { return ("Sync failed", .warning) }
+            if health.status == "at-risk" { return ("Startup at risk", .warning) }
+            switch snapshot.readiness {
+            case .unknown: return ("Checking", .neutral)
+            case .unavailable: return ("Readiness unavailable", .warning)
+            case .pending: return ("Starting", .neutral)
+            case .ready: return ("Ready", bridge(snapshot.state.tone))
+            case .failed: return ("Sync failed", .warning)
+            }
+        }
+    }
+
+    private static func routeText(for snapshot: ProxySnapshot) -> String? {
+        guard case .running(let health) = snapshot.state else {
+            return snapshot.state == .loading ? nil : "Codex: Unconfirmed"
+        }
+        switch snapshot.codexRoute {
+        case .confirmed(let route): return "Codex: \(codexRouteName(route))"
+        case .confirmationUnavailable: return "Codex: Unconfirmed"
+        case .unobserved:
+            return health.diagnosticStale ? "Codex: Unconfirmed" : "Codex: \(codexRouteName(health))"
         }
     }
 
@@ -266,7 +345,7 @@ public final class StatusHeaderView: NSView {
         }
     }
 
-    private func bridge(_ tone: ProxyState.Tone) -> ProxyToneBridge {
+    private static func bridge(_ tone: ProxyState.Tone) -> ProxyToneBridge {
         switch tone {
         case .neutral: return .neutral
         case .good: return .good
@@ -276,10 +355,6 @@ public final class StatusHeaderView: NSView {
     }
 
     package var statusText: String { status.stringValue }
-    package var requestCountText: String? {
-        requestCount.isHidden ? nil : requestCount.stringValue
-    }
-    package var readinessText: String { readiness.stringValue }
     package var codexRouteText: String? {
         codexRoute.isHidden ? nil : codexRoute.stringValue
     }
@@ -315,6 +390,7 @@ final class StatusDotView: NSView {
 /// One-level tree of in-flight primary/child turns; orphan child requests stand alone.
 public final class AgentActivityView: NSView {
     private let heading = makeLabel("Live proxy requests", font: Theme.captionMedium, color: Theme.muted)
+    private let count = makeLabel("", font: Theme.caption, color: Theme.faint)
     private let body = NSStackView()
     private let empty = makeLabel("", font: Theme.caption, color: Theme.muted)
 
@@ -327,7 +403,9 @@ public final class AgentActivityView: NSView {
         empty.maximumNumberOfLines = 2
         empty.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2
 
-        let stack = NSStackView(views: [heading, body, empty])
+        count.isHidden = true
+        let header = makeRow([heading, NSView(), count])
+        let stack = NSStackView(views: [header, body, empty])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = Theme.tightGap
@@ -338,6 +416,7 @@ public final class AgentActivityView: NSView {
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            header.widthAnchor.constraint(equalTo: stack.widthAnchor),
             body.widthAnchor.constraint(equalTo: stack.widthAnchor),
             empty.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
@@ -355,6 +434,7 @@ public final class AgentActivityView: NSView {
         }
 
         guard snapshot.activityLoaded else {
+            count.isHidden = true
             body.isHidden = true
             empty.isHidden = false
             empty.stringValue = "Request activity unavailable"
@@ -363,6 +443,7 @@ public final class AgentActivityView: NSView {
         }
 
         guard let activity = snapshot.activity, activity.isSupported else {
+            count.isHidden = true
             body.isHidden = true
             empty.isHidden = false
             empty.stringValue = "Request activity unavailable"
@@ -373,12 +454,15 @@ public final class AgentActivityView: NSView {
         let visible = activity.activities.filter {
             $0.phase == .starting || $0.phase == .running
         }
+        let activeCount = max(0, activity.activeTurnCount)
+        count.stringValue = activeCount == 1 ? "1 in flight" : "\(activeCount) in flight"
+        count.isHidden = false
 
         if visible.isEmpty {
             body.isHidden = true
-            empty.isHidden = false
-            empty.stringValue = "No requests in flight"
-            setAccessibilityLabel(empty.stringValue)
+            empty.isHidden = true
+            empty.stringValue = ""
+            setAccessibilityLabel("Live proxy requests, \(count.stringValue)")
             return
         }
 
@@ -420,7 +504,7 @@ public final class AgentActivityView: NSView {
             body.addArrangedSubview(note)
         }
 
-        setAccessibilityLabel("Live proxy requests, \(visible.count) shown")
+        setAccessibilityLabel("Live proxy requests, \(count.stringValue), \(visible.count) shown")
     }
 
     private func appendRow(_ activity: AgentActivity, indented: Bool) {
@@ -431,6 +515,7 @@ public final class AgentActivityView: NSView {
     }
 
     package var headingText: String { heading.stringValue }
+    package var countText: String? { count.isHidden ? nil : count.stringValue }
     package var emptyText: String? { empty.isHidden ? nil : empty.stringValue }
 }
 

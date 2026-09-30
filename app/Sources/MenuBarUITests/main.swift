@@ -55,14 +55,15 @@ func quotaJSON(
     label: String,
     fiveHour: Double? = nil,
     weekly: Double? = nil,
-    monthly: Double? = nil
+    monthly: Double? = nil,
+    updatedAt: Int64 = 1
 ) -> String {
     var parts: [String] = []
     if let fiveHour { parts.append("\"fiveHourPercent\":\(fiveHour)") }
     if let weekly { parts.append("\"weeklyPercent\":\(weekly)") }
     if let monthly { parts.append("\"monthlyPercent\":\(monthly)") }
-    let quota = "{\"updatedAt\":1\(parts.isEmpty ? "" : "," + parts.joined(separator: ","))}"
-    return "{\"provider\":\"\(provider)\",\"label\":\"\(label)\",\"source\":\"test\",\"quota\":\(quota),\"updatedAt\":1}"
+    let quota = "{\"updatedAt\":\(updatedAt)\(parts.isEmpty ? "" : "," + parts.joined(separator: ","))}"
+    return "{\"provider\":\"\(provider)\",\"label\":\"\(label)\",\"source\":\"test\",\"quota\":\(quota),\"updatedAt\":\(updatedAt)}"
 }
 
 func decodeQuotas(_ json: String) -> [QuotaReport] {
@@ -171,9 +172,49 @@ func makeSnapshot(
     )
 }
 
+func menuPreviewSnapshot() -> ProxySnapshot {
+    let now = Int64(Date().timeIntervalSince1970 * 1_000)
+    let quotas = decodeQuotas("""
+    [
+      \(quotaJSON(provider: "openai", label: "ChatGPT", weekly: 49, updatedAt: now)),
+      \(quotaJSON(provider: "opencode-go", label: "OpenCode Go", fiveHour: 4, weekly: 2, monthly: 1, updatedAt: now))
+    ]
+    """)
+    let activity = activitySnapshot(activities: """
+      {"id":"preview-primary","role":"primary","provider":"opencode-go",
+       "model":"deepseek-v4.1-flash","phase":"running","startedAt":\(now - 120_000)},
+      {"id":"preview-child","role":"subagent","provider":"opencode-go",
+       "model":"gpt-6-luna","phase":"running","startedAt":\(now - 45_000)}
+    """, activeTurnCount: 2)
+    return makeSnapshot(quotas: quotas, activity: activity, readiness: .ready)
+}
+
 func textFields(in view: NSView) -> [NSTextField] {
     let own = (view as? NSTextField).map { [$0] } ?? []
     return own + view.subviews.flatMap(textFields(in:))
+}
+
+func writePanelScreenshot(_ controller: PopoverViewController, to output: String) {
+    let window = NSWindow(contentRect: controller.view.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.appearance = NSAppearance(named: .darkAqua)
+    window.contentView = controller.view
+    window.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 1)
+    controller.view.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    guard let bitmap = controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds) else { return }
+    controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
+    let rendered = NSImage(size: controller.view.bounds.size)
+    rendered.lockFocus()
+    NSColor(calibratedWhite: 0.12, alpha: 1).setFill()
+    controller.view.bounds.fill()
+    let foreground = NSImage(size: controller.view.bounds.size)
+    foreground.addRepresentation(bitmap)
+    NSGraphicsContext.current?.imageInterpolation = .high
+    foreground.draw(in: controller.view.bounds, from: .zero, operation: .sourceOver, fraction: 1)
+    rendered.unlockFocus()
+    if let tiff = rendered.tiffRepresentation, let opaque = NSBitmapImageRep(data: tiff) {
+        try? opaque.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output))
+    }
 }
 
 // MARK: - Hierarchy / sizing
@@ -222,26 +263,103 @@ runner.test("ui: running proxy keeps the terminal glyph regardless of service pr
     runner.equal(Set(symbols).count, states.count, "every other operational state stays distinct")
 }
 
-runner.test("ui: footer exposes navigation, lifecycle, Codex routing, and a single exit") {
+runner.test("ui: quotas precede live requests and the status is the panel footer") {
     let controller = PopoverViewController()
     _ = controller.view
+    runner.expect(controller.monitoringPrecedesPanelFooter,
+                  "quota and request scrolling ends above the fixed status footer")
+    runner.equal(controller.visibleHeaderActionTitles, ["Dashboard", "More actions"],
+                 "dashboard remains prominent without a separate navigation row")
+    runner.equal(controller.moreActionTitles, ["Refresh Models", "Logs", "Check for Updates…"],
+                 "secondary actions live in More actions")
+    runner.equal(controller.headerUpdateTitleForTesting, nil,
+                 "the header has no update action without an available update")
     let titles = controller.footerTitles
     runner.equal(
         titles,
         [
-            "Dashboard", "Logs", "Refresh Models", "Start Proxy", "Restart Proxy…",
+            "Dashboard", "Logs", "Refresh Models", "Start Proxy", "Restart…",
             "Restore Native Codex", "Route Codex Through Proxy",
             "Stop CodexCommander and Quit…",
         ],
         "footer titles"
     )
     controller.apply(makeSnapshot())
+    runner.equal(controller.visibleRouteActionTitles, ["Use Native"],
+                 "confirmed Commander route shows its available alternative")
+    runner.equal(controller.primaryActionTitles, ["Stop Proxy…", "Restart…", "Use Native"],
+                 "proxy and the available route action share the first row")
+    runner.equal(controller.separateRouteRowVisible, false)
+    runner.equal(controller.visibleUpperControlRowCount, 3,
+                 "normal controls use two action rows and the login row")
+    if let output = ProcessInfo.processInfo.environment["CCX_ACTION_LAYOUT_SCREENSHOT"] {
+        controller.apply(menuPreviewSnapshot())
+        writePanelScreenshot(controller, to: output)
+    }
     runner.equal(controller.footerEnabledStates[2], true, "model refresh is available while proxy runs")
     controller.setLifecycleControlsEnabled(false)
     runner.equal(controller.footerEnabledStates[2], false, "model refresh is guarded during lifecycle actions")
     controller.setLifecycleControlsEnabled(true)
     controller.apply(makeSnapshot(state: .unreachable))
     runner.equal(controller.footerEnabledStates[2], false, "model refresh is unavailable when proxy is stopped")
+    runner.equal(controller.moreActionEnabledStates, [false, false, true],
+                 "stopped proxy disables refresh and Logs while leaving update checks available")
+}
+
+runner.test("ui: update action moves between the header and More actions") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.apply(makeSnapshot())
+    var checks = 0
+    controller.onCheckForUpdates = { checks += 1 }
+    controller.applyUpdatePresentation(title: "Update Available…", enabled: true,
+                                       blocked: false, message: "")
+    runner.equal(controller.headerUpdateTitleForTesting, "Update Available…")
+    runner.equal(controller.moreActionTitles, ["Refresh Models", "Logs"])
+    runner.expect(controller.headerView.actionLayoutFitsForTesting,
+                  "dashboard and available update fit beside the app title")
+    if let output = ProcessInfo.processInfo.environment["CCX_ACTION_LAYOUT_UPDATE_SCREENSHOT"] {
+        controller.apply(menuPreviewSnapshot())
+        writePanelScreenshot(controller, to: output)
+    }
+    controller.clickHeaderUpdateForTesting()
+    runner.equal(checks, 1)
+
+    controller.applyUpdatePresentation(title: "Check for Updates…", enabled: true,
+                                       blocked: false, message: "")
+    runner.equal(controller.headerUpdateTitleForTesting, nil)
+    runner.equal(controller.moreActionTitles, ["Refresh Models", "Logs", "Check for Updates…"])
+    controller.activateMoreActionForTesting(2)
+    runner.equal(checks, 2)
+    runner.expect(controller.headerView.actionLayoutFitsForTesting,
+                  "dashboard and More actions fit without an update")
+}
+
+runner.test("ui: route controls show both recovery choices when route is uncertain") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    controller.apply(makeSnapshot(health: currentHealth(
+        status: "native", routingKind: "native", routingInjected: false
+    )))
+    runner.equal(controller.visibleRouteActionTitles, ["Use Commander"],
+                 "confirmed native route shows its available alternative")
+    runner.equal(controller.primaryActionTitles, ["Stop Proxy…", "Restart…", "Use Commander"])
+
+    var unknown = makeSnapshot()
+    unknown.codexRoute = .confirmationUnavailable
+    controller.apply(unknown)
+    runner.equal(controller.visibleRouteActionTitles,
+                 ["Restore Native Codex", "Route Codex Through Proxy"],
+                 "unconfirmed route keeps both recovery choices")
+    runner.equal(controller.separateRouteRowVisible, true,
+                 "uncertain routing gives both recovery actions their own row")
+    if let output = ProcessInfo.processInfo.environment["CCX_ACTION_LAYOUT_UNKNOWN_SCREENSHOT"] {
+        writePanelScreenshot(controller, to: output)
+    }
+    controller.apply(makeSnapshot())
+    runner.equal(controller.visibleRouteActionTitles, ["Use Native"])
+    runner.equal(controller.separateRouteRowVisible, false,
+                 "route recovery row collapses after confirmation")
 }
 
 runner.test("ui: catalog update presents manual ChatGPT restart outside the proxy footer") {
@@ -309,6 +427,9 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
         controller.startupModeView.modeText,
         "Desktop · starts CodexCommander at login"
     )
+    runner.equal(controller.startupModeView.modeDetailVisible, false)
+    runner.equal(controller.startupModeView.modeToolTip,
+                 "Desktop · starts CodexCommander at login")
     runner.equal(controller.startupModeView.isLaunchAtLoginOn, true)
 
     controller.applyLaunchAtLogin(
@@ -322,12 +443,18 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
         controller.startupModeView.modeText,
         "Headless · proxy runs without the menu bar"
     )
+    runner.equal(controller.startupModeView.modeDetailVisible, false)
+    runner.equal(controller.startupModeView.modeToolTip,
+                 "Headless · proxy runs without the menu bar")
 
     controller.apply(makeSnapshot(health: currentHealth(status: "at-risk")))
     runner.equal(
         controller.startupModeView.modeText,
         "Off · start CodexCommander manually"
     )
+    runner.equal(controller.startupModeView.modeDetailVisible, false)
+    runner.equal(controller.startupModeView.modeToolTip,
+                 "Off · start CodexCommander manually")
 
     controller.applyLaunchAtLogin(
         LaunchAtLoginPresentation(
@@ -337,6 +464,8 @@ runner.test("ui: startup control exposes desktop, headless, off, and approval st
         )
     )
     runner.equal(controller.startupModeView.isLaunchAtLoginToggleEnabled, false)
+    runner.equal(controller.startupModeView.modeDetailVisible, true,
+                 "approval guidance remains visible beside its recovery action")
     runner.expect(
         controller.startupModeView.showsRemediationButton,
         "approval state should expose Login Items settings"
@@ -394,6 +523,8 @@ runner.test("ui: relocation guidance is neutral and opens Applications on explic
         )
     )
     let errorColor = controller.startupModeView.modeTextColor
+    runner.equal(controller.startupModeView.modeDetailVisible, true,
+                 "startup errors stay visible without hovering")
 
     controller.applyLaunchAtLogin(
         LaunchAtLoginPresentation(
@@ -408,6 +539,7 @@ runner.test("ui: relocation guidance is neutral and opens Applications on explic
         controller.startupModeView.modeText,
         "Move CodexCommander to Applications to launch at login."
     )
+    runner.equal(controller.startupModeView.modeDetailVisible, true)
     runner.expect(
         controller.startupModeView.modeTextColor != errorColor,
         "relocation detail must use the neutral faint tone, not the error tone"
@@ -817,6 +949,7 @@ runner.test("ui: activity empty and unavailable states stay compact") {
     let unloaded = makeSnapshot(activityLoaded: false)
     controller.apply(unloaded)
     runner.equal(controller.activityView.headingText, "Live proxy requests", "request heading")
+    runner.equal(controller.activityView.countText, nil, "unknown count is not shown as zero")
     runner.equal(controller.activityView.emptyText, "Request activity unavailable", "unavailable copy")
     runner.expect(controller.activityView.accessibilityLabel()?.contains("unavailable") == true
         || controller.activityView.accessibilityLabel()?.contains("Activity") == true,
@@ -824,23 +957,24 @@ runner.test("ui: activity empty and unavailable states stay compact") {
 
     let empty = activitySnapshot(activities: "", activeTurnCount: 0)
     controller.apply(makeSnapshot(activity: empty))
-    runner.equal(controller.activityView.emptyText, "No requests in flight", "empty request copy")
+    runner.equal(controller.activityView.countText, "0 in flight", "idle count moves into the heading")
+    runner.equal(controller.activityView.emptyText, nil, "idle state needs no duplicate empty row")
     // Should not crash and should keep preferred width.
     runner.equal(controller.preferredContentSize.width, 387, "width stable")
 }
 
-runner.test("ui: header separates proxy requests from the Codex route") {
+runner.test("ui: compact status footer leaves the brand header and request heading uncluttered") {
     let controller = PopoverViewController()
     _ = controller.view
     let activity = activitySnapshot(activities: "", activeTurnCount: 2)
 
     controller.apply(makeSnapshot(activity: activity))
-    runner.equal(controller.headerView.statusText, "Proxy running", "proxy status")
-    runner.equal(controller.headerView.requestCountText, "2 in flight", "request count")
-    runner.equal(controller.headerView.readinessText, "Readiness · Checking", "initial readiness")
+    runner.equal(controller.headerView.accessibilityLabel(), "CodexCommander", "brand-only header")
+    runner.equal(controller.activityView.countText, "2 in flight", "request count beside activity heading")
+    runner.equal(controller.statusFooterView.statusText, "Checking", "initial combined status")
     runner.equal(
-        controller.headerView.codexRouteText,
-        "Codex route · CodexCommander",
+        controller.statusFooterView.codexRouteText,
+        "Codex: CodexCommander",
         "managed Codex route"
     )
 
@@ -852,17 +986,17 @@ runner.test("ui: header separates proxy requests from the Codex route") {
             routingInjected: false
         )
     ))
-    runner.equal(controller.headerView.codexRouteText, "Codex route · Native OpenAI", "native route")
-    runner.expect(
-        controller.headerView.accessibilityLabel()?.contains("2 requests in flight") == true,
-        "request count is explicit to assistive technology"
-    )
+    runner.equal(controller.statusFooterView.codexRouteText, "Codex: Native OpenAI", "native route")
+    runner.expect(controller.activityView.accessibilityLabel()?.contains("2 in flight") == true,
+                  "request count is explicit to assistive technology")
+    runner.expect(controller.statusFooterView.accessibilityLabel()?.contains("in flight") == false,
+                  "status footer does not repeat the request count")
 
     controller.apply(makeSnapshot(
         activity: activity,
         health: currentHealth(diagnosticStale: true)
     ))
-    runner.equal(controller.headerView.codexRouteText, "Codex route · Unknown", "stale route fails closed")
+    runner.equal(controller.statusFooterView.codexRouteText, "Codex: Unconfirmed", "stale route fails closed")
 }
 
 runner.test("ui: fresh route truth overrides stale startup diagnostics immediately") {
@@ -873,8 +1007,8 @@ runner.test("ui: fresh route truth overrides stale startup diagnostics immediate
     controller.apply(snapshot)
 
     runner.equal(
-        controller.headerView.codexRouteText,
-        "Codex route · Native OpenAI",
+        controller.statusFooterView.codexRouteText,
+        "Codex: Native OpenAI",
         "focused route observation"
     )
     runner.equal(controller.footerEnabledStates[5], false, "native action follows fresh route")
@@ -888,7 +1022,7 @@ runner.test("ui: unconfirmed route truth is explicit and leaves both choices ava
     snapshot.codexRoute = .confirmationUnavailable
     controller.apply(snapshot)
 
-    runner.equal(controller.headerView.codexRouteText, "Codex route · Unconfirmed")
+    runner.equal(controller.statusFooterView.codexRouteText, "Codex: Unconfirmed")
     runner.equal(controller.footerEnabledStates[5], true, "native recovery remains available")
     runner.equal(controller.footerEnabledStates[6], true, "proxy recovery remains available")
 }
@@ -900,7 +1034,7 @@ runner.test("ui: backend-confirmed unknown stays distinct from unavailable confi
     snapshot.codexRoute = .confirmed(CodexRouteStatus(routingKind: .unknown))
     controller.apply(snapshot)
 
-    runner.equal(controller.headerView.codexRouteText, "Codex route · Unknown")
+    runner.equal(controller.statusFooterView.codexRouteText, "Codex: Unknown")
     runner.equal(controller.footerEnabledStates[5], true)
     runner.equal(controller.footerEnabledStates[6], true)
 }
@@ -1084,31 +1218,55 @@ runner.test("ui: current Codex route disables only the redundant route action") 
     runner.equal(controller.footerEnabledStates[6], false, "proxy action disabled in flight")
 }
 
-runner.test("ui: header keeps readiness separate from liveness and routing") {
+runner.test("ui: footer combines liveness and readiness while preserving route context") {
     let controller = PopoverViewController()
     _ = controller.view
     let states: [(ProxyReadinessState, String)] = [
         (.unknown, "Checking"),
         (.pending, "Starting"),
         (.ready, "Ready"),
-        (.failed, "Startup failed"),
-        (.unavailable, "Unavailable"),
+        (.failed, "Sync failed"),
+        (.unavailable, "Readiness unavailable"),
     ]
 
     for (state, label) in states {
         controller.apply(makeSnapshot(readiness: state))
-        runner.equal(controller.headerView.statusText, "Proxy running", "liveness stays running for \(label)")
-        runner.equal(controller.headerView.readinessText, "Readiness · \(label)", "readiness \(label)")
+        runner.equal(controller.statusFooterView.statusText, label, "combined status \(label)")
         runner.equal(
-            controller.headerView.codexRouteText,
-            "Codex route · CodexCommander",
+            controller.statusFooterView.codexRouteText,
+            "Codex: CodexCommander",
             "route stays independent for \(label)"
         )
     }
     runner.expect(
-        controller.headerView.accessibilityLabel()?.contains("Readiness · Unavailable") == true,
-        "readiness is explicit to assistive technology"
+        controller.statusFooterView.accessibilityLabel()?.contains("readiness unavailable") == true,
+        "unavailable readiness is explicit to assistive technology"
     )
+}
+
+runner.test("ui: status footer distinguishes stopped, unverified, and failed states") {
+    let controller = PopoverViewController()
+    _ = controller.view
+    let cases: [(ProxyState, ProxyReadinessState, String)] = [
+        (.loading, .unknown, "Checking"),
+        (.unreachable, .unavailable, "Stopped"),
+        (.unauthorized, .unavailable, "Authentication needed"),
+        (.degraded("probe failed"), .unavailable, "Connection issue"),
+        (.running(currentHealth()), .failed, "Sync failed"),
+        (.running(currentHealth(status: "at-risk")), .ready, "Startup at risk"),
+    ]
+    for (state, readiness, label) in cases {
+        controller.apply(makeSnapshot(state: state, readiness: readiness))
+        runner.equal(controller.statusFooterView.statusText, label, "status \(label)")
+    }
+    runner.equal(controller.statusFooterView.codexRouteText, "Codex: CodexCommander",
+                 "a live proxy retains independently observed route context")
+
+    controller.apply(makeSnapshot(state: .unreachable))
+    runner.equal(controller.statusFooterView.codexRouteText, "Codex: Unconfirmed",
+                 "a stopped proxy does not present the last route as current")
+    runner.expect(controller.statusFooterView.accessibilityLabel()?.contains("Proxy stopped") == true,
+                  "combined footer status is accessible")
 }
 
 runner.test("ui: activity rows render once and elapsed timers clear the scrollbar") {
@@ -1153,12 +1311,13 @@ runner.test("ui: activity rows render once and elapsed timers clear the scrollba
     }
 }
 
-runner.test("ui: accessibility labels exist on header and accordion") {
+runner.test("ui: accessibility labels exist on header, status footer, and accordion") {
     let controller = PopoverViewController()
     _ = controller.view
     let quotas = decodeQuotas("[\(quotaJSON(provider: "openai", label: "ChatGPT", fiveHour: 12))]")
     controller.apply(makeSnapshot(quotas: quotas))
     _ = runner.notNil(controller.headerView.accessibilityLabel(), "header a11y")
+    _ = runner.notNil(controller.statusFooterView.accessibilityLabel(), "status a11y")
     _ = runner.notNil(controller.quotaAccordion.accessibilityLabel(), "quota a11y")
 }
 
@@ -1178,12 +1337,14 @@ runner.test("ui: running footer invokes proxy, Codex route, and exit actions ind
     controller.onRestoreNativeCodex = { calls.append("restore-native") }
     controller.onRouteCodexThroughProxy = { calls.append("restore-back") }
     controller.onStopAndQuit = { calls.append("stop-and-quit") }
+    controller.onCheckForUpdates = { calls.append("updates") }
     for index in 0..<8 { controller.activateFooterForTesting(index) }
+    controller.activateMoreActionForTesting(2)
     runner.equal(
         calls,
         [
             "dashboard", "logs", "refresh", "stop", "restart",
-            "restore-native", "restore-back", "stop-and-quit",
+            "restore-native", "restore-back", "stop-and-quit", "updates",
         ]
     )
 }
@@ -2000,7 +2161,12 @@ MainActor.assumeIsolated {
         let controller = PopoverViewController()
         controller.applyUpdatePresentation(title: driver.updateAvailable ? "Update Available…" : "Check for Updates…",
             enabled: true, blocked: false, message: "")
-        runner.equal(controller.updateActionTitleForTesting, "Update Available…")
+        runner.equal(controller.headerUpdateTitleForTesting, "Update Available…")
+        runner.equal(controller.headerUpdateEnabledForTesting, true)
+        runner.equal(controller.moreActionTitles, ["Refresh Models", "Logs"],
+                     "available update moves out of More actions")
+        runner.equal(controller.moreActionsAccessibilityLabel,
+                     "More actions: Refresh Models and Logs")
         decide?(.install)
         runner.equal(disclosures, 1, "only explicit install opens the pause disclosure")
         runner.equal(preparations, 0, "Later never prepares or downloads")
@@ -2275,35 +2441,17 @@ MainActor.assumeIsolated {
         controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
         runner.equal(controller.guidanceText, nil, "guarded recovery must not advise starting the proxy")
         runner.equal(controller.commandText, nil, "guarded recovery must not advertise ccx start")
-        runner.equal(controller.updateActionTitleForTesting, "Finish Update…")
-        runner.equal(controller.updateActionEnabledForTesting, true)
+        runner.equal(controller.headerUpdateTitleForTesting, "Finish Update…")
+        runner.equal(controller.headerUpdateEnabledForTesting, true)
+        runner.equal(controller.moreActionTitles, ["Refresh Models", "Logs"],
+                     "pending update moves out of More actions")
         var clicked = false
         controller.onCheckForUpdates = { clicked = true }
-        controller.clickUpdateForTesting()
+        controller.clickHeaderUpdateForTesting()
         runner.equal(clicked, true)
         if let output = ProcessInfo.processInfo.environment["CCX_UPDATER_SCREENSHOT"] {
             controller.apply(ProxySnapshot(state: .unreachable, endpoint: .default))
-            let window = NSWindow(contentRect: controller.view.bounds, styleMask: [.borderless], backing: .buffered, defer: false)
-            window.appearance = NSAppearance(named: .darkAqua)
-            window.contentView = controller.view
-            window.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 1)
-            controller.view.layoutSubtreeIfNeeded()
-            window.displayIfNeeded()
-            if let bitmap = controller.view.bitmapImageRepForCachingDisplay(in: controller.view.bounds) {
-                controller.view.cacheDisplay(in: controller.view.bounds, to: bitmap)
-                let rendered = NSImage(size: controller.view.bounds.size)
-                rendered.lockFocus()
-                NSColor(calibratedWhite: 0.12, alpha: 1).setFill()
-                controller.view.bounds.fill()
-                let foreground = NSImage(size: controller.view.bounds.size)
-                foreground.addRepresentation(bitmap)
-                NSGraphicsContext.current?.imageInterpolation = .high
-                foreground.draw(in: controller.view.bounds, from: .zero, operation: .sourceOver, fraction: 1)
-                rendered.unlockFocus()
-                if let tiff = rendered.tiffRepresentation, let opaque = NSBitmapImageRep(data: tiff) {
-                    try? opaque.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output))
-                }
-            }
+            writePanelScreenshot(controller, to: output)
         }
     }
 }

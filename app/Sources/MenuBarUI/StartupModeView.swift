@@ -87,7 +87,16 @@ public final class StartupModeView: NSView {
             detail.stringValue = presentation.errorMessage ?? summary
             detail.textColor = presentation.errorMessage == nil ? Theme.faint : Theme.red
         }
+        let needsVisibleGuidance = presentation.relocationRequired
+            || presentation.errorMessage != nil
+            || presentation.needsApproval
+            || !presentation.isToggleEnabled
+        detail.isHidden = !needsVisibleGuidance
+        title.toolTip = detail.stringValue
+        toggle.toolTip = detail.stringValue
+        toolTip = detail.stringValue
         setAccessibilityLabel("CodexCommander startup mode, \(detail.stringValue)")
+        toggle.setAccessibilityLabel("Launch CodexCommander at login, \(detail.stringValue)")
         applying = false
     }
 
@@ -131,6 +140,8 @@ public final class StartupModeView: NSView {
 
     package var modeText: String { detail.stringValue }
     package var modeTextColor: NSColor? { detail.textColor }
+    package var modeDetailVisible: Bool { !detail.isHidden }
+    package var modeToolTip: String? { toggle.toolTip }
     package var isLaunchAtLoginOn: Bool { toggle.state == .on }
     package var isLaunchAtLoginToggleEnabled: Bool { toggle.isEnabled }
     package var showsRemediationButton: Bool { !remediationButton.isHidden }
