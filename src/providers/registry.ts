@@ -359,8 +359,8 @@ const THINKING_BUDGET_MODELS = [
 ];
 const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"];
 /**
- * Pinned OpenCode Go lineup (28 ids): the 25-id snapshot from 2026-08-05 plus
- * DeepSeek V4.1 Flash, GLM-5.3 Flash, and Qwen3.8 Flash, verified 2026-09-27.
+ * Pinned OpenCode Go lineup (41 ids): the 28-id snapshot through 2026-09-27 plus
+ * 13 live, documented ids verified 2026-09-29.
  * `GET https://opencode.ai/zen/go/v1/models` is
  * existence-only — it returns ids without context/output/pricing metadata — so this list is
  * the catalog seed, and the registry-only discovery filter below admits exactly these ids:
@@ -371,28 +371,35 @@ const OPENCODE_GO_THINKING_BUDGET_MODELS = ["qwen3.5-plus", "qwen3.6-plus", "qwe
  * the trusted id set (its wire fact is honest) and out of pickers via the compatibility
  * exclusion in src/codex/catalog/parsing.ts.
  *
- * Transport split per the official endpoint table (https://opencode.ai/docs/go/#endpoints):
- * Qwen and MiniMax rows serve Anthropic Messages (`/zen/go/v1/messages`), GPT-5.6 Luna and
- * Grok 4.5 serve OpenAI Responses (`/zen/go/v1/responses`), and the remaining rows serve
- * OpenAI Chat Completions (`/zen/go/v1/chat/completions`). DeepSeek V4.1 Flash is included
- * on that Chat wire. The Anthropic subset is a hard
- * wire pin owned by types.ts (OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS); the two OpenAI-shaped
- * wires are registry `modelWireDefaults` on the entry below.
+ * Transport split per the official endpoint table (https://opencode.ai/v2/docs/console/go#endpoints):
+ * Qwen and MiniMax rows serve Anthropic Messages (`/zen/go/v1/messages`); GPT-5.6 Luna,
+ * GPT 6 Luna, Grok 4.5/4.6/4.7, and Muse Spark contributor rows serve OpenAI Responses
+ * (`/zen/go/v1/responses`); the remaining rows serve OpenAI Chat Completions
+ * (`/zen/go/v1/chat/completions`). The Anthropic subset is a hard wire pin owned by
+ * types.ts (OPENCODE_GO_ANTHROPIC_WIRE_MODEL_IDS); Responses defaults live on the entry below.
  */
 const OPENCODE_GO_MODELS = [
   "minimax-m3", "minimax-m2.7", "minimax-m2.5",
   "kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5",
-  "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
+  "glm-5.3-flash", "glm-5.3", "glm-5.2", "glm-5.1", "glm-5",
   "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash",
+  "deepseek-v4-flash-vision-exp",
   "qwen3.8-max", "qwen3.8-flash", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
   "mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
-  "hy3", "hy3-preview",
-  "gpt-5.6-luna", "grok-4.5",
+  "mimo-v2.6-pro", "mimo-v2.6-flash",
+  "hy3", "hy3-preview", "hy4-preview",
+  "longcat-2.0", "longcat-2.5-preview-free", "space-bunny-free",
+  "gpt-5.6-luna", "gpt-6-luna", "grok-4.5", "grok-4.6", "grok-4.7",
+  "muse-spark-1.2-contributor", "muse-spark-1.3-contributor",
 ];
-const OPENCODE_GO_RESPONSES_WIRE_MODELS = ["gpt-5.6-luna", "grok-4.5"];
+const OPENCODE_GO_RESPONSES_WIRE_MODELS = [
+  "gpt-5.6-luna", "gpt-6-luna", "grok-4.5", "grok-4.6", "grok-4.7",
+  "muse-spark-1.2-contributor", "muse-spark-1.3-contributor",
+];
 // grok-4.5 reasoning is always-on with low/medium/high control (mirrors the verified xAI
 // ladder on the `xai` entry); GPT-5.6 Luna serves the OpenAI API GPT-5.6 ladder.
 const OPENCODE_GO_GROK45_REASONING_EFFORTS = ["low", "medium", "high"];
+const OPENCODE_GO_GROK46_47_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
 const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
 const OPENCODE_GO_DEEPSEEK_THINKING_MODELS = [...DEEPSEEK_THINKING_MODELS, "deepseek-v4.1-flash"];
 const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
@@ -1159,7 +1166,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "opencode-go", label: "OpenCode Go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
-    jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
+    jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo… Muse Spark 1.2 and 1.3 Contributor may use your prompts and completions to train future Meta models. Details: https://dev.meta.ai/docs/pricing-rate-limits#contributor-tier",
     models: [...OPENCODE_GO_MODELS],
     // Live /v1/models is the authoritative lineup; the static list above is the last-good
     // fallback seed. The registry-only filter quarantines any id outside the trusted set, and
@@ -1170,7 +1177,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     preserveCustomDestination: true,
     apiKeyValidation: "unknown",
     modelDiscovery: {
-      filter: { anyOf: [{ path: ["id"], equalsAny: OPENCODE_GO_MODELS }] },
+      filter: { anyOf: [
+        { path: ["id"], equalsAny: OPENCODE_GO_MODELS.slice(0, 32) },
+        { path: ["id"], equalsAny: OPENCODE_GO_MODELS.slice(32) },
+      ] },
     },
     // Per-model wire facts for the Responses-serving rows. The Anthropic-only rows are
     // hard-pinned in types.ts, and the remaining trusted rows keep the provider-wide
@@ -1184,7 +1194,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // https://opencode.ai/data/deepseek/deepseek-v4-1-flash,
     // https://stats.opencode.ai/data/zhipu/glm-5-3-flash, and
     // https://stats.opencode.ai/data/qwen/qwen3-8-flash (all 1M), plus the
-    // previously pinned Qwen3.8 Max and GPT-5.6 Luna values.
+    // previously pinned Qwen3.8 Max and GPT-5.6 Luna values. OpenCode's
+    // https://models.opencode.ai/api.json reports a 1,050,000-token context for GPT 6 Luna.
     modelContextWindows: {
       "kimi-k3": KIMI_K3_STANDARD_CONTEXT_WINDOW,
       "deepseek-v4.1-flash": 1_000_000,
@@ -1192,6 +1203,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "qwen3.8-max": 1_000_000,
       "qwen3.8-flash": 1_000_000,
       "gpt-5.6-luna": 1_050_000,
+      "gpt-6-luna": 1_050_000,
+      "grok-4.6": 500_000,
+      "grok-4.7": 500_000,
     },
     // qwen3.8-max (text/image/video) and gpt-5.6-luna (text/image/pdf) are multimodal upstream;
     // the jawcode type can only represent text+image, so video/pdf stay source facts.
@@ -1202,6 +1216,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "qwen3.8-max": ["text", "image"],
       "qwen3.8-flash": ["text", "image"],
       "gpt-5.6-luna": ["text", "image"],
+      "gpt-6-luna": ["text", "image"],
     },
     modelReasoningEfforts: {
       "glm-5.2": ZAI_GLM_52_REASONING_EFFORTS,
@@ -1209,7 +1224,12 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
       "grok-4.5": OPENCODE_GO_GROK45_REASONING_EFFORTS,
+      "grok-4.6": OPENCODE_GO_GROK46_47_REASONING_EFFORTS,
+      "grok-4.7": OPENCODE_GO_GROK46_47_REASONING_EFFORTS,
       "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
+      // OpenCode lists none/low/medium/high/xhigh/max; `none` is outside Codex's
+      // selectable effort ladder, while max is a real upstream option.
+      "gpt-6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
       ...Object.fromEntries(OPENCODE_GO_THINKING_TOGGLE_MODELS.map(id => [id, THINKING_TOGGLE_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_THINKING_BUDGET_MODELS.map(id => [id, THINKING_BUDGET_EFFORTS])),
       ...Object.fromEntries(OPENCODE_GO_DEEPSEEK_THINKING_MODELS.map(id => [id, deepseekThinkingEffortsFor(id)])),

@@ -25,6 +25,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     private var lifecycleInFlight = false
     private var catalogActionInFlight = false
     private var catalogUpdateReady = false
+    private var catalogStatusCheckInFlight = false
+    private var catalogStatusCheckPending = false
+    private var lastCatalogStatusCheck: Date?
     private var companionHeartbeat: CompanionHeartbeat?
     private let launchAtLoginController = LaunchAtLoginController()
     private let appBundleLocation: AppBundleLocation
@@ -306,7 +309,95 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
     }
 
     private func refreshNow() {
-        Task { [coordinator] in await coordinator?.forceRefresh() }
+        guard latest?.state.isRunning == true, let client,
+              !catalogActionInFlight, !lifecycleInFlight, !restartInFlight
+        else {
+            Task { [coordinator] in await coordinator?.forceRefresh() }
+            return
+        }
+
+        catalogActionInFlight = true
+        controller.setLifecycleControlsEnabled(false)
+        controller.setCatalogApplyEnabled(false)
+        controller.showProgress("Refreshing model catalog…")
+        Task { [weak self, coordinator] in
+            let result: Result<CodexCatalogSyncOutcome, Error>
+            do {
+                result = .success(try await client.syncCodexCatalog())
+            } catch {
+                result = .failure(error)
+            }
+            await coordinator?.forceRefresh()
+            await MainActor.run {
+                guard let self else { return }
+                self.catalogActionInFlight = false
+                self.controller.setLifecycleControlsEnabled(true)
+                self.refreshCatalogApplyAvailability()
+                switch result {
+                case .success(.applied(let warning)):
+                    if let warning, !warning.isEmpty {
+                        self.controller.showResult(warning, isError: true)
+                    } else {
+                        self.controller.showResult("Model sync finished. Restart ChatGPT if prompted below.", isError: false)
+                    }
+                case .success(.skipped(.desiredDisabled)):
+                    self.controller.showResult("Model sync was skipped because Codex integration is off.", isError: false)
+                case .success(.skipped(.externalProvider)):
+                    self.controller.showResult("Model sync was skipped because Codex uses an external provider.", isError: false)
+                case .success(.failed):
+                    self.controller.showResult("The Codex model catalog could not be refreshed.", isError: true)
+                case .failure(let error):
+                    let detail = (error as? ProxyError)?.userMessage ?? "The model catalog could not be refreshed."
+                    self.controller.showResult(detail, isError: true)
+                }
+                self.checkCatalogStatus(force: true)
+            }
+        }
+    }
+
+    /// Observe the already-published catalog without mutating it. This catches a
+    /// `ccx sync` run outside the menu app and keeps the restart card current.
+    private func checkCatalogStatus(force: Bool = false) {
+        guard panel.isShown, latest?.state.isRunning == true, let client,
+              !catalogActionInFlight
+        else { return }
+        if catalogStatusCheckInFlight {
+            if force { catalogStatusCheckPending = true }
+            return
+        }
+        let now = Date()
+        if !force, let lastCatalogStatusCheck,
+           now.timeIntervalSince(lastCatalogStatusCheck) < PollingCoordinator.heavyInterval {
+            return
+        }
+        if force { catalogStatusCheckPending = false }
+        lastCatalogStatusCheck = now
+        catalogStatusCheckInFlight = true
+        Task { [weak self] in
+            let status = try? await client.codexCatalogStatus().reloadStatus
+            await MainActor.run {
+                guard let self else { return }
+                self.catalogStatusCheckInFlight = false
+                if self.catalogActionInFlight {
+                    self.catalogStatusCheckPending = true
+                    return
+                }
+                if self.panel.isShown, self.latest?.state.isRunning == true {
+                    switch status {
+                    case .restartRequired(let count):
+                        self.presentCatalogUpdate(staleWorkerCount: count)
+                    case .current:
+                        if self.catalogUpdateReady { self.clearCatalogUpdate() }
+                    case .unknown, .none:
+                        break
+                    }
+                }
+                if self.catalogStatusCheckPending {
+                    self.catalogStatusCheckPending = false
+                    self.checkCatalogStatus(force: true)
+                }
+            }
+        }
     }
 
     @MainActor
@@ -317,6 +408,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         let build = sourceRevision.map { " · build \($0)" } ?? ""
         statusItem?.button?.toolTip = "CodexCommander — \(snapshot.state.title) (\(snapshot.endpoint.display))\(build)"
         controller.apply(snapshot)
+        if snapshot.state.isRunning {
+            if panel.isShown { checkCatalogStatus() }
+        } else if catalogUpdateReady {
+            clearCatalogUpdate()
+        }
         if !restartInFlight && !lifecycleInFlight && !catalogActionInFlight {
             controller.setRestartEnabled(snapshot.state.isRunning)
             controller.setLifecycleControlsEnabled(true)
@@ -348,6 +444,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         )
         panel.present(from: button)
         installEscapeMonitor()
+        checkCatalogStatus(force: true)
         Task { [coordinator] in await coordinator?.setPopoverOpen(true) }
     }
 

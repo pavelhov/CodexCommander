@@ -288,7 +288,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       // decision. A toggle may have persisted while this process was gathering.
       const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
       const currentConfig = loadConfig();
-      const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(runtime?.port, currentConfig, null);
+      const result = await (deps.syncModelsToCodex ?? syncModelsToCodex)(
+        runtime?.port,
+        currentConfig,
+        null,
+        undefined,
+        { forceNativeLive: true, forceRoutedLive: true },
+      );
       // A read taken before this sync can be memoized for five seconds. Drop it
       // before classifying the just-written catalog so launch-time catalog
       // readiness cannot be masked by a pre-write `fresh` snapshot.

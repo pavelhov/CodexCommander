@@ -251,8 +251,12 @@ test("Plan & quota section renders provider plan, windows, and reference spend",
     expect(text).toContain("OpenAI (Codex login)");
     expect(text).toContain("31% used");
     expect(text).toContain("OpenCode Go");
-    expect(text).toContain("$12 published cap");
+    expect(text).not.toContain("$12");
+    expect(text).not.toContain("published cap");
     expect(text).toContain("$1.25 observed through CodexCommander");
+    expect(text).toContain("42.0k tokens observed");
+    expect(text).toContain("3 requests observed");
+    expect(text).toContain("Partial");
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();
@@ -369,7 +373,7 @@ test("Plan & quota renders a full-width strip for unavailable providers with per
     }
     // F4: grid precedes the strip, strip precedes the disclaimer.
     expect(strip?.previousElementSibling?.classList.contains("dash-sidecar-grid")).toBe(true);
-    expect(strip?.nextElementSibling?.textContent).toContain("Provider-reported caps and local estimates");
+    expect(strip?.nextElementSibling?.textContent).toContain("Provider-reported limits and local observations");
   } finally {
     await act(async () => { root.unmount(); });
     container.remove();

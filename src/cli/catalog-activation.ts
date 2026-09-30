@@ -134,7 +134,13 @@ export async function syncCodexCatalogForCli(
   // the listener. Cross-process catalog serialization still protects a legacy
   // same-home proxy whose runtime record was lost.
   if (!live || live.source !== "runtime" || live.pid === null) {
-    return withNativeDiscoveryLogsSuppressed(() => deps.syncModelsToCodex());
+    return withNativeDiscoveryLogsSuppressed(() => deps.syncModelsToCodex(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { forceNativeLive: true, forceRoutedLive: true },
+    ));
   }
   try {
     const headers = proxyLifecycleLockLeaseHeaders(lifecycleLease);

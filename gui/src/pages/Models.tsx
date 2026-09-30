@@ -22,6 +22,7 @@ import { setClientResourceData } from "../client-resource";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { providerRouteHash } from "../provider-route";
+import { commanderOnlyModel, listedCodexModelSlugs, staleCodexWorkerCount } from "../models-codex-catalog";
 import {
   buildProviderModelGroups,
   type ConfiguredProviderSummary,
@@ -67,6 +68,7 @@ type CachedModelsPage = {
   providers: ConfiguredProviderSummary[];
   selectedModels: ProviderModelMap;
   disabled: string[];
+  publishedSlugs?: string[] | null;
   contextCaps: Record<string, number>;
   contextCapValue: number;
 };
@@ -117,6 +119,11 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [providers, setProviders] = useState<ConfiguredProviderSummary[]>(() => cached?.providers ?? []);
   const [disabled, setDisabled] = useState<Set<string>>(() => new Set(cached?.disabled ?? []));
   const [selectedModels, setSelectedModels] = useState<ProviderModelMap | null>(() => cached?.selectedModels ?? null);
+  const [publishedSlugs, setPublishedSlugs] = useState<string[] | null>(() => cached?.publishedSlugs ?? null);
+  const [staleWorkers, setStaleWorkers] = useState<number | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const syncingRef = useRef(false);
+  const [onlyCommanderModels, setOnlyCommanderModels] = useState(false);
   const [catalogQuery, setCatalogQuery] = useState("");
   const [limit, setLimit] = useState<Record<string, number>>({});
   const [contextCaps, setContextCaps] = useState<Record<string, number>>(() => cached?.contextCaps ?? {});
@@ -256,11 +263,18 @@ export default function Models({ apiBase }: { apiBase: string }) {
   }, [apiBase, t]);
 
   const fetchCatalog = useCallback(async (signal: AbortSignal): Promise<CachedModelsPage> => {
-    const [modelsRes, capsRes, providersRes, selectionData] = await Promise.all([
+    // A missing/unreadable published catalog is unknown, never evidence that every
+    // discovered provider model is unavailable in Codex.
+    const published = fetch(`${apiBase}/api/catalog`, { cache: "no-store" })
+      .then(response => readJsonIfOk<unknown>(response))
+      .then(listedCodexModelSlugs)
+      .catch(() => null);
+    const [modelsRes, capsRes, providersRes, selectionData, nextPublishedSlugs] = await Promise.all([
       fetch(`${apiBase}/api/models`),
       fetch(`${apiBase}/api/provider-context-caps`),
       fetch(`${apiBase}/api/providers`),
       fetchSelectedModels(apiBase),
+      published,
     ]);
     const [data, capsPayload, providerData] = await Promise.all([
       readJsonOrThrow<ModelRow[]>(modelsRes),
@@ -278,6 +292,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       providers: providerData,
       selectedModels: selectionData,
       disabled: [...nextDisabled],
+      publishedSlugs: nextPublishedSlugs,
       contextCaps: capsData.caps,
       contextCapValue: capsData.value,
     } satisfies CachedModelsPage;
@@ -296,6 +311,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
     setProviders(next.providers);
     setDisabled(new Set(next.disabled));
     setSelectedModels(next.selectedModels);
+    setPublishedSlugs(next.publishedSlugs ?? null);
     setContextCapValue(next.contextCapValue);
     setContextCaps(next.contextCaps);
   }, []);
@@ -336,6 +352,50 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   }, [applyCatalog, cacheKey, fetchCatalog]);
 
+  const loadCodexStatus = useCallback(async () => {
+    try {
+      const response = await fetch(`${apiBase}/api/codex-catalog/status`, { cache: "no-store" });
+      const body = await readJsonIfOk<unknown>(response);
+      setStaleWorkers(staleCodexWorkerCount(body));
+    } catch {
+      setStaleWorkers(null);
+    }
+  }, [apiBase]);
+
+  useEffect(() => {
+    const initial = window.setTimeout(() => { void loadCodexStatus(); }, 0);
+    const timer = window.setInterval(() => { void loadCodexStatus(); }, 60_000);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
+  }, [loadCodexStatus]);
+
+  const refreshModels = async () => {
+    if (syncingRef.current || busyRef.current) return;
+    syncingRef.current = true;
+    setSyncing(true);
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      const response = await fetch(`${apiBase}/api/sync`, { method: "POST" });
+      const result = await readJsonOrThrow<{ ok: boolean; status: string; message?: string }>(response, t("models.syncFailed"));
+      if (!result?.ok) throw new Error(result?.message || t("models.syncFailed"));
+      const refreshed = await load(true);
+      await loadCodexStatus();
+      if (!refreshed) throw new Error(t("models.loadFail"));
+      setOnlyCommanderModels(false);
+      publishFeedback(true, t(result.status === "skipped" ? "models.syncSkipped" : "models.syncComplete"));
+    } catch (error) {
+      publishFeedback(false, error instanceof Error ? error.message : t("models.syncFailed"));
+    } finally {
+      syncingRef.current = false;
+      setSyncing(false);
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+
   // Shadow/v2 controls must not wait on the models catalog (live discovery can be slow).
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -355,6 +415,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
     () => buildProviderModelGroups(models, providers),
     [models, providers],
   );
+  const listedSlugs = useMemo(() => publishedSlugs === null ? null : new Set(publishedSlugs), [publishedSlugs]);
+  const commanderOnlyCount = useMemo(() => {
+    if (listedSlugs === null || selectedModels === null) return 0;
+    return models.filter(model => commanderOnlyModel(model, modelVisible(
+      selectedModels, model.provider, model.id, model.native === true, disabled.has(model.namespaced),
+    ), listedSlugs)).length;
+  }, [disabled, listedSlugs, models, selectedModels]);
 
   const routedProviderNames = useMemo(
     () => groups.filter(group => !group.native && group.rows.length > 0).map(group => group.provider),
@@ -387,8 +454,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
       model.id,
       model.native === true,
       disabled.has(model.namespaced),
-    )).length;
-  }, [disabled, models, selectedModels]);
+    ) && !commanderOnlyModel(model, true, listedSlugs)).length;
+  }, [disabled, listedSlugs, models, selectedModels]);
 
   const applyVisibility = async (
     scope: ModelVisibilityScope,
@@ -751,18 +818,18 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const renderGroup = (group: ProviderModelGroup<ModelRow>) => {
     const { provider, rows, native, liveModels, discovery } = group;
     const q = catalogQuery.trim().toLowerCase();
-    const isCollapsed = collapsed.has(provider) && q === "";
-    // Final visibility, not just the disable flag: a model is visible to Codex only when the
-    // provider allowlist admits it AND it is not disabled. Reading `disabled` alone made the
-    // switches disagree with what the picker actually offers.
-    const isVisible = (model: ModelRow) => modelVisible(
+    const isCollapsed = collapsed.has(provider) && q === "" && !(onlyCommanderModels && commanderOnlyCount > 0);
+    // The switch is the user's visibility preference. Publication is a separate
+    // result: a provider model can be enabled here yet absent from Codex's picker.
+    const isEnabled = (model: ModelRow) => modelVisible(
       selectedModelMap,
       provider,
       model.id,
       model.native === true,
       disabled.has(model.namespaced),
     );
-    const activeCount = rows.filter(isVisible).length;
+    const isCommanderOnly = (model: ModelRow) => commanderOnlyModel(model, isEnabled(model), listedSlugs);
+    const activeCount = rows.filter(model => isEnabled(model) && !isCommanderOnly(model)).length;
     const providerCap = contextCaps[provider];
     const capOn = isPositiveContextCap(providerCap);
     const isNative = native;
@@ -770,26 +837,25 @@ export default function Models({ apiBase }: { apiBase: string }) {
     const discoveryLabel = t(liveModels ? "models.discoveryAutoOn" : "models.discoveryAutoOff");
     const providerSettingsHref = `#${providerRouteHash(provider, "settings")}`;
     const providerMatchesQuery = provider.toLowerCase().includes(q);
-    const filtered = q && !providerMatchesQuery
+    const queried = q && !providerMatchesQuery
       ? rows.filter(model => (
         model.id.toLowerCase().includes(q)
         || model.namespaced.toLowerCase().includes(q)
         || model.displayName?.toLowerCase().includes(q)
       ))
       : rows;
-    // Display-only: enabled models float to the top of each provider group so they
-    // stay findable in long lists. The sort is stable, so the server order is kept
-    // inside each partition, and this does not affect the picker order above
-    // (visibility toggles still only filter).
-    const sorted = filtered.toSorted((a, b) => Number(!isVisible(a)) - Number(!isVisible(b)));
+    const filtered = onlyCommanderModels && commanderOnlyCount > 0 ? queried.filter(isCommanderOnly) : queried;
+    // Codex-listed, Commander-only, then disabled; preserve server order within each tier.
+    const rank = (model: ModelRow) => !isEnabled(model) ? 2 : isCommanderOnly(model) ? 1 : 0;
+    const sorted = filtered.toSorted((a, b) => rank(a) - rank(b));
     const shown = limit[provider] ?? PAGE;
     const visible = sorted.slice(0, shown);
     const remaining = filtered.length - visible.length;
      // An empty provider has nothing to send: keep both bulk buttons inert so we never PUT an
      // empty target list (the management API rejects it with 400).
      const hasRows = rows.length > 0;
-     const allOn = !hasRows || rows.every(isVisible);
-     const allOff = !hasRows || rows.every(m => !isVisible(m));
+     const allOn = !hasRows || rows.every(isEnabled);
+     const allOff = !hasRows || rows.every(m => !isEnabled(m));
      const bulkToggle = (enable: boolean) => {
        if (!hasRows) return;
        void applyVisibility(
@@ -884,12 +950,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
               <EmptyProviderHint provider={provider} liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
             )}
              {visible.map(m => {
-               // The row reflects the same final-visibility answer as the count and the picker.
-               const off = !isVisible(m);
+               const off = !isEnabled(m);
+               const commanderOnly = isCommanderOnly(m);
                return (
                  <div
                    key={m.namespaced}
-                   className="model-row-wrap"
+                   className={`model-row-wrap${commanderOnly ? " model-row-wrap--commander-only" : ""}`}
                    onMouseEnter={(e) => onRowEnter(m.namespaced, e.currentTarget)}
                    onMouseLeave={onRowLeave}
                    onFocus={(e) => onRowFocus(m.namespaced, e.currentTarget)}
@@ -899,7 +965,12 @@ export default function Models({ apiBase }: { apiBase: string }) {
                  >
                    <div className="row models-model-row">
                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy} label={m.native ? m.id : m.namespaced} />
-                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
+                      <code className="mono text-control" style={{ color: off ? "var(--faint)" : commanderOnly ? "var(--muted)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
+                     {commanderOnly && (
+                       <span className="models-chip models-chip--commander-only text-caption" title={t("models.commanderOnlyHint")}>
+                         {t("models.commanderOnlyBadge")}
+                       </span>
+                     )}
                      {m.custom && (
                        <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
@@ -948,7 +1019,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                              </>
                            )}
                            <span className="model-tip-key">{t("models.tipStatus")}</span>
-                           <span className="model-tip-val">{off ? t("models.tipDisabled") : t("models.tipActive")}</span>
+                           <span className="model-tip-val">{off ? t("models.tipDisabled") : commanderOnly ? t("models.tipCommanderOnly") : t("models.tipActive")}</span>
                          </div>
                          {m.custom && m.customId && (
                            <div className="model-tip-actions">
@@ -1005,16 +1076,25 @@ export default function Models({ apiBase }: { apiBase: string }) {
     ? groups.filter(group => group.provider === selectedProvider)
     : groups;
   const normalizedCatalogQuery = catalogQuery.trim().toLowerCase();
+  const scopedGroups = onlyCommanderModels && commanderOnlyCount > 0
+    ? providerScopedGroups.filter(group => group.rows.some(model => commanderOnlyModel(model, modelVisible(
+      selectedModelMap, group.provider, model.id, model.native === true, disabled.has(model.namespaced),
+    ), listedSlugs)))
+    : providerScopedGroups;
   const visibleGroups = normalizedCatalogQuery
-    ? providerScopedGroups.filter(group => (
+    ? scopedGroups.filter(group => (
       group.provider.toLowerCase().includes(normalizedCatalogQuery)
       || group.rows.some(model => (
-        model.id.toLowerCase().includes(normalizedCatalogQuery)
-        || model.namespaced.toLowerCase().includes(normalizedCatalogQuery)
-        || model.displayName?.toLowerCase().includes(normalizedCatalogQuery)
+        (!(onlyCommanderModels && commanderOnlyCount > 0) || commanderOnlyModel(model, modelVisible(
+          selectedModelMap, group.provider, model.id, model.native === true, disabled.has(model.namespaced),
+        ), listedSlugs)) && (
+          model.id.toLowerCase().includes(normalizedCatalogQuery)
+          || model.namespaced.toLowerCase().includes(normalizedCatalogQuery)
+          || model.displayName?.toLowerCase().includes(normalizedCatalogQuery)
+        )
       ))
     ))
-    : providerScopedGroups;
+    : scopedGroups;
 
   const contextStateLabel = contextPolicy.state === "uncapped"
     ? t("models.contextStateUncapped")
@@ -1360,6 +1440,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
         />
       </label>
       <div className="row models-catalog-actions">
+        <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => void refreshModels()} disabled={busy || syncing} aria-busy={syncing || undefined}>
+          {t(syncing ? "models.refreshing" : "models.refreshModels")}
+        </button>
+        {commanderOnlyCount > 0 && (
+          <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setOnlyCommanderModels(value => !value)} aria-pressed={onlyCommanderModels}>
+            {t("models.commanderOnlyFilter", { count: commanderOnlyCount })}
+          </button>
+        )}
         <button type="button" className="btn btn-ghost btn-sm text-caption" onClick={() => setAllCollapsed(true)} disabled={busy}>
           <IconChevron width={12} height={12} aria-hidden="true" /> {t("models.collapseAll")}
         </button>
@@ -1652,7 +1740,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
                 m.id,
                 m.native === true,
                 disabled.has(m.namespaced),
-              )).length;
+              ) && !commanderOnlyModel(m, true, listedSlugs)).length;
               return (
                 <button
                   key={provider}
@@ -1669,6 +1757,15 @@ export default function Models({ apiBase }: { apiBase: string }) {
           </div>
         </aside>
         <section className="models-workspace-main" aria-label={t("models.workspace.mainAria")}>
+          {staleWorkers !== null && staleWorkers > 0 && (
+            <Notice tone="warn">{t("models.restartCodex", { count: staleWorkers })}</Notice>
+          )}
+          {publishedSlugs === null && !catalogState.refreshing && (
+            <p className="muted text-label models-catalog-unavailable">{t("models.catalogUnavailable")}</p>
+          )}
+          {commanderOnlyCount > 0 && (
+            <p className="muted text-label models-commander-only-summary">{t("models.commanderOnlySummary", { count: commanderOnlyCount })}</p>
+          )}
           {controlsBlock}
           {catalogToolbar}
           {combosBlock}

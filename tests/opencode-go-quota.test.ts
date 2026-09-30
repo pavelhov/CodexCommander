@@ -22,9 +22,10 @@ function config(baseUrl = "https://opencode.ai/zen/go/v1"): CodexCommanderConfig
   } as CodexCommanderConfig;
 }
 
-describe("OpenCode Go published caps and local observations", () => {
+describe("OpenCode Go live quota and local observations", () => {
   let root: string;
   let previousHome: string | undefined;
+  let originalFetch: typeof fetch;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "ccx-go-quota-"));
@@ -32,29 +33,124 @@ describe("OpenCode Go published caps and local observations", () => {
     process.env.CODEXCOMMANDER_HOME = root;
     clearProviderQuotaCache();
     resetUsageReadCacheForTests();
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(null, { status: 503 })) as typeof fetch;
   });
 
   afterEach(() => {
     clearProviderQuotaCache();
     resetUsageReadCacheForTests();
+    globalThis.fetch = originalFetch;
     if (previousHome === undefined) delete process.env.CODEXCOMMANDER_HOME;
     else process.env.CODEXCOMMANDER_HOME = previousHome;
     rmSync(root, { recursive: true, force: true });
   });
 
-  test("shows official reference caps without inventing remaining percentages", async () => {
+  test("shows local observations without inventing caps or remaining percentages", async () => {
     const response = await fetchProviderQuotaReports(config(), true);
     const report = response.reports.find(row => row.provider === "opencode-go");
     expect(report).toBeDefined();
     expect(report!.quota.fiveHourPercent).toBeUndefined();
     expect(report!.quota.weeklyPercent).toBeUndefined();
     expect(report!.quota.monthlyPercent).toBeUndefined();
-    expect(report!.quota.referenceWindows?.map(row => [row.id, row.publishedLimitUsd])).toEqual([
-      ["five_hour", 12],
-      ["weekly", 30],
-      ["monthly", 60],
-    ]);
+    expect(report!.source).toBe("opencode-go:local-observations");
+    expect(report!.quota.referenceWindows?.map(row => row.id)).toEqual(["five_hour", "weekly", "monthly"]);
+    expect(report!.quota.referenceWindows?.every(row => row.publishedLimitUsd === undefined)).toBe(true);
     expect(report!.quota.referenceWindows?.every(row => row.coverage === "none")).toBe(true);
+  });
+
+  test("shows live account percentages and reset times from the Go usage endpoint", async () => {
+    let requestedUrl = "";
+    let authorization = "";
+    let redirect: RequestRedirect | undefined;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = String(input);
+      authorization = new Headers(init?.headers).get("Authorization") ?? "";
+      redirect = init?.redirect;
+      return Response.json({ usage: {
+        rolling: { status: "ok", percent: 12.5, resetsAt: "2026-09-29T18:00:00.000Z" },
+        weekly: { status: "ok", percent: 40, resetsAt: "2026-10-05T00:00:00.000Z" },
+        monthly: { status: "ok", percent: 65, resetsAt: "2026-10-20T00:00:00.000Z" },
+      } });
+    }) as typeof fetch;
+    const response = await fetchProviderQuotaReports(config(), true);
+    const report = response.reports.find(row => row.provider === "opencode-go")!;
+    expect(requestedUrl).toBe("https://opencode.ai/zen/go/v1/usage");
+    expect(authorization).toBe("Bearer go-key");
+    expect(redirect).toBe("error");
+    expect(report.source).toBe("opencode-go:usage-api");
+    expect(report.quota.fiveHourPercent).toBe(12.5);
+    expect(report.quota.weeklyPercent).toBe(40);
+    expect(report.quota.monthlyPercent).toBe(65);
+    expect(report.quota.fiveHourResetAt).toBe(Date.parse("2026-09-29T18:00:00.000Z"));
+    expect(report.quota.weeklyResetAt).toBe(Date.parse("2026-10-05T00:00:00.000Z"));
+    expect(report.quota.monthlyResetAt).toBe(Date.parse("2026-10-20T00:00:00.000Z"));
+    expect(report.quota.referenceWindows).toBeUndefined();
+  });
+
+  test("rejects malformed live percentages and uses marked local observations", async () => {
+    globalThis.fetch = (async () => Response.json({ usage: {
+      rolling: { percent: 150 }, weekly: { percent: 0 }, monthly: { percent: 0 },
+    } })) as typeof fetch;
+    const report = (await fetchProviderQuotaReports(config(), true)).reports[0]!;
+    expect(report.source).toBe("opencode-go:local-observations");
+    expect(report.quota.fiveHourPercent).toBeUndefined();
+  });
+
+  test("does not present an unknown upstream status as authoritative usage", async () => {
+    globalThis.fetch = (async () => Response.json({ usage: {
+      rolling: { status: "unknown", percent: 10 },
+      weekly: { status: "ok", percent: 20 },
+      monthly: { status: "ok", percent: 30 },
+    } })) as typeof fetch;
+    const report = (await fetchProviderQuotaReports(config(), true)).reports[0]!;
+    expect(report.source).toBe("opencode-go:local-observations");
+  });
+
+  test.each([401, 403])("falls back to local observations after HTTP %i without authoritative percentages", async status => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(null, { status });
+    }) as typeof fetch;
+    const report = (await fetchProviderQuotaReports(config(), true)).reports[0]!;
+    expect(fetchCalls).toBe(1);
+    expect(report.source).toBe("opencode-go:local-observations");
+    expect(report.quota.fiveHourPercent).toBeUndefined();
+    expect(report.quota.weeklyPercent).toBeUndefined();
+    expect(report.quota.monthlyPercent).toBeUndefined();
+    expect(report.quota.referenceWindows?.every(row => row.publishedLimitUsd === undefined)).toBe(true);
+  });
+
+  test.each([
+    ["invalid JSON", () => new Response("{invalid", { headers: { "Content-Type": "application/json" } })],
+    ["array root", () => Response.json([])],
+    ["missing usage", () => Response.json({})],
+    ["incomplete windows", () => Response.json({ usage: { rolling: { status: "ok", percent: 10 } } })],
+  ] as const)("falls back to local observations for a 2xx response containing %s", async (_label, response) => {
+    globalThis.fetch = (async () => response()) as typeof fetch;
+    const report = (await fetchProviderQuotaReports(config(), true)).reports[0]!;
+    expect(report.source).toBe("opencode-go:local-observations");
+    expect(report.quota.fiveHourPercent).toBeUndefined();
+    expect(report.quota.weeklyPercent).toBeUndefined();
+    expect(report.quota.monthlyPercent).toBeUndefined();
+    expect(report.quota.referenceWindows?.map(row => row.id)).toEqual(["five_hour", "weekly", "monthly"]);
+  });
+
+  test("OAuth mode never sends a configured key to the Go usage endpoint", async () => {
+    const oauthConfig = config();
+    oauthConfig.providers["opencode-go"]!.authMode = "oauth";
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 503 });
+    }) as typeof fetch;
+
+    const report = (await fetchProviderQuotaReports(oauthConfig, true)).reports[0]!;
+
+    expect(fetchCalls).toBe(0);
+    expect(report.source).toBe("opencode-go:local-observations");
+    expect(report.quota.fiveHourPercent).toBeUndefined();
   });
 
   test("labels locally measured spend as partial when any model is unpriced", async () => {
@@ -102,7 +198,7 @@ describe("OpenCode Go published caps and local observations", () => {
     expect(fiveHour.coverage).toBe("partial");
   });
 
-  test("degrades windows whose retained usage history starts inside the cap period", () => {
+  test("degrades windows whose retained usage history starts inside the period", () => {
     const now = Date.now();
     const recent: Parameters<typeof openCodeGoReferenceWindowsForTest>[0] = [{
       requestId: "recent-only",
@@ -164,8 +260,20 @@ describe("OpenCode Go published caps and local observations", () => {
     expect(report.quota.observedLimitEvent).toBeUndefined();
   });
 
-  test("never attaches Go subscription facts to a lookalike destination", async () => {
-    const response = await fetchProviderQuotaReports(config("https://evil.example/zen/go/v1"), true);
+  test.each([
+    "https://evil.example/zen/go/v1",
+    "https://opencode.ai.evil.example/zen/go/v1",
+    "https://opencode.ai/custom/v1",
+    "https://opencode.ai:444/zen/go/v1",
+    "http://opencode.ai/zen/go/v1",
+  ])("never sends a configured key or attaches Go subscription facts for custom destination %s", async baseUrl => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 503 });
+    }) as typeof fetch;
+    const response = await fetchProviderQuotaReports(config(baseUrl), true);
+    expect(fetchCalls).toBe(0);
     expect(response.reports.some(row => row.provider === "opencode-go")).toBe(false);
   });
 });

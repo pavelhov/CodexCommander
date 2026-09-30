@@ -728,6 +728,18 @@ describe("ultra reasoning effort (upstream codex-rs parity)", () => {
     expect(mapReasoningEffort(route.provider, "grok-build-0.1", "max")).toBeUndefined();
   });
 
+  test("OpenCode Go Grok 4.7 clamps max to its documented xhigh ceiling", () => {
+    const config = {
+      defaultProvider: "opencode-go",
+      providers: {
+        "opencode-go": { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", authMode: "key" },
+      },
+    } as unknown as CodexCommanderConfig;
+    const route = routeModel(config, "opencode-go/grok-4.7");
+    expect(route.provider.modelReasoningEfforts?.["grok-4.7"]).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(mapReasoningEffort(route.provider, "grok-4.7", "max")).toBe("xhigh");
+  });
+
   test("enrichProviderFromRegistry merges new ladder keys into a partially saved map", () => {
     // A config saved when the registry only knew grok-4.5 must pick up the grok-4.6 xhigh
     // tier from the current registry for catalog advertisement, without overwriting the

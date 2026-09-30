@@ -4,6 +4,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { syncModelsToCodex } from "../src/codex/sync";
+import { gatherRoutedModels } from "../src/codex/catalog";
+import { clearModelCache, getProviderDiscoveryStatus, getProviderLiveModelCount, getStaleCached, markModelsFetchFailure } from "../src/codex/model-cache";
+import { knownModelIdsForProvider, routeModel } from "../src/router";
+import { routedSlug } from "../src/providers/slug-codec";
 import { handleManagementAPI } from "../src/server/management-api";
 import { resolveCodexCoordinatorDatabasePath, resolveEffectiveUserIdentity } from "../src/codex/user-identity";
 import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../src/codex/subagent-defaults";
@@ -166,6 +170,107 @@ describe("GUI/CLI Codex sync backend", () => {
     });
     expect(logs).toContain("   Target Codex home: C:\\Users\\[USER]\\.codex");
     expect(errors).toEqual([]);
+  });
+
+  test("an explicit sync refreshes native and routed discovery before convergence", async () => {
+    const order: string[] = [];
+    const forced: boolean[] = [];
+    const result = await syncModelsToCodex(12345, config, null, {
+      admitCodexWrite: admittedSync,
+      prepareCodexTransitionState: preparedSync,
+      reconcileJournal: () => false,
+      refreshNativeLiveCatalog: async options => {
+        order.push("native");
+        forced.push(options.force === true);
+        return {} as never;
+      },
+      invalidateModelCacheFreshness: () => { order.push("routed"); },
+      refreshCodexModelCatalog: async () => {
+        order.push("catalog");
+        return {
+          added: 0,
+          path: "/tmp/codexcommander-catalog.json",
+          catalogExists: true,
+          catalogWritten: false,
+          cacheSynced: false,
+          comboOmissions: [],
+        };
+      },
+      injectCodexConfig: async () => {
+        order.push("inject");
+        return { success: true, message: "injected" };
+      },
+      currentExternalCodexModelProvider: () => null,
+    }, { forceNativeLive: true, forceRoutedLive: true });
+
+    expect(order).toEqual(["native", "routed", "catalog", "inject"]);
+    expect(forced).toEqual([true]);
+    expect(result.ok).toBe(true);
+  });
+
+  test("a forced routed refresh retains discovered rows and routing ids when discovery fails", async () => {
+    let fetchCalls = 0;
+    let failing = false;
+    const discoveryConfig: CodexCommanderConfig = {
+      ...config,
+      providers: {
+        fixture: {
+          ...config.providers.fixture!,
+          liveModels: true,
+          models: ["configured-fallback"],
+          fetch: (async () => {
+            fetchCalls += 1;
+            return failing
+              ? new Response("unavailable", { status: 503 })
+              : Response.json({ data: [{ id: "vendor/discovered-model" }, { id: "second-model" }] });
+          }) as typeof fetch,
+        },
+      },
+    };
+    clearModelCache("fixture");
+    try {
+      const gather = () => gatherRoutedModels(discoveryConfig, { nativeOpenAiSlugs: () => [] });
+      const warm = await gather();
+      expect(warm.map(model => model.id)).toContain("vendor/discovered-model");
+      expect(getProviderLiveModelCount("fixture")).toBe(2);
+      expect(getProviderDiscoveryStatus("fixture")).toEqual({ status: "ok" });
+      const stale = getStaleCached("fixture");
+      // Explicit force must bypass both a fresh cache and a prior failure cooldown.
+      markModelsFetchFailure("fixture");
+      failing = true;
+      let refreshed: typeof warm = [];
+      const result = await syncModelsToCodex(12345, discoveryConfig, null, {
+        admitCodexWrite: admittedSync,
+        prepareCodexTransitionState: preparedSync,
+        currentExternalCodexModelProvider: () => null,
+        refreshCodexModelCatalog: async () => {
+          refreshed = await gather();
+          return {
+            added: refreshed.length,
+            path: "/tmp/codexcommander-catalog.json",
+            catalogExists: true,
+            catalogWritten: false,
+            cacheSynced: false,
+            comboOmissions: [],
+          };
+        },
+        injectCodexConfig: async () => ({ success: true, message: "injected" }),
+      }, { forceRoutedLive: true });
+
+      expect(result.ok).toBe(true);
+      expect(fetchCalls).toBe(2);
+      expect(refreshed).toEqual(warm);
+      expect(getStaleCached("fixture")).toBe(stale);
+      expect(getProviderLiveModelCount("fixture")).toBe(2);
+      expect(getProviderDiscoveryStatus("fixture")).toEqual({ status: "failed", reason: "http", httpStatus: 503 });
+      expect(knownModelIdsForProvider("fixture", discoveryConfig.providers.fixture!)).toContain("vendor/discovered-model");
+      expect(routeModel(discoveryConfig, routedSlug("fixture", "vendor/discovered-model"))).toMatchObject({
+        providerName: "fixture",
+        modelId: "vendor/discovered-model",
+      });
+    } finally {
+      clearModelCache("fixture");
+    }
   });
 
   test("refuses before catalog publication when the current coordinator is unavailable", async () => {
@@ -586,6 +691,7 @@ describe("GUI/CLI Codex sync backend", () => {
 
   test("POST /api/sync promotes failed readiness only after a clean full sync", async () => {
     let recovered = 0;
+    let syncOptions: Readonly<{ forceNativeLive?: boolean; forceRoutedLive?: boolean }> | undefined;
     const syncResult = {
       status: "applied" as const,
       ok: true,
@@ -600,7 +706,10 @@ describe("GUI/CLI Codex sync backend", () => {
     };
     const request = new Request("http://localhost/api/sync", { method: "POST" });
     const response = await handleManagementAPI(request, new URL(request.url), config, {
-      syncModelsToCodex: async () => syncResult,
+      syncModelsToCodex: async (_port, _current, _log, _deps, options) => {
+        syncOptions = options;
+        return syncResult;
+      },
       readRuntimePort: () => ({ pid: process.pid, port: 10100, hostname: "127.0.0.1", startedAt: new Date().toISOString() }),
       resetCodexAppServerCatalogStateCache: () => {},
       collectCodexAppServerCatalogState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
@@ -621,6 +730,7 @@ describe("GUI/CLI Codex sync backend", () => {
 
     expect(response?.status).toBe(200);
     expect(recovered).toBe(1);
+    expect(syncOptions).toEqual({ forceNativeLive: true, forceRoutedLive: true });
 
     const degradedRequest = new Request("http://localhost/api/sync", { method: "POST" });
     await handleManagementAPI(degradedRequest, new URL(degradedRequest.url), config, {

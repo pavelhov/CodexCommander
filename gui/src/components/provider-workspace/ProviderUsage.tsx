@@ -15,6 +15,7 @@ import {
   type ProviderQuotaReferenceWindowView,
   type ProviderQuotaReportView,
 } from "../../provider-workspace/report";
+import { referenceCoverageLabel, referenceObservedLabels } from "../../provider-workspace/reference-observation";
 import type { ProviderUsageTotals, ProviderModelUsageRow } from "./types";
 
 export default function ProviderUsage({ item, usageTotals, quotaReport, modelUsage }: {
@@ -206,11 +207,6 @@ function ReferenceQuota({ windows, limitEvent, locale }: {
   locale: string;
 }) {
   const t = useT();
-  const money = (amount: number) => new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: amount >= 10 ? 0 : 2,
-  }).format(amount);
   const reset = limitEvent?.resetAt === undefined ? null : new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
@@ -237,19 +233,12 @@ function ReferenceQuota({ windows, limitEvent, locale }: {
           <div className="pws-reference-row" key={window.id}>
             <div className="pws-reference-row-head">
               <strong>{t(REFERENCE_WINDOW_KEYS[window.id])}</strong>
-              <span className="pws-reference-cap">
-                {t("pws.reference.publishedCap", { amount: money(window.publishedLimitUsd) })}
-              </span>
             </div>
             <div className="pws-reference-observed">
-              <span>{observedWindowLabel(window, locale, t)}</span>
+              {referenceObservedLabels(window, locale, t).map(label => <span key={label}>{label}</span>)}
               {window.coverage !== "none" && (
                 <span className={`pws-reference-badge pws-reference-badge--${window.coverage}`}>
-                  {t(window.coverage === "complete"
-                    ? "pws.reference.estimate"
-                    : window.coverage === "partial"
-                      ? "pws.reference.partial"
-                      : "pws.reference.tokensOnly")}
+                  {referenceCoverageLabel(window.coverage, t)}
                 </span>
               )}
             </div>
@@ -259,25 +248,4 @@ function ReferenceQuota({ windows, limitEvent, locale }: {
       <p className="muted pws-reference-disclaimer">{t("pws.reference.notBalance")}</p>
     </div>
   );
-}
-
-function observedWindowLabel(
-  window: ProviderQuotaReferenceWindowView,
-  locale: string,
-  t: ReturnType<typeof useT>,
-): string {
-  if (window.observedRequests === 0) return t("pws.reference.noTraffic");
-  if (window.observedSpendUsd !== undefined) {
-    const amount = new Intl.NumberFormat(locale, {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: window.observedSpendUsd < 0.01 ? 4 : 2,
-    }).format(window.observedSpendUsd);
-    return t("pws.reference.spendObserved", { amount });
-  }
-  if (window.observedTokens > 0) {
-    return t("pws.reference.tokensObserved", { tokens: formatTokenCount(window.observedTokens, locale) });
-  }
-  return t("pws.reference.requestsObserved", { requests: formatRequestCount(window.observedRequests, locale) });
 }

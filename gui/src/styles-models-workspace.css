@@ -604,6 +604,17 @@
   flex-wrap: wrap;
 }
 
+.models-catalog-actions [aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--surface);
+  border-color: var(--accent-ring);
+}
+
+.models-catalog-unavailable,
+.models-commander-only-summary {
+  margin: 0 0 var(--space-2);
+}
+
 .models-provider-columns,
 .models-provider-head {
   display: grid;
@@ -809,8 +820,18 @@ button.models-context-policy:hover:not(:disabled) {
   margin-bottom: var(--space-1);
 }
 
+.models-chip--commander-only {
+  color: var(--muted);
+  background: var(--surface);
+}
+
+.model-row-wrap--commander-only .models-model-row {
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+}
+
 .models-model-row {
   padding: var(--space-2) 0;
+  flex-wrap: wrap;
 }
 
 .models-show-more {

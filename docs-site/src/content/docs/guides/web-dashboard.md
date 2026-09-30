@@ -91,9 +91,9 @@ on. **Logs** works the same way with `#logs` and `#logs/debug`.
 Cost values in **Dashboard**, **Logs**, and **Usage** are API list-price equivalents calculated from
 reported tokens. They are not billing receipts or evidence of an actual charge; subscription usage
 or provider credits may apply instead. The Dashboard's **Plan & quota** section shows
-provider-reported limits (5-hour / weekly / monthly windows), the provider plan, and observed
-reference spend versus published caps — always labeled as provider-reported estimates, never billed
-spend.
+provider-reported limits (5-hour / weekly / monthly windows) and the provider plan when available.
+If OpenCode Go's live meter is unavailable, it shows only locally observed traffic and estimated
+cost, without a claimed cap or remaining balance. Estimated cost is not billed spend.
 
 ### Request usage and dispatch evidence
 
@@ -119,6 +119,16 @@ providers are capped or their saved values differ. Native OpenAI models always k
 
 Automatic upstream catalog refresh is configured per provider under **Providers → Settings**. The
 Models page shows that state and links directly to it; it does not keep a second discovery setting.
+
+On **Models**, choose **Refresh models** to run the same explicit, non-disruptive sync as `ccx sync`.
+It rechecks the native Codex account and enabled routed providers, then updates the published Codex
+catalog. Provider models that Commander discovered and enabled but did not publish into Codex's
+current picker catalog appear gray with a **Commander only** badge; use the badge count to filter
+them. This comparison is unavailable when the published catalog cannot be read, and a provider's
+model listing alone does not prove that the account can complete an inference with it. If the
+catalog is current but running Codex workers hold an older version, Models shows a prompt to quit
+and reopen ChatGPT. Opening Models checks the existing local catalog; upstream discovery occurs on
+the explicit sync.
 
 ## Catalog activation
 

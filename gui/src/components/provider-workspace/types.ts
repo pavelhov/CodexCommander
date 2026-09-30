@@ -22,6 +22,8 @@ export type TypeFilter = { cloud: boolean; local: boolean; selfHosted: boolean; 
 /** Per-provider usage totals for the workspace overview (30d window). */
 export interface ProviderUsageTotals {
   requests?: number;
+  /** Requests with token usage reported by the provider. */
+  measuredRequests?: number;
   totalTokens?: number;
 }
 
@@ -30,6 +32,8 @@ export interface ProviderModelUsageRow {
   model: string;
   resolvedModel?: string;
   requests: number;
+  /** Requests with token usage reported by the provider. Optional for cached/legacy rows. */
+  measuredRequests?: number;
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
