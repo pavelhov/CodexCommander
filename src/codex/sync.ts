@@ -3,7 +3,7 @@ import { currentExternalCodexModelProvider } from "./routing-transition";
 import { printProjectCodexConfigWarnings, groupProjectCodexConfigWarningsByPath, type ProjectCodexConfigWarning } from "./project-config-warnings";
 import { refreshCodexModelCatalog, type CodexCatalogRefreshResult } from "./refresh";
 import { refreshNativeLiveCatalog } from "./catalog/native-live";
-import { clearModelCache } from "./model-cache";
+import { invalidateModelCacheFreshness } from "./model-cache";
 import { applyProxyEnv, loadConfig } from "../config";
 import type { CodexCommanderConfig } from "../types";
 import { collectOrcaCodexHomeDiagnostic } from "./home";
@@ -52,7 +52,7 @@ interface CodexSyncDeps {
   /** Native discovery seam; explicit syncs may bypass its five-minute memo. */
   refreshNativeLiveCatalog?: typeof refreshNativeLiveCatalog;
   /** Routed discovery seam; explicit syncs may bypass provider model caches. */
-  clearModelCache?: typeof clearModelCache;
+  invalidateModelCacheFreshness?: typeof invalidateModelCacheFreshness;
   injectCodexConfig: typeof injectCodexConfig;
   /** The sync entry only needs this admission's service-home verdict. */
   admitCodexWrite?: () => CodexSyncAdmission;
@@ -231,7 +231,7 @@ export async function syncModelsToCodex(
       await (deps.refreshNativeLiveCatalog ?? refreshNativeLiveCatalog)({ force: true });
     }
     if (options.forceRoutedLive) {
-      (deps.clearModelCache ?? clearModelCache)();
+      (deps.invalidateModelCacheFreshness ?? invalidateModelCacheFreshness)();
     }
     const cat = await deps.refreshCodexModelCatalog(config);
     added = cat.added;

@@ -157,6 +157,44 @@ public enum CatalogReloadStatus: Equatable, Sendable {
     case restartRequired(staleWorkerCount: Int)
 }
 
+/// Closed result contract from authenticated `POST /api/sync`.
+public enum CodexCatalogSyncStatus: String, Decodable, Equatable, Sendable {
+    case applied
+    case skipped
+    case refused
+}
+
+public enum CodexCatalogSyncSkipReason: String, Decodable, Equatable, Sendable {
+    case desiredDisabled = "desired_disabled"
+    case externalProvider = "external_provider"
+}
+
+public struct CodexCatalogSyncResponse: Decodable, Equatable, Sendable {
+    public let status: CodexCatalogSyncStatus
+    public let ok: Bool
+    public let skippedReason: CodexCatalogSyncSkipReason?
+    public let warning: String?
+
+    public var outcome: CodexCatalogSyncOutcome {
+        guard ok else { return .failed }
+        switch status {
+        case .applied:
+            return .applied(warning: warning)
+        case .skipped:
+            guard let skippedReason else { return .failed }
+            return .skipped(skippedReason)
+        case .refused:
+            return .failed
+        }
+    }
+}
+
+public enum CodexCatalogSyncOutcome: Equatable, Sendable {
+    case applied(warning: String?)
+    case skipped(CodexCatalogSyncSkipReason)
+    case failed
+}
+
 public struct CodexCatalogStatus: Decodable, Sendable {
     public struct Activation: Decodable, Sendable {
         public struct State: Decodable, Sendable {

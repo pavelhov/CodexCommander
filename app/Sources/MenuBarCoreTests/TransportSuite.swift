@@ -361,21 +361,34 @@ enum TransportSuite {
                 .init(status: 200, body: identity),
                 .init(status: 200, body: #"{"activation":{"schemaVersion":1,"catalog":{"status":"current"},"routing":{"status":"current"},"workers":{"status":"reload_required","staleCount":1}}}"#),
                 .init(status: 200, body: identity),
-                .init(status: 200, body: #"{"ok":true}"#),
+                .init(status: 200, body: #"{"status":"applied","ok":true}"#),
+                .init(status: 200, body: identity),
+                .init(status: 200, body: #"{"status":"skipped","ok":true,"skippedReason":"desired_disabled"}"#),
+                .init(status: 200, body: identity),
+                .init(status: 200, body: #"{"status":"applied","ok":false}"#),
             ])
             let client = makeClient(credential: "admin-secret")
             let status: CodexCatalogStatus? = sync { try? await client.codexCatalogStatus() }
             t.equal(status?.reloadStatus, .restartRequired(staleWorkerCount: 1))
-            let synced = sync { (try? await client.syncCodexCatalog()) != nil }
-            t.equal(synced, true)
+            let applied: CodexCatalogSyncOutcome? = sync { try? await client.syncCodexCatalog() }
+            let skipped: CodexCatalogSyncOutcome? = sync { try? await client.syncCodexCatalog() }
+            let rejected: CodexCatalogSyncOutcome? = sync { try? await client.syncCodexCatalog() }
+            t.equal(applied, .applied(warning: nil))
+            t.equal(skipped, .skipped(.desiredDisabled))
+            t.equal(rejected, .failed)
 
             let requests = StubProtocol.recorded
             t.equal(requests.map { $0.url?.path ?? "" }, [
-                "/healthz", "/api/codex-catalog/status", "/healthz", "/api/sync",
+                "/healthz", "/api/codex-catalog/status",
+                "/healthz", "/api/sync",
+                "/healthz", "/api/sync",
+                "/healthz", "/api/sync",
             ])
             t.equal(requests[1].httpMethod, "GET")
             t.equal(requests[3].httpMethod, "POST")
             t.equal(requests[3].value(forHTTPHeaderField: "x-codexcommander-api-key"), "admin-secret")
+            t.equal(requests[5].httpMethod, "POST")
+            t.equal(requests[7].httpMethod, "POST")
         }
 
         t.test("transport: public readiness accepts ready, pending, and failed without credentials") {

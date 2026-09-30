@@ -261,8 +261,17 @@ export default function ProviderOverview({
               </div>
               {typeof tokens === "number" && (
                 <div className="pws-usage-metric">
-                  <span className="pws-usage-metric-value">{formatTokenCount(tokens, locale)}</span>
-                  <span className="muted pws-usage-metric-label">{t("pws.metricTokens")}</span>
+                  <span className="pws-usage-metric-value">
+                    {requests > 0 && !(typeof usageTotals?.measuredRequests === "number" && usageTotals.measuredRequests > 0)
+                      ? t("logs.tokens.unreported")
+                      : formatTokenCount(tokens, locale)}
+                  </span>
+                  <span className="muted pws-usage-metric-label">
+                    {t("pws.metricTokens")}
+                    {requests > 0 && typeof usageTotals?.measuredRequests === "number" && usageTotals.measuredRequests > 0 && usageTotals.measuredRequests < requests
+                      ? ` · ${t("pws.reference.partial")}`
+                      : ""}
+                  </span>
                 </div>
               )}
             </div>
@@ -283,7 +292,14 @@ export default function ProviderOverview({
                     <tr key={row.model}>
                       <td className="mono">{row.model}</td>
                       <td className="num">{formatRequestCount(row.requests, locale)}</td>
-                      <td className="num mono">{formatTokenCount(row.totalTokens, locale)}</td>
+                      <td className="num mono">
+                        {row.requests > 0 && !(typeof row.measuredRequests === "number" && row.measuredRequests > 0)
+                          ? t("logs.tokens.unreported")
+                          : formatTokenCount(row.totalTokens, locale)}
+                        {row.requests > 0 && typeof row.measuredRequests === "number" && row.measuredRequests > 0 && row.measuredRequests < row.requests
+                          ? <span className="muted"> · {t("pws.reference.partial")}</span>
+                          : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

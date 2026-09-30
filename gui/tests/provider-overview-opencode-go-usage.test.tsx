@@ -40,11 +40,11 @@ const item = {
 } as WorkspaceItem;
 
 const modelUsage: ProviderModelUsageRow[] = [
-  { model: "glm-5", requests: 3, totalTokens: 400, inputTokens: 250, outputTokens: 150, shareRatio: 0.2 },
-  { model: "deepseek-v4", requests: 7, totalTokens: 1600, inputTokens: 1000, outputTokens: 600, shareRatio: 0.8 },
+  { model: "glm-5", requests: 3, measuredRequests: 3, totalTokens: 400, inputTokens: 250, outputTokens: 150, shareRatio: 0.2 },
+  { model: "deepseek-v4", requests: 7, measuredRequests: 7, totalTokens: 1600, inputTokens: 1000, outputTokens: 600, shareRatio: 0.8 },
 ];
 
-async function mountOverview(providerItem: WorkspaceItem, usage = modelUsage): Promise<{ root: Root; container: HTMLElement }> {
+async function mountOverview(providerItem: WorkspaceItem, usage = modelUsage, totals = { requests: 10, measuredRequests: 10, totalTokens: 2000 }): Promise<{ root: Root; container: HTMLElement }> {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
@@ -53,7 +53,7 @@ async function mountOverview(providerItem: WorkspaceItem, usage = modelUsage): P
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <ProviderOverview item={providerItem} usageTotals={{ requests: 10, totalTokens: 2000 }} modelUsage={usage} />
+        <ProviderOverview item={providerItem} usageTotals={totals} modelUsage={usage} />
       </LanguageProvider>,
     );
   });
@@ -83,6 +83,43 @@ test("OpenCode Go overview shows 30-day provider totals and per-model request an
     await act(async () => { root.unmount(); });
     container.remove();
   }
+});
+
+test("OpenCode Go labels completed requests with no token measurement as unreported", async () => {
+  const rows: ProviderModelUsageRow[] = [
+    { model: "no-usage", requests: 2, measuredRequests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, shareRatio: 1 },
+  ];
+  const { root, container } = await mountOverview(item, rows, { requests: 2, measuredRequests: 0, totalTokens: 0 });
+  try {
+    const section = container.querySelector('section[aria-label="Usage (last 30 days)"]');
+    expect(section?.textContent).toContain("unreported");
+    expect(section?.textContent).not.toContain("0 tokens");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("OpenCode Go labels partially measured provider and model token totals", async () => {
+  const rows: ProviderModelUsageRow[] = [
+    { model: "partial", requests: 4, measuredRequests: 2, totalTokens: 70, inputTokens: 40, outputTokens: 30, shareRatio: 1 },
+  ];
+  const { root, container } = await mountOverview(item, rows, { requests: 4, measuredRequests: 2, totalTokens: 70 });
+  try {
+    const section = container.querySelector('section[aria-label="Usage (last 30 days)"]');
+    expect(section?.textContent).toContain("Partial");
+    expect(section?.textContent).toContain("70");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
+});
+
+test("provider workspace carries measured request counts from the usage API into its view models", async () => {
+  const shell = await Bun.file(new URL("../src/components/provider-workspace/ProviderWorkspaceShell.tsx", import.meta.url)).text();
+  expect(shell).toContain("measuredRequests?: number");
+  expect(shell).toContain("measuredRequests: p.measuredRequests");
+  expect(shell).toContain("measuredRequests: m.measuredRequests");
 });
 
 test("model summary stays scoped to OpenCode Go", async () => {

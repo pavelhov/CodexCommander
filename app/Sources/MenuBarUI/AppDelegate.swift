@@ -321,10 +321,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
         controller.setCatalogApplyEnabled(false)
         controller.showProgress("Refreshing model catalog…")
         Task { [weak self, coordinator] in
-            let result: Result<Void, Error>
+            let result: Result<CodexCatalogSyncOutcome, Error>
             do {
-                try await client.syncCodexCatalog()
-                result = .success(())
+                result = .success(try await client.syncCodexCatalog())
             } catch {
                 result = .failure(error)
             }
@@ -335,8 +334,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValid
                 self.controller.setLifecycleControlsEnabled(true)
                 self.refreshCatalogApplyAvailability()
                 switch result {
-                case .success:
-                    self.controller.showResult("Model sync finished. Restart ChatGPT if prompted below.", isError: false)
+                case .success(.applied(let warning)):
+                    if let warning, !warning.isEmpty {
+                        self.controller.showResult(warning, isError: true)
+                    } else {
+                        self.controller.showResult("Model sync finished. Restart ChatGPT if prompted below.", isError: false)
+                    }
+                case .success(.skipped(.desiredDisabled)):
+                    self.controller.showResult("Model sync was skipped because Codex integration is off.", isError: false)
+                case .success(.skipped(.externalProvider)):
+                    self.controller.showResult("Model sync was skipped because Codex uses an external provider.", isError: false)
+                case .success(.failed):
+                    self.controller.showResult("The Codex model catalog could not be refreshed.", isError: true)
                 case .failure(let error):
                     let detail = (error as? ProxyError)?.userMessage ?? "The model catalog could not be refreshed."
                     self.controller.showResult(detail, isError: true)

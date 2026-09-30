@@ -305,13 +305,20 @@ public actor ProxyClient {
 
     /// Explicit panel refresh uses the same non-disruptive sync as `ccx sync`.
     /// Catalog gathering can exceed ordinary management mutation timeouts.
-    public func syncCodexCatalog() async throws {
-        _ = try await authenticatedSend(
+    public func syncCodexCatalog() async throws -> CodexCatalogSyncOutcome {
+        let data = try await authenticatedSend(
             method: "POST",
             path: "api/sync",
             body: nil as EmptyBody?,
             timeout: 90
         )
+        let response: CodexCatalogSyncResponse
+        do {
+            response = try JSONDecoder().decode(CodexCatalogSyncResponse.self, from: data)
+        } catch {
+            throw ProxyError.decoding
+        }
+        return response.outcome
     }
 
     /// Public post-startup readiness. This request intentionally carries no management

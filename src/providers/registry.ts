@@ -399,6 +399,7 @@ const OPENCODE_GO_RESPONSES_WIRE_MODELS = [
 // grok-4.5 reasoning is always-on with low/medium/high control (mirrors the verified xAI
 // ladder on the `xai` entry); GPT-5.6 Luna serves the OpenAI API GPT-5.6 ladder.
 const OPENCODE_GO_GROK45_REASONING_EFFORTS = ["low", "medium", "high"];
+const OPENCODE_GO_GROK46_47_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"];
 const DEEPSEEK_THINKING_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"];
 const OPENCODE_GO_DEEPSEEK_THINKING_MODELS = [...DEEPSEEK_THINKING_MODELS, "deepseek-v4.1-flash"];
 const OPENCODE_FREE_DEEPSEEK_MODELS = ["deepseek-v4-flash-free"];
@@ -1165,7 +1166,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     id: "opencode-go", label: "OpenCode Go", adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1",
     authKind: "key", featured: true, dashboardUrl: "https://opencode.ai/auth", defaultModel: "kimi-k2.7-code",
-    jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo…",
+    jawcodeBundle: "opencode-go", note: "GLM, DeepSeek, Kimi, Qwen, MiMo… Muse Spark 1.2 and 1.3 Contributor may use your prompts and completions to train future Meta models. Details: https://dev.meta.ai/docs/pricing-rate-limits#contributor-tier",
     models: [...OPENCODE_GO_MODELS],
     // Live /v1/models is the authoritative lineup; the static list above is the last-good
     // fallback seed. The registry-only filter quarantines any id outside the trusted set, and
@@ -1203,6 +1204,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "qwen3.8-flash": 1_000_000,
       "gpt-5.6-luna": 1_050_000,
       "gpt-6-luna": 1_050_000,
+      "grok-4.6": 500_000,
+      "grok-4.7": 500_000,
     },
     // qwen3.8-max (text/image/video) and gpt-5.6-luna (text/image/pdf) are multimodal upstream;
     // the jawcode type can only represent text+image, so video/pdf stay source facts.
@@ -1221,6 +1224,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "kimi-k2.7-code": [],
       "kimi-k2.7-code-highspeed": [],
       "grok-4.5": OPENCODE_GO_GROK45_REASONING_EFFORTS,
+      "grok-4.6": OPENCODE_GO_GROK46_47_REASONING_EFFORTS,
+      "grok-4.7": OPENCODE_GO_GROK46_47_REASONING_EFFORTS,
       "gpt-5.6-luna": OPENAI_API_GPT56_REASONING_EFFORTS,
       // OpenCode lists none/low/medium/high/xhigh/max; `none` is outside Codex's
       // selectable effort ladder, while max is a real upstream option.

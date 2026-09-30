@@ -123,6 +123,53 @@ enum ModelDecodingSuite {
             )
         }
 
+        t.test("catalog sync: classifies applied and intentional skip results") {
+            let applied = try decode(
+                CodexCatalogSyncResponse.self,
+                #"{"status":"applied","ok":true,"catalogWritten":true}"#
+            )
+            t.equal(applied.outcome, .applied(warning: nil))
+            let degraded = try decode(
+                CodexCatalogSyncResponse.self,
+                #"{"status":"applied","ok":true,"warning":"Catalog data may be incomplete."}"#
+            )
+            t.equal(degraded.outcome, .applied(warning: "Catalog data may be incomplete."))
+
+            let disabled = try decode(
+                CodexCatalogSyncResponse.self,
+                #"{"status":"skipped","ok":true,"skippedReason":"desired_disabled"}"#
+            )
+            t.equal(disabled.outcome, .skipped(.desiredDisabled))
+
+            let external = try decode(
+                CodexCatalogSyncResponse.self,
+                #"{"status":"skipped","ok":true,"skippedReason":"external_provider"}"#
+            )
+            t.equal(external.outcome, .skipped(.externalProvider))
+        }
+
+        t.test("catalog sync: rejects failures and unknown or incomplete statuses") {
+            let refused = try decode(
+                CodexCatalogSyncResponse.self,
+                #"{"status":"refused","ok":false}"#
+            )
+            t.equal(refused.outcome, .failed, "refused response must not report success")
+            let failedApplied = try decode(
+                CodexCatalogSyncResponse.self,
+                #"{"status":"applied","ok":false}"#
+            )
+            t.equal(failedApplied.outcome, .failed, "ok:false must not report success")
+            t.expect(
+                rejects(CodexCatalogSyncResponse.self, #"{"status":"future","ok":true}"#),
+                "unknown statuses must fail closed"
+            )
+            let missingReason = try decode(
+                CodexCatalogSyncResponse.self,
+                #"{"status":"skipped","ok":true}"#
+            )
+            t.equal(missingReason.outcome, .failed, "skip without a recognized reason must fail closed")
+        }
+
         t.test("route status: requires the exact v1 contract and consistent ownership") {
             let native = try decode(
                 CodexRouteStatus.self,

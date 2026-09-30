@@ -129,6 +129,9 @@ describe("OpenCode Go trusted catalog", () => {
     expect([...(entry.models ?? [])].sort()).toEqual([...TRUSTED_MODEL_IDS].sort());
     expect(new Set(entry.models).size).toBe(41);
     expect(entry.models).toContain(entry.defaultModel);
+    expect(entry.note).toContain("Muse Spark 1.2 and 1.3 Contributor");
+    expect(entry.note).toContain("prompts and completions to train future Meta models");
+    expect(entry.note).toContain("https://dev.meta.ai/docs/pricing-rate-limits#contributor-tier");
     for (const id of NEW_DOCUMENTED_MODEL_IDS) expect(entry.models).toContain(id);
     for (const id of UNDOCUMENTED_LIVE_IDS) expect(entry.models).not.toContain(id);
   });
@@ -270,6 +273,12 @@ describe("OpenCode Go live-catalog quarantine", () => {
       inputModalities: ["text", "image"],
       reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     });
+    for (const id of ["grok-4.6", "grok-4.7"]) {
+      expect(models.find(row => row.id === id)).toMatchObject({
+        contextWindow: 500_000,
+        reasoningEfforts: ["low", "medium", "high", "xhigh"],
+      });
+    }
     expect(models.find(row => row.id === "deepseek-v4.1-flash")).toMatchObject({
       contextWindow: 1_000_000,
       inputModalities: ["text", "image"],

@@ -203,13 +203,13 @@ export default function ProviderWorkspaceShell({
       if (initial && !readSessionListCache(usageCacheKey)) setUsageLoading(true);
       void fetch(`${apiBase}/api/usage?range=30d`)
         .then(r => readJsonIfOk<{
-          providers?: Array<{ provider: string; requests: number; totalTokens?: number }>;
-          models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }>;
+          providers?: Array<{ provider: string; requests: number; measuredRequests?: number; totalTokens?: number }>;
+          models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; measuredRequests?: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }>;
         }>(r))
         .then((data) => {
           if (cancelled || !data) return;
           const byProvider: Record<string, ProviderUsageTotals> = {};
-          for (const p of data.providers ?? []) byProvider[p.provider] = { requests: p.requests, totalTokens: p.totalTokens };
+          for (const p of data.providers ?? []) byProvider[p.provider] = { requests: p.requests, measuredRequests: p.measuredRequests, totalTokens: p.totalTokens };
           setUsageTotals(byProvider);
           // Group model rows by provider
           const byProviderModels: Record<string, ProviderModelUsageRow[]> = {};
@@ -220,6 +220,7 @@ export default function ProviderWorkspaceShell({
               model: m.model,
               ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
               requests: m.requests,
+              measuredRequests: m.measuredRequests,
               totalTokens: m.totalTokens,
               inputTokens: m.inputTokens,
               outputTokens: m.outputTokens,

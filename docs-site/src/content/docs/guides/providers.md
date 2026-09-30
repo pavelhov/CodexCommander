@@ -304,6 +304,10 @@ a request is active, the menu identifies its model as **In flight**; its final t
 only after the request completes and the proxy records it. Unmeasured token totals are shown as
 unknown rather than zero, and estimated cost appears only when pricing is available for that model.
 
+The Muse Spark 1.2 and 1.3 **Contributor** models may use submitted prompts and completions to train
+future Meta models. See [Meta's Contributor tier terms](https://dev.meta.ai/docs/pricing-rate-limits#contributor-tier)
+before sending data through either model.
+
 The provider keeps a reviewed fallback catalog of OpenCode Go models, including
 `deepseek-v4.1-flash`, `gpt-6-luna`, and `grok-4.7`. With a Go key, live `/v1/models`
 discovery determines which of those models the account can use. That endpoint returns model ids

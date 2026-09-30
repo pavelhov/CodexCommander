@@ -107,6 +107,52 @@ describe("OpenCode Go live quota and local observations", () => {
     expect(report.source).toBe("opencode-go:local-observations");
   });
 
+  test.each([401, 403])("falls back to local observations after HTTP %i without authoritative percentages", async status => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(null, { status });
+    }) as typeof fetch;
+    const report = (await fetchProviderQuotaReports(config(), true)).reports[0]!;
+    expect(fetchCalls).toBe(1);
+    expect(report.source).toBe("opencode-go:local-observations");
+    expect(report.quota.fiveHourPercent).toBeUndefined();
+    expect(report.quota.weeklyPercent).toBeUndefined();
+    expect(report.quota.monthlyPercent).toBeUndefined();
+    expect(report.quota.referenceWindows?.every(row => row.publishedLimitUsd === undefined)).toBe(true);
+  });
+
+  test.each([
+    ["invalid JSON", () => new Response("{invalid", { headers: { "Content-Type": "application/json" } })],
+    ["array root", () => Response.json([])],
+    ["missing usage", () => Response.json({})],
+    ["incomplete windows", () => Response.json({ usage: { rolling: { status: "ok", percent: 10 } } })],
+  ] as const)("falls back to local observations for a 2xx response containing %s", async (_label, response) => {
+    globalThis.fetch = (async () => response()) as typeof fetch;
+    const report = (await fetchProviderQuotaReports(config(), true)).reports[0]!;
+    expect(report.source).toBe("opencode-go:local-observations");
+    expect(report.quota.fiveHourPercent).toBeUndefined();
+    expect(report.quota.weeklyPercent).toBeUndefined();
+    expect(report.quota.monthlyPercent).toBeUndefined();
+    expect(report.quota.referenceWindows?.map(row => row.id)).toEqual(["five_hour", "weekly", "monthly"]);
+  });
+
+  test("OAuth mode never sends a configured key to the Go usage endpoint", async () => {
+    const oauthConfig = config();
+    oauthConfig.providers["opencode-go"]!.authMode = "oauth";
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 503 });
+    }) as typeof fetch;
+
+    const report = (await fetchProviderQuotaReports(oauthConfig, true)).reports[0]!;
+
+    expect(fetchCalls).toBe(0);
+    expect(report.source).toBe("opencode-go:local-observations");
+    expect(report.quota.fiveHourPercent).toBeUndefined();
+  });
+
   test("labels locally measured spend as partial when any model is unpriced", async () => {
     const now = Date.now();
     appendUsageEntry({
@@ -214,8 +260,20 @@ describe("OpenCode Go live quota and local observations", () => {
     expect(report.quota.observedLimitEvent).toBeUndefined();
   });
 
-  test("never attaches Go subscription facts to a lookalike destination", async () => {
-    const response = await fetchProviderQuotaReports(config("https://evil.example/zen/go/v1"), true);
+  test.each([
+    "https://evil.example/zen/go/v1",
+    "https://opencode.ai.evil.example/zen/go/v1",
+    "https://opencode.ai/custom/v1",
+    "https://opencode.ai:444/zen/go/v1",
+    "http://opencode.ai/zen/go/v1",
+  ])("never sends a configured key or attaches Go subscription facts for custom destination %s", async baseUrl => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(null, { status: 503 });
+    }) as typeof fetch;
+    const response = await fetchProviderQuotaReports(config(baseUrl), true);
+    expect(fetchCalls).toBe(0);
     expect(response.reports.some(row => row.provider === "opencode-go")).toBe(false);
   });
 });
