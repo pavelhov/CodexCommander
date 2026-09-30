@@ -115,11 +115,19 @@ test("OpenCode Go labels partially measured provider and model token totals", as
   }
 });
 
-test("provider workspace carries measured request counts from the usage API into its view models", async () => {
-  const shell = await Bun.file(new URL("../src/components/provider-workspace/ProviderWorkspaceShell.tsx", import.meta.url)).text();
-  expect(shell).toContain("measuredRequests?: number");
-  expect(shell).toContain("measuredRequests: p.measuredRequests");
-  expect(shell).toContain("measuredRequests: m.measuredRequests");
+test("OpenCode Go does not infer measurement coverage from legacy cached token totals", async () => {
+  const rows: ProviderModelUsageRow[] = [
+    { model: "legacy", requests: 1, totalTokens: 99, inputTokens: 60, outputTokens: 39, shareRatio: 1 },
+  ];
+  const { root, container } = await mountOverview(item, rows, { requests: 1, measuredRequests: 0, totalTokens: 99 });
+  try {
+    const row = container.querySelector("tbody tr");
+    expect(row?.textContent).toContain("unreported");
+    expect(row?.textContent).not.toContain("99");
+  } finally {
+    await act(async () => { root.unmount(); });
+    container.remove();
+  }
 });
 
 test("model summary stays scoped to OpenCode Go", async () => {
