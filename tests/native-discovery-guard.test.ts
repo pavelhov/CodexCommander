@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +36,12 @@ const previousConfig = process.env.CODEXCOMMANDER_HOME;
 const previousCli = process.env.CODEX_CLI_PATH;
 const previousPath = process.env.PATH;
 const dirs: string[] = [];
+
+beforeEach(() => {
+  // Each fixture selects its own runtime. An inherited app path must not
+  // invalidate retained-snapshot identities created with fixture runtimes.
+  delete process.env.CODEX_CLI_PATH;
+});
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.CODEX_HOME;

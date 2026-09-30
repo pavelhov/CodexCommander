@@ -83,7 +83,8 @@ export interface ProviderQuotaReferenceWindow {
   id: "five_hour" | "weekly" | "monthly";
   label: string;
   windowSeconds: number;
-  publishedLimitUsd: number;
+  /** Legacy reference cap; new OpenCode Go observations omit it because limits vary by model and plan. */
+  publishedLimitUsd?: number;
   observedSpendUsd?: number;
   observedTokens: number;
   observedRequests: number;
@@ -107,7 +108,7 @@ export interface ProviderQuota {
   monthlyPercent?: number;
   monthlyResetAt?: number;
   customWindows?: ProviderQuotaWindow[];
-  /** Published caps plus local observations; never presented as provider remaining balance. */
+  /** Local observations when live quota is unavailable; never a provider remaining balance. */
   referenceWindows?: ProviderQuotaReferenceWindow[];
   /** Authoritative only because the upstream emitted this concrete limit event. */
   observedLimitEvent?: ProviderQuotaLimitEvent;
@@ -1425,11 +1426,11 @@ async function fetchAntigravityQuota(provider: string, config: CodexCommanderPro
 }
 
 const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
-const OPENCODE_GO_CAPS_VERIFIED_AT = "2026-08-05";
-const OPENCODE_GO_REFERENCE_WINDOWS = [
-  { id: "five_hour", label: "5-hour", windowSeconds: 5 * 60 * 60, publishedLimitUsd: 12 },
-  { id: "weekly", label: "7-day", windowSeconds: 7 * 24 * 60 * 60, publishedLimitUsd: 30 },
-  { id: "monthly", label: "30-day", windowSeconds: 30 * 24 * 60 * 60, publishedLimitUsd: 60 },
+const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
+const OPENCODE_GO_OBSERVATION_WINDOWS = [
+  { id: "five_hour", label: "5-hour", windowSeconds: 5 * 60 * 60 },
+  { id: "weekly", label: "7-day", windowSeconds: 7 * 24 * 60 * 60 },
+  { id: "monthly", label: "30-day", windowSeconds: 30 * 24 * 60 * 60 },
 ] as const;
 const OPENCODE_GO_MAX_OBSERVATION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -1484,7 +1485,7 @@ function localReferenceWindows(
   now: number,
   history: { truncated: boolean; oldestRetainedAt?: number },
 ): ProviderQuotaReferenceWindow[] {
-  return OPENCODE_GO_REFERENCE_WINDOWS.map(reference => {
+  return OPENCODE_GO_OBSERVATION_WINDOWS.map(reference => {
     const windowStart = now - reference.windowSeconds * 1000;
     const rows = observations.filter(row => row.timestamp >= windowStart);
     const priced = rows.filter(row => row.cost !== undefined);
@@ -1603,10 +1604,59 @@ async function fetchOpenCodeGoReferenceQuota(provider: string): Promise<Provider
   return {
     provider,
     label: providerLabel(provider),
-    source: `opencode-go:published-caps-${OPENCODE_GO_CAPS_VERIFIED_AT}+local-estimate`,
+    source: "opencode-go:local-observations",
     quota,
     updatedAt: now,
   };
+}
+
+/** OpenCode's Go endpoint reports account-wide used percentages and exact reset times. */
+async function fetchOpenCodeGoLiveQuota(
+  provider: string,
+  providerConfig: CodexCommanderProviderConfig,
+): Promise<ProviderQuotaReport | null> {
+  const key = typeof providerConfig.apiKey === "string"
+    ? resolveEnvValue(providerConfig.apiKey)?.trim()
+    : undefined;
+  if (!key || (providerConfig.authMode ?? "key") !== "key") return null;
+  const response = await fetch(OPENCODE_GO_USAGE_URL, {
+    headers: { Authorization: `Bearer ${key}`, Accept: "application/json" },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {});
+    return null;
+  }
+  const body: unknown = await response.json();
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const usage = (body as Record<string, unknown>).usage;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return null;
+  const windows = usage as Record<string, unknown>;
+  const readWindow = (name: string): { percent: number; resetAt?: number } | null => {
+    const raw = windows[name];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const window = raw as Record<string, unknown>;
+    if (window.status !== "ok" && window.status !== "rate-limited") return null;
+    const percent = window.percent;
+    if (typeof percent !== "number" || !Number.isFinite(percent) || percent < 0 || percent > 100) return null;
+    const resetAt = typeof window.resetsAt === "string" ? Date.parse(window.resetsAt) : NaN;
+    return { percent, ...(Number.isFinite(resetAt) ? { resetAt } : {}) };
+  };
+  const rolling = readWindow("rolling");
+  const weekly = readWindow("weekly");
+  const monthly = readWindow("monthly");
+  if (!rolling || !weekly || !monthly) return null;
+  const updatedAt = Date.now();
+  return report(provider, "opencode-go:usage-api", {
+    fiveHourPercent: rolling.percent,
+    ...(rolling.resetAt !== undefined ? { fiveHourResetAt: rolling.resetAt } : {}),
+    weeklyPercent: weekly.percent,
+    ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    monthlyPercent: monthly.percent,
+    ...(monthly.resetAt !== undefined ? { monthlyResetAt: monthly.resetAt } : {}),
+    updatedAt,
+  });
 }
 
 /**
@@ -1639,7 +1689,8 @@ async function maybeFetchProviderQuota(
   if (provider.disabled === true || !supportsProviderQuotaReporting(name, provider)) return null;
   try {
     if (name === "opencode-go" && isCanonicalOpenCodeGoBaseUrl(provider.baseUrl)) {
-      return fetchOpenCodeGoReferenceQuota(name);
+      const live = await fetchOpenCodeGoLiveQuota(name, provider).catch(() => null);
+      return live ?? fetchOpenCodeGoReferenceQuota(name);
     }
     if (isBuiltInChatGptForwardProvider(name, provider)) {
       return fetchChatGptForwardQuota(config, name, provider, forceRefresh, prefetchedCodexSnapshot);

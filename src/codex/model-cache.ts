@@ -17,6 +17,7 @@ export const DEFAULT_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 interface CacheEntry {
   models: CatalogModel[];
   fetchedAt: number;
+  freshnessInvalidated?: boolean;
   sizeBytes: number;
 }
 
@@ -147,7 +148,7 @@ export function isModelsFetchCoolingDown(provider: string, cooldownMs = MODELS_F
 export function getFreshCached(provider: string, ttlMs: number, now = Date.now()): CatalogModel[] | null {
   const entry = cache.get(provider);
   if (!entry) return null;
-  return now - entry.fetchedAt < ttlMs ? entry.models : null;
+  return !entry.freshnessInvalidated && now - entry.fetchedAt < ttlMs ? entry.models : null;
 }
 
 /** Last-known-good models regardless of age — the fallback when a live fetch fails. */
@@ -168,7 +169,21 @@ export function setCached(provider: string, models: CatalogModel[], now = Date.n
   enforceAppOwnedMemoryBudget();
 }
 
-/** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */
+/** Force the next discovery attempt while preserving last-known-good rows and provenance.
+ * Keep fetchedAt intact: memory-budget eviction orders retained data by its actual age.
+ * Explicit refresh also bypasses a prior failure cooldown, including providers without rows. */
+export function invalidateModelCacheFreshness(provider?: string): void {
+  if (provider !== undefined) {
+    const entry = cache.get(provider);
+    if (entry) entry.freshnessInvalidated = true;
+    failureAt.delete(provider);
+  } else {
+    for (const entry of cache.values()) entry.freshnessInvalidated = true;
+    failureAt.clear();
+  }
+}
+
+/** Drop one provider's cache (or all), including discovery provenance and failure cooldown. */
 export function clearModelCache(provider?: string): void {
   if (provider) {
     deleteCachedProvider(provider);

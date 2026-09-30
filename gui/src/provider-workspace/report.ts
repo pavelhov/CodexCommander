@@ -78,7 +78,6 @@ export interface ProviderQuotaReferenceWindowView {
   id: "five_hour" | "weekly" | "monthly";
   label: string;
   windowSeconds: number;
-  publishedLimitUsd: number;
   observedSpendUsd?: number;
   observedTokens: number;
   observedRequests: number;
@@ -115,9 +114,8 @@ function validTimestamp(value: unknown): number | undefined {
 }
 
 /**
- * Parse published-cap/local-observation reports without adapting them to percentage bars.
- * These values are deliberately a distinct shape: turning spend/caps into "remaining" would
- * imply a provider balance that OpenCode Go does not expose.
+ * Parse local-observation reports without adapting them to percentage bars.
+ * Legacy published caps are ignored: they are no longer reliable denominators for Go usage.
  */
 export function referenceQuotaFromReport(report: ProviderQuotaReportView): ProviderReferenceQuotaView | null {
   const quota = report.quota;
@@ -134,14 +132,13 @@ export function referenceQuotaFromReport(report: ProviderQuotaReportView): Provi
           ? row.coverage as ProviderQuotaReferenceCoverage
           : null;
         const windowSeconds = finiteNonNegative(row.windowSeconds);
-        const publishedLimitUsd = finiteNonNegative(row.publishedLimitUsd);
         const observedTokens = finiteNonNegative(row.observedTokens);
         const observedRequests = finiteNonNegative(row.observedRequests);
         const pricedRequests = finiteNonNegative(row.pricedRequests);
         const unpricedRequests = finiteNonNegative(row.unpricedRequests);
         const unmeasuredRequests = finiteNonNegative(row.unmeasuredRequests);
         if (!id || !coverage || typeof row.label !== "string" || !row.label.trim()
-          || !windowSeconds || !publishedLimitUsd
+          || !windowSeconds
           || observedTokens === undefined || observedRequests === undefined
           || pricedRequests === undefined || unpricedRequests === undefined || unmeasuredRequests === undefined) return [];
         const observedSpendUsd = finiteNonNegative(row.observedSpendUsd);
@@ -161,7 +158,6 @@ export function referenceQuotaFromReport(report: ProviderQuotaReportView): Provi
           id,
           label: row.label,
           windowSeconds,
-          publishedLimitUsd,
           ...(observedSpendUsd !== undefined ? { observedSpendUsd } : {}),
           observedTokens,
           observedRequests,
@@ -261,6 +257,10 @@ export function capacityAggregationFromReport(report: ProviderQuotaReportView): 
 /** Human label for a quota report source id (e.g. "cursor:period-usage"). */
 export function formatQuotaSourceLabel(source: string | undefined): string {
   if (!source?.trim()) return "";
+  // Cached pre-migration reports must not revive the withdrawn cap claim.
+  if (source === "opencode-go:published-caps-2026-08-05+local-estimate") {
+    source = "opencode-go:local-observations";
+  }
   const [provider, path] = source.split(":", 2);
   if (!path) return source;
   return `${provider} · ${path.replace(/-/g, " ").replace(/\+/g, " + ")}`;

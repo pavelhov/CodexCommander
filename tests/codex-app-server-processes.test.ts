@@ -525,7 +525,8 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
 
     expect(cliActivationSource).toContain('runtimeRequest<unknown>("/api/sync"');
     expect(cliActivationSource).toContain('live.source !== "runtime" || live.pid === null');
-    expect(cliActivationSource).toContain("return withNativeDiscoveryLogsSuppressed(() => deps.syncModelsToCodex())");
+    expect(cliActivationSource).toContain("return withNativeDiscoveryLogsSuppressed(() => deps.syncModelsToCodex(");
+    expect(cliActivationSource).toContain("{ forceNativeLive: true, forceRoutedLive: true }");
     expect(cliActivationSource).toContain("captureCodexCatalogDesiredSnapshot().revision === expected.desired.revision");
     expect(cliActivationSource).toContain("artifactFenceStillMatches: catalogApplyFenceArtifactsStillMatch");
     expect(cliActivationSource).toContain("applyCodexCatalogWorkers(");

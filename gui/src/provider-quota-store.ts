@@ -286,7 +286,6 @@ function projectQuota(value: unknown): Record<string, unknown> | null {
       const coverage = window.coverage;
       const label = typeof window.label === "string" && window.label.trim() ? window.label : null;
       const windowSeconds = finiteNumber(window.windowSeconds);
-      const publishedLimitUsd = finiteNumber(window.publishedLimitUsd);
       const observedTokens = finiteNumber(window.observedTokens);
       const observedRequests = finiteNumber(window.observedRequests);
       const pricedRequests = finiteNumber(window.pricedRequests);
@@ -294,7 +293,7 @@ function projectQuota(value: unknown): Record<string, unknown> | null {
       const unmeasuredRequests = finiteNumber(window.unmeasuredRequests);
       const validId = id === "five_hour" || id === "weekly" || id === "monthly";
       const validCoverage = coverage === "none" || coverage === "complete" || coverage === "partial" || coverage === "unpriced";
-      if (!validId || !validCoverage || !label || windowSeconds === undefined || publishedLimitUsd === undefined
+      if (!validId || !validCoverage || !label || windowSeconds === undefined
         || observedTokens === undefined || observedRequests === undefined
         || pricedRequests === undefined || unpricedRequests === undefined || unmeasuredRequests === undefined) return [];
       const observedSpendUsd = finiteNumber(window.observedSpendUsd);
@@ -302,7 +301,6 @@ function projectQuota(value: unknown): Record<string, unknown> | null {
         id,
         label,
         windowSeconds,
-        publishedLimitUsd,
         observedTokens,
         observedRequests,
         pricedRequests,

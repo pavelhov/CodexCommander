@@ -142,6 +142,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/providers", "ccx provider"],
       ["/api/provider-", "ccx provider/models"],
       ["/api/selected-models", "ccx models"],
+      // Models compares discovered rows with this read-only published snapshot;
+      // `ccx system sync` refreshes it, but the CLI has no exact snapshot view.
+      ["/api/catalog", "(none — published Codex catalog snapshot)"],
       ["/api/custom-models", "ccx models"],
       ["/api/model", "ccx models"],
       ["/api/combos", "ccx combo"],

@@ -1347,9 +1347,9 @@ export const MODEL_ADAPTER_OVERRIDE_ALLOWED: ReadonlySet<string> = new Set([
  * Anthropic for these models.
  *
  * OpenCode Go models that serve only Anthropic Messages (`/zen/go/v1/messages`) on the
- * canonical Zen Go gateway. Official endpoint table: https://opencode.ai/docs/go/#endpoints
- * (MiniMax M3/M2.7/M2.5 and every Qwen row are Anthropic Messages; GLM/Kimi/DeepSeek/MiMo/Hy3
- * are Chat Completions; GPT-5.6 Luna and Grok 4.5 are Responses). Kept next to the pin map so
+ * canonical Zen Go gateway. Official endpoint table: https://opencode.ai/v2/docs/console/go#endpoints
+ * (MiniMax M3/M2.7/M2.5 and every Qwen row are Anthropic Messages; new Go roster additions
+ * through 2026-09-29 use Chat Completions or Responses and add no Anthropic pins). Kept next to the pin map so
  * the config validator and the wire resolver share one source; the provider registry derives
  * its per-model transport table from the same list.
  */

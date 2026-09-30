@@ -193,20 +193,23 @@ export default function ProviderWorkspaceShell({
 
   useEffect(() => {
     let cancelled = false;
-    const timeout = window.setTimeout(() => {
+    let inFlight = false;
+    const refreshUsage = (initial: boolean) => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       // Keep last-good paint when sessionStorage already seeded — don't flash loading skeletons.
       // Read inside the effect (keyed by usageCacheKey) so the seed check stays correct without
       // closing over an unstable cachedUsage render value.
-      if (!readSessionListCache(usageCacheKey)) setUsageLoading(true);
+      if (initial && !readSessionListCache(usageCacheKey)) setUsageLoading(true);
       void fetch(`${apiBase}/api/usage?range=30d`)
         .then(r => readJsonIfOk<{
-          providers?: Array<{ provider: string; requests: number; totalTokens?: number }>;
-          models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }>;
+          providers?: Array<{ provider: string; requests: number; measuredRequests?: number; totalTokens?: number }>;
+          models?: Array<{ provider: string; model: string; resolvedModel?: string; requests: number; measuredRequests?: number; totalTokens: number; inputTokens: number; outputTokens: number; shareRatio: number; estimatedCostUsd?: number }>;
         }>(r))
         .then((data) => {
           if (cancelled || !data) return;
           const byProvider: Record<string, ProviderUsageTotals> = {};
-          for (const p of data.providers ?? []) byProvider[p.provider] = { requests: p.requests, totalTokens: p.totalTokens };
+          for (const p of data.providers ?? []) byProvider[p.provider] = { requests: p.requests, measuredRequests: p.measuredRequests, totalTokens: p.totalTokens };
           setUsageTotals(byProvider);
           // Group model rows by provider
           const byProviderModels: Record<string, ProviderModelUsageRow[]> = {};
@@ -217,6 +220,7 @@ export default function ProviderWorkspaceShell({
               model: m.model,
               ...(m.resolvedModel ? { resolvedModel: m.resolvedModel } : {}),
               requests: m.requests,
+              measuredRequests: m.measuredRequests,
               totalTokens: m.totalTokens,
               inputTokens: m.inputTokens,
               outputTokens: m.outputTokens,
@@ -228,11 +232,19 @@ export default function ProviderWorkspaceShell({
           writeSessionListCache(usageCacheKey, { totals: byProvider, models: byProviderModels });
         })
         .catch(() => {})
-        .finally(() => { if (!cancelled) setUsageLoading(false); });
-    }, 0);
+        .finally(() => {
+          inFlight = false;
+          if (!cancelled && initial) setUsageLoading(false);
+        });
+    };
+    const timeout = window.setTimeout(() => refreshUsage(true), 0);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") refreshUsage(false);
+    }, 60_000);
     return () => {
       cancelled = true;
       window.clearTimeout(timeout);
+      window.clearInterval(interval);
     };
   }, [apiBase, usageCacheKey]);
 

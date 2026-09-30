@@ -9,26 +9,33 @@ public final class PopoverViewController: NSViewController {
 
     public required init?(coder: NSCoder) { nil }
 
-    // Fixed chrome
-    private let header = StatusHeaderView()
-    private let dashboardButton = NSButton()
-    private let logsButton = NSButton()
-    private let refreshButton = NSButton()
+    // Fixed identity, controls, and one-line status
+    private let header = BrandHeaderView()
+    private let statusFooter = StatusFooterView()
+    private let moreActionsMenu = NSMenu(title: "More actions")
+    private let refreshMenuItem = NSMenuItem()
+    private let logsMenuItem = NSMenuItem()
+    private let updateSeparator = NSMenuItem.separator()
+    private let updateMenuItem = NSMenuItem()
     private let lifecycleButton = NSButton()
     private let restartButton = NSButton()
     private let restoreNativeButton = NSButton()
     private let routeThroughProxyButton = NSButton()
     private let stopAndQuitButton = NSButton()
-    private let updateButton = NSButton()
     private let updateMessage = NSTextField(wrappingLabelWithString: "")
     private var updateBlocksLifecycle = false
     private let startupMode = StartupModeView()
     private let headerSeparator = makeSeparator()
     private let operationStatus = OperationStatusView()
-    private let footerActions = NSStackView()
+    private let controlActions = NSStackView()
+    private let primaryActions = NSStackView()
+    private let separateRouteActions = NSStackView()
+    private let primaryActionSpacer = NSView()
+    private let separateRouteSpacer = NSView()
+    private var routeActionsAreSeparate = false
     private let column = NSStackView()
 
-    // Scrolling body
+    // One scrolling monitoring area below the controls
     private let scrollView = NSScrollView()
     private let body = NSStackView()
     private let catalogUpdate = CatalogUpdateView()
@@ -44,7 +51,7 @@ public final class PopoverViewController: NSViewController {
     private let startupOptionsButton = NSButton()
     private let commandField = NSTextField(labelWithString: "")
     private let activitySeparator = makeSeparator()
-    private let quotaSeparator = makeSeparator()
+    private let footerSeparator = makeSeparator()
 
     public var onDashboard: (() -> Void)?
     public var onLogs: (() -> Void)?
@@ -74,6 +81,9 @@ public final class PopoverViewController: NSViewController {
 
     public override func loadView() {
         configureControls()
+        header.onDashboard = { [weak self] in self?.onDashboard?() }
+        header.onMoreActions = { [weak self] sender in self?.showMoreActions(from: sender) }
+        header.onUpdate = { [weak self] in self?.onCheckForUpdates?() }
         startupOptionsButton.isHidden = true
 
         quotas.onManage = { [weak self] provider in
@@ -99,11 +109,13 @@ public final class PopoverViewController: NSViewController {
         body.alignment = .leading
         body.spacing = Theme.sectionGap
         body.setViews(
-            [catalogUpdate, activity, activitySeparator, quotas, guidanceLabel, startupOptionsButton, commandField],
+            [catalogUpdate, guidanceLabel, startupOptionsButton, commandField,
+             quotas, activitySeparator, activity],
             in: .top
         )
         body.translatesAutoresizingMaskIntoConstraints = false
-        for item in [catalogUpdate, activity, activitySeparator, quotas, guidanceLabel, startupOptionsButton, commandField] {
+        for item in [catalogUpdate, guidanceLabel, startupOptionsButton, commandField,
+                     quotas, activitySeparator, activity] {
             item.translatesAutoresizingMaskIntoConstraints = false
             item.widthAnchor.constraint(equalTo: body.widthAnchor).isActive = true
         }
@@ -116,26 +128,20 @@ public final class PopoverViewController: NSViewController {
         scrollView.borderType = .noBorder
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        let navigationActions = NSStackView(views: [
-            dashboardButton, logsButton, refreshButton, NSView()
-        ])
-        navigationActions.orientation = .horizontal
-        navigationActions.spacing = Theme.rowGap
-        navigationActions.alignment = .centerY
+        primaryActions.setViews(
+            [lifecycleButton, restartButton, restoreNativeButton,
+             routeThroughProxyButton, primaryActionSpacer],
+            in: .leading
+        )
+        primaryActions.orientation = .horizontal
+        primaryActions.spacing = Theme.rowGap
+        primaryActions.alignment = .centerY
 
-        let lifecycleActions = NSStackView(views: [
-            lifecycleButton, restartButton, NSView()
-        ])
-        lifecycleActions.orientation = .horizontal
-        lifecycleActions.spacing = Theme.rowGap
-        lifecycleActions.alignment = .centerY
-
-        let codexRouteActions = NSStackView(views: [
-            restoreNativeButton, routeThroughProxyButton, NSView()
-        ])
-        codexRouteActions.orientation = .horizontal
-        codexRouteActions.spacing = Theme.rowGap
-        codexRouteActions.alignment = .centerY
+        separateRouteActions.setViews([separateRouteSpacer], in: .leading)
+        separateRouteActions.orientation = .horizontal
+        separateRouteActions.spacing = Theme.rowGap
+        separateRouteActions.alignment = .centerY
+        separateRouteActions.isHidden = true
 
         let exitActions = NSStackView(views: [
             stopAndQuitButton, NSView()
@@ -144,16 +150,17 @@ public final class PopoverViewController: NSViewController {
         exitActions.spacing = Theme.rowGap
         exitActions.alignment = .centerY
 
-        footerActions.setViews(
-            [navigationActions, lifecycleActions, codexRouteActions, updateButton, updateMessage, exitActions],
+        controlActions.setViews(
+            [primaryActions, separateRouteActions, updateMessage, exitActions],
             in: .top
         )
-        footerActions.orientation = .vertical
-        footerActions.spacing = 5
-        footerActions.alignment = .leading
+        controlActions.orientation = .vertical
+        controlActions.spacing = 5
+        controlActions.alignment = .leading
 
         column.setViews(
-            [header, headerSeparator, operationStatus, scrollView, quotaSeparator, startupMode, footerActions],
+            [header, headerSeparator, operationStatus, controlActions,
+             startupMode, scrollView, footerSeparator, statusFooter],
             in: .top
         )
         column.orientation = .vertical
@@ -179,9 +186,10 @@ public final class PopoverViewController: NSViewController {
             header.widthAnchor.constraint(equalToConstant: contentWidth),
             headerSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
             operationStatus.widthAnchor.constraint(equalToConstant: contentWidth),
-            quotaSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
+            footerSeparator.widthAnchor.constraint(equalToConstant: contentWidth),
             startupMode.widthAnchor.constraint(equalToConstant: contentWidth),
-            footerActions.widthAnchor.constraint(equalToConstant: contentWidth),
+            statusFooter.widthAnchor.constraint(equalToConstant: contentWidth),
+            controlActions.widthAnchor.constraint(equalToConstant: contentWidth),
             scrollView.widthAnchor.constraint(equalToConstant: contentWidth),
             body.widthAnchor.constraint(equalToConstant: scrollingContentWidth),
         ])
@@ -191,25 +199,36 @@ public final class PopoverViewController: NSViewController {
         scrollHeight = heightConstraint
 
         view = root
+        applyCodexRouteVisibility()
         preferredContentSize = NSSize(width: Theme.width, height: Theme.preferredHeight)
     }
 
     private func configureControls() {
-        styleFooterButton(updateButton, title: "Check for Updates…", symbol: "arrow.down.circle")
-        updateButton.target = self
-        updateButton.action = #selector(updateTapped)
-        updateButton.keyEquivalent = "u"
-        updateButton.keyEquivalentModifierMask = [.command, .shift]
+        moreActionsMenu.autoenablesItems = false
+        refreshMenuItem.title = "Refresh Models"
+        refreshMenuItem.action = #selector(refreshTapped)
+        refreshMenuItem.target = self
+        refreshMenuItem.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+        refreshMenuItem.toolTip = "Check for model changes; ChatGPT may need to restart to load them"
+        logsMenuItem.title = "Logs"
+        logsMenuItem.action = #selector(logsTapped)
+        logsMenuItem.target = self
+        logsMenuItem.image = NSImage(systemSymbolName: "list.bullet.rectangle", accessibilityDescription: nil)
+        updateMenuItem.title = "Check for Updates…"
+        updateMenuItem.action = #selector(updateTapped)
+        updateMenuItem.target = self
+        updateMenuItem.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+        moreActionsMenu.addItem(refreshMenuItem)
+        moreActionsMenu.addItem(logsMenuItem)
+        moreActionsMenu.addItem(updateSeparator)
+        moreActionsMenu.addItem(updateMenuItem)
         updateMessage.font = Theme.caption
         updateMessage.textColor = Theme.muted
         updateMessage.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2
         updateMessage.isHidden = true
-        styleFooterButton(dashboardButton, title: "Dashboard", symbol: "square.grid.2x2")
-        styleFooterButton(logsButton, title: "Logs", symbol: "list.bullet.rectangle")
-        styleFooterButton(refreshButton, title: "Refresh", symbol: "arrow.clockwise")
         styleFooterButton(startupOptionsButton, title: "Startup options…", symbol: "gearshape.2")
         styleFooterButton(lifecycleButton, title: "Start Proxy", symbol: "play.fill")
-        styleFooterButton(restartButton, title: "Restart Proxy…", symbol: "power")
+        styleFooterButton(restartButton, title: "Restart…", symbol: "power")
         styleFooterButton(
             restoreNativeButton,
             title: "Restore Native Codex",
@@ -227,9 +246,6 @@ public final class PopoverViewController: NSViewController {
         )
         stopAndQuitButton.contentTintColor = Theme.red
 
-        dashboardButton.action = #selector(dashboardTapped)
-        logsButton.action = #selector(logsTapped)
-        refreshButton.action = #selector(refreshTapped)
         startupOptionsButton.action = #selector(startupOptionsTapped)
         lifecycleButton.action = #selector(lifecycleTapped)
         restartButton.action = #selector(restartTapped)
@@ -240,9 +256,6 @@ public final class PopoverViewController: NSViewController {
         stopAndQuitButton.keyEquivalent = CompanionShortcut.keyEquivalent
         stopAndQuitButton.keyEquivalentModifierMask = CompanionShortcut.stopAndQuitModifiers
 
-        dashboardButton.setAccessibilityLabel("Open dashboard")
-        logsButton.setAccessibilityLabel("Open logs")
-        refreshButton.setAccessibilityLabel("Refresh")
         startupOptionsButton.setAccessibilityLabel("Open startup options in the dashboard")
         lifecycleButton.setAccessibilityLabel("Start CodexCommander proxy")
         restartButton.setAccessibilityLabel("Restart CodexCommander proxy")
@@ -250,6 +263,8 @@ public final class PopoverViewController: NSViewController {
         routeThroughProxyButton.setAccessibilityLabel(
             "Route Codex through the CodexCommander proxy"
         )
+        restoreNativeButton.toolTip = "Restore Native Codex"
+        routeThroughProxyButton.toolTip = "Route Codex Through Proxy"
         stopAndQuitButton.setAccessibilityLabel(
             "Stop the CodexCommander proxy and quit the menu bar app"
         )
@@ -276,7 +291,7 @@ public final class PopoverViewController: NSViewController {
 
     public func apply(_ snapshot: ProxySnapshot) {
         self.snapshot = snapshot
-        header.apply(snapshot)
+        statusFooter.apply(snapshot)
 
         activity.isHidden = false
         activity.apply(snapshot)
@@ -284,7 +299,7 @@ public final class PopoverViewController: NSViewController {
         quotas.apply(snapshot)
 
         activitySeparator.isHidden = activity.isHidden
-        quotaSeparator.isHidden = false
+        footerSeparator.isHidden = false
 
         applyGuidance(snapshot)
         applyActions(snapshot)
@@ -390,8 +405,11 @@ public final class PopoverViewController: NSViewController {
 
     public func setLifecycleControlsEnabled(_ enabled: Bool) {
         lifecycleControlsAllowed = enabled
+        refreshMenuItem.isEnabled = enabled && snapshot?.state.isRunning == true
+        updateMoreActionsAvailability()
         lifecycleButton.isEnabled = enabled && snapshot.map { lifecycleActionable($0.state) } == true
         restartButton.isEnabled = enabled && snapshot?.state.isRunning == true
+        restartButton.isHidden = snapshot?.state.isRunning != true
         applyCodexRouteAvailability()
         stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
             state: snapshot?.state,
@@ -407,20 +425,25 @@ public final class PopoverViewController: NSViewController {
 
     public func applyUpdatePresentation(title: String, enabled: Bool, blocked: Bool, message: String) {
         _ = view
-        updateButton.title = title
-        updateButton.setAccessibilityLabel(title)
-        updateButton.isEnabled = enabled
-        updateMessage.stringValue = message
-        updateMessage.isHidden = message.isEmpty
+        let needsAttention = title == "Update Available…" || title == "Finish Update…"
+        header.setUpdateAction(title: needsAttention ? title : nil, enabled: enabled, message: message)
+        updateSeparator.isHidden = needsAttention
+        updateMenuItem.isHidden = needsAttention
+        updateMenuItem.title = "Check for Updates…"
+        updateMenuItem.isEnabled = enabled && !needsAttention
+        updateMenuItem.toolTip = !enabled && !message.isEmpty ? message : nil
+        updateMoreActionsAvailability()
+        updateMessage.stringValue = blocked ? message : ""
+        updateMessage.isHidden = !blocked || message.isEmpty
         updateBlocksLifecycle = blocked
         if let snapshot { applyGuidance(snapshot) }
         setLifecycleControlsEnabled(lifecycleControlsAllowed)
         refreshSize()
     }
 
-    package var updateActionTitleForTesting: String { updateButton.title }
-    package var updateActionEnabledForTesting: Bool { updateButton.isEnabled }
-    package func clickUpdateForTesting() { updateButton.performClick(nil) }
+    package var headerUpdateTitleForTesting: String? { header.updateActionTitleForTesting }
+    package var headerUpdateEnabledForTesting: Bool { header.updateActionEnabledForTesting }
+    package func clickHeaderUpdateForTesting() { header.clickUpdateForTesting() }
 
     private func applyUpdateLifecycleGuard() {
         guard updateBlocksLifecycle else { return }
@@ -475,9 +498,10 @@ public final class PopoverViewController: NSViewController {
     private func applyActions(_ snapshot: ProxySnapshot) {
         let definitelyStopped = snapshot.state == .unreachable
         let stopIntent = lifecycleStops(snapshot.state)
-        dashboardButton.isEnabled = !definitelyStopped
-        logsButton.isEnabled = !definitelyStopped
-        refreshButton.isEnabled = true
+        header.setDashboardEnabled(!definitelyStopped)
+        logsMenuItem.isEnabled = !definitelyStopped
+        refreshMenuItem.isEnabled = lifecycleControlsAllowed && snapshot.state.isRunning
+        updateMoreActionsAvailability()
         lifecycleButton.title = stopIntent ? "Stop Proxy…" : "Start Proxy"
         lifecycleButton.image = NSImage(
             systemSymbolName: stopIntent ? "stop.fill" : "play.fill",
@@ -489,8 +513,10 @@ public final class PopoverViewController: NSViewController {
         lifecycleButton.isEnabled = lifecycleControlsAllowed && lifecycleActionable(snapshot.state)
         lifecycleButton.alphaValue = lifecycleButton.isEnabled ? 1 : 0.45
         restartButton.isEnabled = lifecycleControlsAllowed && snapshot.state.isRunning
+        restartButton.isHidden = !snapshot.state.isRunning
         restartButton.alphaValue = restartButton.isEnabled ? 1 : 0.45
         applyCodexRouteAvailability()
+        applyCodexRouteVisibility()
         restoreNativeButton.alphaValue = restoreNativeButton.isEnabled ? 1 : 0.45
         routeThroughProxyButton.alphaValue = routeThroughProxyButton.isEnabled ? 1 : 0.45
         stopAndQuitButton.isEnabled = LifecycleActionAvailability.canStopAndQuit(
@@ -504,13 +530,12 @@ public final class PopoverViewController: NSViewController {
     private func resize() {
         view.layoutSubtreeIfNeeded()
         let bodyHeight = ceil(body.fittingSize.height)
-        let fixedViewsHeight = ceil(header.fittingSize.height)
-            + ceil(headerSeparator.fittingSize.height)
-            + (operationStatus.isHidden ? 0 : ceil(operationStatus.fittingSize.height))
-            + ceil(quotaSeparator.fittingSize.height)
-            + ceil(startupMode.fittingSize.height)
-            + ceil(footerActions.fittingSize.height)
-        let stackGaps = column.spacing * CGFloat(max(0, column.views.count - 1))
+        let fixedViews: [NSView] = [header, headerSeparator, operationStatus,
+                                    controlActions, startupMode, footerSeparator, statusFooter]
+        let fixedViewsHeight = fixedViews.filter { !$0.isHidden }
+            .reduce(CGFloat.zero) { $0 + ceil($1.fittingSize.height) }
+        let visibleColumnCount = column.views.filter { !$0.isHidden }.count
+        let stackGaps = column.spacing * CGFloat(max(0, visibleColumnCount - 1))
         let chrome = fixedViewsHeight
             + stackGaps
             + column.edgeInsets.top
@@ -558,11 +583,60 @@ public final class PopoverViewController: NSViewController {
         routeThroughProxyButton.isEnabled = !usesProxy
     }
 
+    /// Keep the one available route switch beside proxy controls. When route
+    /// truth is uncertain, put both recovery choices on their own row.
+    private func applyCodexRouteVisibility() {
+        let route: CodexRoutingKind?
+        switch snapshot?.codexRoute {
+        case .confirmed(let status):
+            route = status.routingKind
+        case .unobserved:
+            if case .running(let health) = snapshot?.state, !health.diagnosticStale {
+                route = CodexRoutingKind(rawValue: health.routingKind)
+            } else {
+                route = nil
+            }
+        case .confirmationUnavailable, nil:
+            route = nil
+        }
+        restoreNativeButton.isHidden = route == .native
+        routeThroughProxyButton.isHidden = route == .codexCommanderLocal
+        let needsSeparateRow = !restoreNativeButton.isHidden && !routeThroughProxyButton.isHidden
+        if needsSeparateRow != routeActionsAreSeparate {
+            let source = needsSeparateRow ? primaryActions : separateRouteActions
+            let destination = needsSeparateRow ? separateRouteActions : primaryActions
+            source.removeView(restoreNativeButton)
+            source.removeView(routeThroughProxyButton)
+            destination.insertView(restoreNativeButton, at: needsSeparateRow ? 0 : 2, in: .leading)
+            destination.insertView(routeThroughProxyButton, at: needsSeparateRow ? 1 : 3, in: .leading)
+            routeActionsAreSeparate = needsSeparateRow
+        }
+        restoreNativeButton.title = needsSeparateRow ? "Restore Native Codex" : "Use Native"
+        routeThroughProxyButton.title = needsSeparateRow ? "Route Codex Through Proxy" : "Use Commander"
+        separateRouteActions.isHidden = !needsSeparateRow
+    }
+
     // MARK: - Actions
 
-    @objc private func dashboardTapped() { onDashboard?() }
     @objc private func logsTapped() { onLogs?() }
     @objc private func refreshTapped() { onRefresh?() }
+    private func showMoreActions(from sender: NSButton) {
+        moreActionsMenu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: sender.bounds.minY),
+            in: sender
+        )
+    }
+    private func updateMoreActionsAvailability() {
+        let enabled = refreshMenuItem.isEnabled || logsMenuItem.isEnabled
+            || (!updateMenuItem.isHidden && updateMenuItem.isEnabled)
+        header.setMoreActionsEnabled(
+            enabled,
+            label: updateMenuItem.isHidden
+                ? "More actions: Refresh Models and Logs"
+                : "More actions: Refresh Models, Logs, and updates"
+        )
+    }
     @objc private func startupOptionsTapped() { onOpenStartupOptions?() }
     @objc private func lifecycleTapped() {
         guard let state = snapshot?.state else { return }
@@ -614,7 +688,34 @@ public final class PopoverViewController: NSViewController {
         return scrollView.bounds.width
     }
     package var hasVerticalScroller: Bool { scrollView.hasVerticalScroller }
-    package var headerView: StatusHeaderView { header }
+    package var monitoringPrecedesPanelFooter: Bool {
+        guard let controlsIndex = column.arrangedSubviews.firstIndex(of: controlActions),
+              let statusIndex = column.arrangedSubviews.firstIndex(of: statusFooter),
+              let separatorIndex = column.arrangedSubviews.firstIndex(of: footerSeparator),
+              let scrollIndex = column.arrangedSubviews.firstIndex(of: scrollView),
+              let activityIndex = body.arrangedSubviews.firstIndex(of: activity),
+              let quotaIndex = body.arrangedSubviews.firstIndex(of: quotas) else { return false }
+        return statusIndex == column.arrangedSubviews.count - 1
+            && controlsIndex < scrollIndex && scrollIndex < separatorIndex && separatorIndex < statusIndex
+            && quotaIndex < activityIndex
+    }
+    package var visibleRouteActionTitles: [String] {
+        [restoreNativeButton, routeThroughProxyButton]
+            .filter { !$0.isHidden }
+            .map(\.title)
+    }
+    package var primaryActionTitles: [String] {
+        primaryActions.arrangedSubviews.compactMap { $0 as? NSButton }
+            .filter { !$0.isHidden }
+            .map(\.title)
+    }
+    package var separateRouteRowVisible: Bool { !separateRouteActions.isHidden }
+    package var visibleUpperControlRowCount: Int {
+        controlActions.arrangedSubviews.filter { !$0.isHidden }.count
+            + (startupMode.isHidden ? 0 : 1)
+    }
+    package var headerView: BrandHeaderView { header }
+    package var statusFooterView: StatusFooterView { statusFooter }
     package var operationStatusView: OperationStatusView { operationStatus }
     package var operationStatusTitle: String { operationStatus.titleText }
     package var operationStatusDetail: String? { operationStatus.detailText }
@@ -650,9 +751,9 @@ public final class PopoverViewController: NSViewController {
     }
     package var footerTitles: [String] {
         [
-            dashboardButton.title,
-            logsButton.title,
-            refreshButton.title,
+            "Dashboard",
+            logsMenuItem.title,
+            refreshMenuItem.title,
             lifecycleButton.title,
             restartButton.title,
             restoreNativeButton.title,
@@ -661,29 +762,58 @@ public final class PopoverViewController: NSViewController {
         ]
     }
     package var footerEnabledStates: [Bool] {
-        footerButtons.map(\.isEnabled)
+        [header.dashboardEnabledForTesting, logsMenuItem.isEnabled, refreshMenuItem.isEnabled,
+         lifecycleButton.isEnabled, restartButton.isEnabled, restoreNativeButton.isEnabled,
+         routeThroughProxyButton.isEnabled, stopAndQuitButton.isEnabled]
     }
     package var footerAccessibilityLabels: [String?] {
-        footerButtons.map { $0.accessibilityLabel() }
+        [header.dashboardAccessibilityLabelForTesting, "Open logs", "Refresh models and proxy status",
+         lifecycleButton.accessibilityLabel(), restartButton.accessibilityLabel(),
+         restoreNativeButton.accessibilityLabel(), routeThroughProxyButton.accessibilityLabel(),
+         stopAndQuitButton.accessibilityLabel()]
     }
     package var footerKeyEquivalents: [(String, NSEvent.ModifierFlags)] {
-        footerButtons.map { ($0.keyEquivalent, $0.keyEquivalentModifierMask) }
+        [
+            ("", []),
+            ("", []),
+            ("", []),
+            (lifecycleButton.keyEquivalent, lifecycleButton.keyEquivalentModifierMask),
+            (restartButton.keyEquivalent, restartButton.keyEquivalentModifierMask),
+            (restoreNativeButton.keyEquivalent, restoreNativeButton.keyEquivalentModifierMask),
+            (routeThroughProxyButton.keyEquivalent, routeThroughProxyButton.keyEquivalentModifierMask),
+            (stopAndQuitButton.keyEquivalent, stopAndQuitButton.keyEquivalentModifierMask),
+        ]
     }
     package func activateFooterForTesting(_ index: Int) {
-        guard footerButtons.indices.contains(index) else { return }
-        footerButtons[index].performClick(nil)
+        switch index {
+        case 0: header.clickDashboardForTesting()
+        case 1: activateMoreActionForTesting(1)
+        case 2: activateMoreActionForTesting(0)
+        case 3: lifecycleButton.performClick(nil)
+        case 4: restartButton.performClick(nil)
+        case 5: restoreNativeButton.performClick(nil)
+        case 6: routeThroughProxyButton.performClick(nil)
+        case 7: stopAndQuitButton.performClick(nil)
+        default: break
+        }
     }
-    private var footerButtons: [NSButton] {
-        [
-            dashboardButton,
-            logsButton,
-            refreshButton,
-            lifecycleButton,
-            restartButton,
-            restoreNativeButton,
-            routeThroughProxyButton,
-            stopAndQuitButton,
-        ]
+    package var visibleHeaderActionTitles: [String] {
+        ["Dashboard", "More actions"]
+    }
+    package var moreActionsAccessibilityLabel: String? {
+        header.moreActionsAccessibilityLabelForTesting
+    }
+    package var moreActionTitles: [String] {
+        let titles = [refreshMenuItem.title, logsMenuItem.title]
+        return updateMenuItem.isHidden ? titles : titles + [updateMenuItem.title]
+    }
+    package var moreActionEnabledStates: [Bool] {
+        let states = [refreshMenuItem.isEnabled, logsMenuItem.isEnabled]
+        return updateMenuItem.isHidden ? states : states + [updateMenuItem.isEnabled]
+    }
+    package func activateMoreActionForTesting(_ index: Int) {
+        guard moreActionEnabledStates.indices.contains(index), moreActionEnabledStates[index] else { return }
+        moreActionsMenu.performActionForItem(at: index == 2 ? 3 : index)
     }
 }
 

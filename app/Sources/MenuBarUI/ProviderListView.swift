@@ -12,6 +12,10 @@ public final class ProviderQuotaAccordionView: NSView {
     private var expandedProviders: Set<String> = []
     private var didSeedExpansion = false
     private var currentRows: [ProviderQuotaRow] = []
+    private var currentOpenCodeGoModels: [ProviderModelUsage] = []
+    private var currentOpenCodeGoUsageLoaded = false
+    private var currentOpenCodeGoUsageUpdatedAt: Date?
+    private var currentOpenCodeGoActiveModels: Set<String> = []
 
     public var onManage: ((String) -> Void)?
     public var onViewAll: (() -> Void)?
@@ -68,6 +72,14 @@ public final class ProviderQuotaAccordionView: NSView {
     public required init?(coder: NSCoder) { nil }
 
     public func apply(_ snapshot: ProxySnapshot) {
+        currentOpenCodeGoModels = snapshot.openCodeGoModelUsage
+        currentOpenCodeGoUsageLoaded = snapshot.openCodeGoUsageLoaded
+        currentOpenCodeGoUsageUpdatedAt = snapshot.openCodeGoUsageUpdatedAt
+        currentOpenCodeGoActiveModels = Set(snapshot.activity?.activities.compactMap { activity in
+            guard activity.provider?.lowercased() == "opencode-go",
+                  let model = activity.model, !model.isEmpty else { return nil }
+            return model
+        } ?? [])
         for view in rows.arrangedSubviews {
             rows.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -111,6 +123,10 @@ public final class ProviderQuotaAccordionView: NSView {
             let row = ProviderQuotaRowView(
                 row: quotaRow,
                 expanded: expanded,
+                modelUsage: quotaRow.provider.lowercased() == "opencode-go" ? currentOpenCodeGoModels : [],
+                modelUsageLoaded: currentOpenCodeGoUsageLoaded,
+                modelUsageUpdatedAt: currentOpenCodeGoUsageUpdatedAt,
+                activeModels: currentOpenCodeGoActiveModels,
                 onToggle: { [weak self] in self?.toggle(quotaRow.provider) },
                 onManage: { [weak self] in self?.onManage?(quotaRow.provider) }
             )
@@ -169,6 +185,10 @@ public final class ProviderQuotaAccordionView: NSView {
             let row = ProviderQuotaRowView(
                 row: quotaRow,
                 expanded: expanded,
+                modelUsage: quotaRow.provider.lowercased() == "opencode-go" ? currentOpenCodeGoModels : [],
+                modelUsageLoaded: currentOpenCodeGoUsageLoaded,
+                modelUsageUpdatedAt: currentOpenCodeGoUsageUpdatedAt,
+                activeModels: currentOpenCodeGoActiveModels,
                 onToggle: { [weak self] in self?.toggle(quotaRow.provider) },
                 onManage: { [weak self] in self?.onManage?(quotaRow.provider) }
             )
@@ -196,6 +216,12 @@ public final class ProviderQuotaAccordionView: NSView {
             .first(where: { $0.providerID == provider })?
             .accessibilityLabel()
     }
+    package func modelUsageTextForTesting(_ provider: String) -> [String] {
+        rows.arrangedSubviews
+            .compactMap { $0 as? ProviderQuotaRowView }
+            .first(where: { $0.providerID == provider })?
+            .modelUsageText ?? []
+    }
     package func toggleForTesting(_ provider: String) { toggle(provider) }
     package func triggerViewAllForTesting() { onViewAll?() }
     package func triggerManageForTesting(_ provider: String) { onManage?(provider) }
@@ -209,11 +235,16 @@ public final class ProviderQuotaAccordionView: NSView {
 }
 
 final class ProviderQuotaRowView: NSView {
+    private(set) var modelUsageText: [String] = []
     let providerID: String
 
     init(
         row: ProviderQuotaRow,
         expanded: Bool,
+        modelUsage: [ProviderModelUsage],
+        modelUsageLoaded: Bool,
+        modelUsageUpdatedAt: Date?,
+        activeModels: Set<String>,
         onToggle: @escaping () -> Void,
         onManage: @escaping () -> Void
     ) {
@@ -245,7 +276,20 @@ final class ProviderQuotaRowView: NSView {
         chevron.widthAnchor.constraint(equalToConstant: 12).isActive = true
         chevron.heightAnchor.constraint(equalToConstant: 12).isActive = true
 
-        let summary = makeLabel(collapsedSummary(row), font: Theme.micro, color: Theme.faint)
+        let compactSummary: String
+        if row.provider.lowercased() == "opencode-go", !activeModels.isEmpty {
+            let activeSummary = activeModels.count == 1
+                ? "Using \(activeModels.sorted()[0])"
+                : "\(activeModels.count) models in flight"
+            if let quota = row.report?.normalized(), quota.hasPercent {
+                compactSummary = "\(activeSummary) · \(quota.windowLabel) \(Format.percent(quota.percent))"
+            } else {
+                compactSummary = activeSummary
+            }
+        } else {
+            compactSummary = collapsedSummary(row)
+        }
+        let summary = makeLabel(compactSummary, font: Theme.micro, color: Theme.faint)
 
         let manage = ActionButton(title: row.isUnavailable ? "SETTINGS" : "PROVIDER", handler: onManage)
         manage.bezelStyle = .texturedRounded
@@ -319,6 +363,49 @@ final class ProviderQuotaRowView: NSView {
                     }
                     for reference in references {
                         arranged.append(ReferenceQuotaWindowRowView(window: reference))
+                    }
+                }
+            }
+            if row.provider.lowercased() == "opencode-go" {
+                let freshness = modelUsageUpdatedAt.map { " · updated \(Format.age($0))" } ?? ""
+                let heading = makeLabel("Model usage · last 30 days\(freshness)", font: Theme.captionMedium, color: Theme.muted)
+                arranged.append(heading)
+                let active = activeModels.sorted()
+                for model in active {
+                    let text = "In flight · \(model)"
+                    modelUsageText.append(text)
+                    arranged.append(makeLabel(text, font: Theme.captionMedium, color: Theme.green))
+                }
+                if !modelUsageLoaded {
+                    let text = "Completed usage unavailable"
+                    modelUsageText.append(text)
+                    arranged.append(makeLabel(text, font: Theme.caption, color: Theme.muted))
+                } else if modelUsage.isEmpty {
+                    let text = "No completed requests in the last 30 days"
+                    modelUsageText.append(text)
+                    arranged.append(makeLabel(text, font: Theme.caption, color: Theme.muted))
+                } else {
+                    let ordered = modelUsage.sorted { lhs, rhs in
+                        let leftActive = activeModels.contains(lhs.model)
+                        let rightActive = activeModels.contains(rhs.model)
+                        if leftActive != rightActive { return leftActive }
+                        if lhs.totalTokens != rhs.totalTokens { return lhs.totalTokens > rhs.totalTokens }
+                        return lhs.model < rhs.model
+                    }
+                    for usage in ordered {
+                        let tokens = usage.measuredRequests > 0
+                            ? Format.count(usage.totalTokens) + (usage.measuredRequests < usage.requests
+                                ? " measured tokens (partial)" : " tokens")
+                            : "tokens unknown"
+                        let requests = "\(usage.requests) completed request\(usage.requests == 1 ? "" : "s")"
+                        let cost = usage.estimatedCostUsd.map { " · estimated \(Format.usdEstimate($0))" } ?? ""
+                        let text = "\(usage.model) · \(requests) · \(tokens)\(cost)"
+                        modelUsageText.append(text)
+                        let label = makeLabel(text, font: Theme.caption, color: Theme.text)
+                        label.lineBreakMode = .byWordWrapping
+                        label.maximumNumberOfLines = 2
+                        label.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2 - 20
+                        arranged.append(label)
                     }
                 }
             }
@@ -434,8 +521,8 @@ final class ProviderQuotaRowView: NSView {
         }
         let references = report.referenceWindows
         if !references.isEmpty {
-            let caps = references.prefix(3).map(ReferenceQuotaPresentation.compactCapText)
-            return "Caps \(caps.joined(separator: " · "))"
+            let observed = references.first(where: { $0.observationQuality != .none }) ?? references[0]
+            return "Local usage · \(ReferenceQuotaPresentation.compactObservationText(observed))"
         }
         return "Unavailable"
     }

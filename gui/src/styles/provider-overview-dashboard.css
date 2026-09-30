@@ -254,7 +254,7 @@
   color: var(--amber);
 }
 
-.pws-dashboard-reference-caps {
+.pws-dashboard-reference-observations {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
@@ -263,21 +263,22 @@
   padding: 6px 0;
 }
 
-.pws-dashboard-reference-caps > span {
+.pws-dashboard-reference-observations > span {
   display: inline-flex;
   align-items: baseline;
+  flex-basis: 100%;
   gap: 3px;
   color: var(--muted);
   font-size: 11px;
-  white-space: nowrap;
+  flex-wrap: wrap;
 }
 
-.pws-dashboard-reference-caps > span strong {
+.pws-dashboard-reference-observations > span strong {
   color: var(--text);
   font-size: 12px;
 }
 
-.pws-dashboard-reference-caps > small {
+.pws-dashboard-reference-observations > small {
   flex-basis: 100%;
   color: var(--muted);
   font-size: 10.5px;

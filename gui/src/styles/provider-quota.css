@@ -172,11 +172,6 @@
   font-size: var(--text-control);
 }
 
-.pws-reference-cap {
-  color: var(--muted);
-  font-size: var(--text-caption);
-}
-
 .pws-reference-observed {
   margin-top: 9px;
   color: var(--text);

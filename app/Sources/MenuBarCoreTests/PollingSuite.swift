@@ -51,6 +51,55 @@ enum PollingSuite {
             t.equal(sync { await coordinator.current }.activityLoaded, false)
         }
 
+        t.test("polling: OpenCode Go loads completed model usage only while open") {
+            let activity = """
+            {"schemaVersion":1,"generatedAt":1,"proxyState":"active","activeTurnCount":1,
+             "displayedActivityCount":1,"unattributedActiveCount":0,"truncated":false,
+             "activities":[{"id":"go","role":"primary","provider":"opencode-go",
+                            "model":"glm-5.2","phase":"running","startedAt":1}]}
+            """
+            let providers = """
+            [{"name":"opencode-go","adapter":"openai-chat","authMode":"key",
+              "hasApiKey":true,"disabled":false,"quotaCapable":true}]
+            """
+            let quotas = """
+            {"generatedAt":1,"reports":[{"provider":"opencode-go","label":"OpenCode Go",
+              "source":"test","updatedAt":1,"quota":{"updatedAt":1}}],"availability":[]}
+            """
+            let usage = """
+            {"generatedAt":1,"models":[
+              {"provider":"opencode-go","model":"glm-5.2","requests":2,
+               "measuredRequests":2,"totalTokens":1200,"inputTokens":1000,
+               "outputTokens":200,"estimatedCostUsd":0.4},
+              {"provider":"kimi","model":"k3","requests":1,"measuredRequests":1,
+               "totalTokens":50,"inputTokens":40,"outputTokens":10}]}
+            """
+            StubProtocol.reset(
+                startupResponses(startupHealth(status: "protected", diagnosticStale: false))
+                    + healthResponses(activity)
+                    + healthResponses(providers)
+                    + healthResponses(quotas)
+                    + healthResponses(usage)
+            )
+            let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
+            let client = ProxyClient(
+                endpoint: endpoint,
+                session: ProxyClient.secureSessionForTesting(protocolClasses: [StubProtocol.self]),
+                credentials: StaticCredentialStore("admin-secret"),
+                attestationSecret: StubProtocol.attestationSecret
+            )
+            let coordinator = PollingCoordinator(client: client, endpoint: endpoint)
+            sync { await coordinator.setPopoverOpen(true) }
+            let snapshot = sync { await coordinator.current }
+            t.equal(snapshot.openCodeGoUsageLoaded, true)
+            t.equal(snapshot.openCodeGoModelUsage.count, 1)
+            t.equal(snapshot.openCodeGoModelUsage.first?.model, "glm-5.2")
+            let request = StubProtocol.recorded.first { $0.url?.path == "/api/usage" }
+            t.equal(request?.url?.query, "range=30d")
+            sync { await coordinator.setPopoverOpen(false) }
+            t.equal(sync { await coordinator.current }.openCodeGoUsageLoaded, true)
+        }
+
         t.test("polling: connection refusal is stopped; repeated failures back off") {
             let endpoint = ProxyEndpoint(host: "127.0.0.1", port: 10100, expectedPID: 42)!
             StubProtocol.reset([

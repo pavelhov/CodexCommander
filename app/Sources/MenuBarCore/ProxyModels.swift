@@ -148,6 +148,89 @@ public struct CodexRouteStatus: Decodable, Equatable, Sendable {
     }
 }
 
+/// Read-only activation observation from `GET /api/codex-catalog/status`.
+/// A restart prompt requires both a published catalog and confirmed stale workers;
+/// an unknown or pending status must not tell the user a restart will fix it.
+public enum CatalogReloadStatus: Equatable, Sendable {
+    case unknown
+    case current
+    case restartRequired(staleWorkerCount: Int)
+}
+
+/// Closed result contract from authenticated `POST /api/sync`.
+public enum CodexCatalogSyncStatus: String, Decodable, Equatable, Sendable {
+    case applied
+    case skipped
+    case refused
+}
+
+public enum CodexCatalogSyncSkipReason: String, Decodable, Equatable, Sendable {
+    case desiredDisabled = "desired_disabled"
+    case externalProvider = "external_provider"
+}
+
+public struct CodexCatalogSyncResponse: Decodable, Equatable, Sendable {
+    public let status: CodexCatalogSyncStatus
+    public let ok: Bool
+    public let skippedReason: CodexCatalogSyncSkipReason?
+    public let warning: String?
+
+    public var outcome: CodexCatalogSyncOutcome {
+        guard ok else { return .failed }
+        switch status {
+        case .applied:
+            return .applied(warning: warning)
+        case .skipped:
+            guard let skippedReason else { return .failed }
+            return .skipped(skippedReason)
+        case .refused:
+            return .failed
+        }
+    }
+}
+
+public enum CodexCatalogSyncOutcome: Equatable, Sendable {
+    case applied(warning: String?)
+    case skipped(CodexCatalogSyncSkipReason)
+    case failed
+}
+
+public struct CodexCatalogStatus: Decodable, Sendable {
+    public struct Activation: Decodable, Sendable {
+        public struct State: Decodable, Sendable {
+            public let status: String
+        }
+
+        public struct Workers: Decodable, Sendable {
+            public let status: String
+            public let staleCount: Int
+        }
+
+        public let schemaVersion: Int
+        public let catalog: State
+        public let routing: State
+        public let workers: Workers
+    }
+
+    public let activation: Activation
+
+    public var reloadStatus: CatalogReloadStatus {
+        guard activation.schemaVersion == 1,
+              activation.catalog.status == "current",
+              activation.routing.status == "current"
+        else { return .unknown }
+
+        switch activation.workers.status {
+        case "reload_required" where activation.workers.staleCount > 0:
+            return .restartRequired(staleWorkerCount: activation.workers.staleCount)
+        case "current", "not_running":
+            return .current
+        default:
+            return .unknown
+        }
+    }
+}
+
 /// `GET /api/startup-health`
 public struct StartupHealth: Decodable, Equatable, Sendable {
     public let status: String
@@ -265,13 +348,13 @@ public struct QuotaWindow: Decodable, Equatable, Sendable {
     public let resetAt: Double?
 }
 
-/// A published provider cap paired with observations from this local CodexCommander usage
-/// log. This is reference data, not a provider-reported balance or remaining percent.
+/// Observations from this local CodexCommander usage log. Older proxy versions may
+/// include a published cap, but it is not a provider-reported balance or current limit.
 public struct QuotaReferenceWindow: Decodable, Equatable, Sendable {
     public let id: String
     public let label: String
     public let windowSeconds: Double
-    public let publishedLimitUsd: Double
+    public let publishedLimitUsd: Double?
     public let observedSpendUsd: Double?
     public let observedTokens: Int64
     public let observedRequests: Int
@@ -379,6 +462,24 @@ public struct ProviderQuotaEnvelope: Decodable, Equatable, Sendable {
     public let generatedAt: Double
     public let reports: [QuotaReport]
     public let availability: [ProviderQuotaAvailability]
+}
+
+/// Completed local requests in the management usage log. These are observations,
+/// not an OpenCode Go account balance or a live token counter.
+public struct ProviderModelUsage: Decodable, Equatable, Sendable {
+    public let provider: String
+    public let model: String
+    public let requests: Int
+    public let measuredRequests: Int
+    public let totalTokens: Int64
+    public let inputTokens: Int64
+    public let outputTokens: Int64
+    public let estimatedCostUsd: Double?
+}
+
+public struct ProviderUsageEnvelope: Decodable, Equatable, Sendable {
+    public let generatedAt: Double
+    public let models: [ProviderModelUsage]
 }
 
 public enum AgentActivityRole: String, Decodable, Equatable, Sendable {

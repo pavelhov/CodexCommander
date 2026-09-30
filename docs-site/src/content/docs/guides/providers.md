@@ -290,19 +290,31 @@ Volcengine Agent Plan uses its native Responses endpoint through `openai-respons
 OpenCode authentication store or Keychain for this key.
 
 The public model catalog is not evidence that a key works, so a saved key is **unverified** until the
-first successful inference using that active key. The provider's published caps are reference caps —
-**$12 / 5 hours**, **$30 / 7 days**, and **$60 / 30 days**. The dashboard's matching 5-hour, 7-day,
-and 30-day observations are local usage estimates, not live remaining quota or billing. An
-authoritative limit event is shown only after the upstream reports a concrete limit event (and, when
-provided, its reset).
+first successful inference using that active key. With a configured Go key, CodexCommander reads
+OpenCode's Go usage endpoint and shows its account-wide rolling, weekly, and monthly **used
+percentages** and reset times in the dashboard and macOS menu. When the endpoint is unavailable,
+the quota view shows only traffic observed through this proxy in the corresponding time windows.
+Those local request, token, and estimated-cost totals are not the provider's current balance or
+per-model allowance. A concrete upstream limit event can also be shown with its reported reset.
 
-The provider pins 28 verified Zen Go model ids, including `deepseek-v4.1-flash`,
-`glm-5.3-flash`, and `qwen3.8-flash`, as
-its static catalog. Live `/v1/models` discovery is authoritative on the canonical host; ids
-outside the trusted set are quarantined rather than routed. Transports follow the official
-endpoint table: Qwen and MiniMax models go over Anthropic Messages, `gpt-5.6-luna` and `grok-4.5`
-over OpenAI Responses, and the
-remaining models over OpenAI Chat Completions. These trust facts attach only to the canonical
+OpenCode Go's **Overview** in the dashboard also shows completed requests and tokens for each model
+over the last 30 days; the **Usage** tab retains the full model breakdown. Expanding OpenCode Go in
+the macOS menu shows the same per-model completed usage beside the provider quota. While
+a request is active, the menu identifies its model as **In flight**; its final token count appears
+only after the request completes and the proxy records it. Unmeasured token totals are shown as
+unknown rather than zero, and estimated cost appears only when pricing is available for that model.
+
+The Muse Spark 1.2 and 1.3 **Contributor** models may use submitted prompts and completions to train
+future Meta models. See [Meta's Contributor tier terms](https://dev.meta.ai/docs/pricing-rate-limits#contributor-tier)
+before sending data through either model.
+
+The provider keeps a reviewed fallback catalog of OpenCode Go models, including
+`deepseek-v4.1-flash`, `gpt-6-luna`, and `grok-4.7`. With a Go key, live `/v1/models`
+discovery determines which of those models the account can use. That endpoint returns model ids
+without transport metadata, so a new id appears in Commander after its protocol is verified and
+added to the trusted catalog; unverified ids are held back. The [OpenCode Go endpoint
+table](https://opencode.ai/v2/docs/console/go#endpoints) identifies models using Anthropic Messages,
+OpenAI Responses, or Chat Completions. These transport facts attach only to the canonical
 `https://opencode.ai/zen/go/v1` destination; a same-named custom provider keeps its own behavior.
 
 OpenCode Go requires a session identifier for each conversation. CodexCommander derives an opaque
