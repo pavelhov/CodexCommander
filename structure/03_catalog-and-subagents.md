@@ -326,7 +326,7 @@ the requested model id only; effort remains owned by the caps described under
 On eligible V2 turns, a surviving row's guidance is included in the live developer message only
 after the current catalog's surface, visibility, route, and encrypted-task compatibility filters
 have run. Every accepted annotation that survives those filters is included in the built-in V2
-message, which has no aggregate character budget. It is never copied into the managed delegation
+message and custom `{{roster}}` expansion, with no aggregate character budget. It is never copied into the managed delegation
 skill or global `AGENTS.md` block, and it does not change native Codex behavior on V1.
 
 `injectionModel` and `injectionEffort` are shared selections with two independent consumers.
@@ -341,6 +341,13 @@ without changing the file.
 Native `[agents]` defaults remain limited to `injectionModel` and `injectionEffort`; roster entries and
 per-row guidance are not persisted there. The managed skill and bounded global `AGENTS.md` policy are
 also deliberately roster-free and consult the live collaboration contract instead.
+
+The managed skill and global policy explicitly request an exact model override for a fresh,
+compatible task-fit roster choice. This supplies the instruction source required by native Codex's
+model-override contract. Both built-in and custom V2 model guidance explain that omission inherits
+the native default or parent; merely advertising a roster does not select a worker. Custom prompts
+retain that instruction when an eligible model is designated. Native validation and the stale/unknown
+catalog gates remain authoritative, and full-history forks still reject overrides.
 
 Claude Code `ccx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions

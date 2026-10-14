@@ -41,6 +41,7 @@ function agentsBlock(mode: CodexDelegationMode): string {
     `Mode: ${mode}`,
     "Before spawning subagents, use $codexcommander-delegation and reread its SKILL.md if its details were compacted.",
     "Consult the active collaboration roster and spawn-tool contract. Never hardcode model IDs. Match each spawn to task complexity, uncertainty, risk, and how tightly you can check the result; reassess on failed evidence, scope expansion, uncertainty, or capability mismatch—not on timeout alone. Give workers self-contained tasks.",
+    "This policy explicitly requests model overrides: when a fresh Commander roster or preferred model provides a task-fit choice compatible with the active tool and task delivery, pass its exact ID in spawn_agent.model. Omitting model inherits the configured default or parent; it does not select from the roster. Respect stale or unknown catalogs and unsupported overrides; on V2 use fork_turns none when setting an override.",
     "A wait_agent timeout is neutral; never interrupt solely because one or more waits timed out. Use the managed skill for reconciliation and interruption gates.",
     delegationSentence,
     "This guidance is advisory and does not create collaboration tools. User and repository instructions outrank it for whether to spawn.",

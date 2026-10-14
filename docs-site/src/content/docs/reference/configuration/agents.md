@@ -15,7 +15,7 @@ routes, and limits delegated work.
 | `subagentModels?` | `{ model: string, guidance?: string }[] \| string[]` (on disk) | `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.4-mini` | Up to five ordered bare native, account-qualified `<selector>/<native-openai-model>`, or routed `provider/model` entries advertised first in the sub-agent picker. Reads accept either legacy strings or objects, but CodexCommander canonicalizes in memory and writes objects. The first object write is a migration point: older binaries that only understand `string[]` fail when they read the config. Optional `guidance` is sanitized operator text, capped at 160 Unicode code points; empty guidance is omitted. The dashboard preserves configured exact selectors and reports which saved entries are advertised or excluded. Use `ccx agent subagents set` or edit the configuration for choices that are not in the current catalog. An explicit empty list is preserved. |
 | `injectionModel?` | `string` | — | Preferred native or routed sub-agent model used in proxy-authored V2 delegation guidance. |
 | `injectionEffort?` | `string` | — | Preferred effort (`low` through `ultra`), meaningful only with `injectionModel`. |
-| `injectionPrompt?` | `string` | — | Replaces the built-in V2 guidance body. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`. A configured `injectionModel` is sufficient to render the custom prompt. |
+| `injectionPrompt?` | `string` | — | Customizes the V2 guidance body. When a preferred model or eligible roster resolves, the explicit spawn-model instructions are retained. Supports `{{model}}`, `{{effort}}`, `{{roster}}`, and `{{fallback}}`; the roster includes eligible per-model guidance. An eligible `injectionModel` is sufficient to render the custom prompt. |
 | `multiAgentGuidanceEnabled` | `boolean` | `true` | Controls only CodexCommander-authored V1/V2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
@@ -58,21 +58,27 @@ Surface detection uses tool shape. A namespaced `spawn_agent` with `send_input`,
 
 V1 guidance is proactive text only at `max` or `ultra`. V2 receives a proxy-authored developer
 message only when a preferred model, eligible roster, or fallback chain exists. Built-in V2 guidance
-includes every accepted eligible roster annotation; it has no aggregate character budget. Guidance
+and the custom `{{roster}}` placeholder include every accepted eligible roster annotation; there is no
+aggregate character budget. Guidance
 is deduplicated across replay prefixes and inserted before a trailing `compaction_trigger`.
 
 `injectionModel` and `injectionEffort` are advisory unless native-default sync is enabled. The built-in
 V2 text treats the featured roster as suggestions, allows a known exact compatible catalog ID to be
 passed to native `spawn_agent`, and asks Codex to pass supported model/effort overrides with
-`fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string and
-replaces that built-in exact-ID wording.
+`fork_turns: "none"`. A custom `injectionPrompt` substitutes missing values with an empty string.
+When a preferred model or eligible roster exists, both paths explain that the selected exact ID must
+be passed in `spawn_agent.model`: omission inherits the native default or parent rather than selecting
+from the roster. The managed delegation skill and `AGENTS.md` policy explicitly request these task-fit
+overrides, satisfying native Codex's requirement for a user, policy, or skill instruction. Catalog
+freshness, compatibility, and native validation still apply.
 
 Each roster row may also carry optional `guidance`. This is untrusted operator text for the live
 delegation message, not a policy control: it cannot set effort, quotas, roles, or fallback behavior.
 After normalization (NFC plus trim), empty text is omitted; nonempty text is limited to 160 Unicode
 code points and sanitized before persistence. Row guidance is considered only on eligible V2 turns,
 after live picker, route, surface, and encrypted-task compatibility filters. Every accepted annotation
-that survives those filters is included in built-in V2 guidance. It is not injected on V1 and is
+that survives those filters is included in built-in V2 guidance and custom `{{roster}}` expansion.
+It is not injected on V1 and is
 never copied into the managed skill or global `AGENTS.md` block.
 
 ## Managed advisory setup
