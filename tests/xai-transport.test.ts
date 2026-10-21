@@ -356,6 +356,18 @@ describe("xAI outbound compatibility headers", () => {
   test("OAuth snapshot is exact", async () => {
     const { effective, seen } = await capture("oauth");
     expect(effective.baseUrl).toBe(XAI_GROK_CLI_BASE_URL);
+    // Keep this literal independent of the imported profile constant so a stale
+    // fingerprint cannot make both implementation and expectation pass together.
+    const outgoingVersion = seen[0]!.get("x-grok-client-version")!;
+    expect(XAI_GROK_CLIENT_VERSION).toBe("1.0.52");
+    expect(outgoingVersion).toBe("1.0.52");
+    expect(seen[0]!.get("user-agent")).toBe(`codexcommander-grok/${outgoingVersion}`);
+    const actual = outgoingVersion.split(".").map(Number);
+    const minimum = [1, 0, 13];
+    const atLeastMinimum = actual[0]! > minimum[0]!
+      || (actual[0] === minimum[0] && actual[1]! > minimum[1]!)
+      || (actual[0] === minimum[0] && actual[1] === minimum[1] && actual[2]! >= minimum[2]!);
+    expect(atLeastMinimum).toBe(true);
     expect(lower(seen[0])).toEqual({
       authorization: "Bearer oauth-token",
       "content-type": "application/json",
