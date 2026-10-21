@@ -4,9 +4,11 @@ import { resolveGithubCopilotTransport } from "./github-copilot-transport";
 
 export const XAI_GROK_CLI_BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 
+const XAI_GROK_COMPATIBILITY_VERSION = "1.0.52";
+
 export const XAI_GROK_COMPATIBILITY = {
-  version: "0.2.93",
-  userAgent: "codexcommander-grok/0.2.93",
+  version: XAI_GROK_COMPATIBILITY_VERSION,
+  userAgent: `codexcommander-grok/${XAI_GROK_COMPATIBILITY_VERSION}`,
   headers: {
     clientIdentifier: "x-grok-client-identifier",
     clientVersion: "x-grok-client-version",
