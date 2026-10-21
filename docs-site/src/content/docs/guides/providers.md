@@ -115,6 +115,12 @@ ccx logout <provider>
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental unofficial PKCE login **or** a pasted dashboard user API key. Same unofficial AgentService/Run protocol either way; not a public OpenAI chat-completions API. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
+If an xAI OAuth request to the Grok subscription proxy reports that the Grok CLI client version is
+outdated, update CodexCommander to a release with the current xAI compatibility profile. Routed
+requests advertise CodexCommander's pinned client version; they do not launch the local `grok`
+executable, so updating that executable alone does not change the request fingerprint. xAI API-key
+requests use `api.x.ai` and do not use the Grok subscription-proxy fingerprint.
+
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 CodexCommander forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
 it never generates one. Kimi documents a stable session/task key as required to improve Code Plan
