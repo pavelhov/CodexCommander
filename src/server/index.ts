@@ -159,6 +159,7 @@ export {
 } from "./auth-cors";
 import { disableResponsesRequestTimeout, handleResponses, handleResponsesCompact } from "./responses";
 export { disableResponsesRequestTimeout, linkAbortSignal } from "./responses";
+import { MAX_DECOMPRESSED_BODY_BYTES } from "./request-decompress";
 import { handleClaudeCountTokens, handleClaudeMessages } from "./claude-messages";
 import { handleChatCompletions } from "./chat-completions";
 import { anthropicErrorResponse } from "../claude/outbound";
@@ -618,6 +619,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       port: listenPort,
       hostname: bindHost,
       idleTimeout: 255,
+      maxRequestBodySize: MAX_DECOMPRESSED_BODY_BYTES,
       async fetch(req, requestServer): Promise<Response> {
       const url = new URL(req.url);
       markActivity(`${req.method} ${url.pathname}`);
