@@ -37,6 +37,11 @@ should select among several targets.
 This is the native CodexCommander data-plane shape. The request body must be a JSON object with a
 non-empty `model`. `input` may be a string or an array of Responses items.
 
+Responses HTTP request bodies may be up to 256 MiB, both on the wire and after decoding
+`Content-Encoding`. The HTTP listener and JSON parser use the same limit, so image-heavy histories
+between 128 and 256 MiB can reach request processing. Larger bodies receive HTTP 413. Upstream
+providers may impose additional request-size or context limits.
+
 ### Accepted request fields
 
 | Area | Accepted shape |
