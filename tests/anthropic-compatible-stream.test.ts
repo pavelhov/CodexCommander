@@ -90,6 +90,42 @@ function liveCommentResponse(intervalMs: number): { response: Response; stop: ()
 }
 
 describe("Anthropic-compatible reasoning stream termination (#312)", () => {
+  test("named and data-only Anthropic pings become adapter heartbeat events", async () => {
+    const events = await collectAdapterEvents(arbitrarilyChunkedResponse([
+      'event: ping\ndata: {"type":"ping"}',
+      'data: {"type":"ping"}',
+      'event: message_stop\ndata: {"type":"message_stop"}',
+    ].join("\n\n")));
+
+    expect(events).toEqual([
+      { type: "heartbeat" },
+      { type: "heartbeat" },
+      { type: "done", usage: undefined },
+    ]);
+  });
+
+  test("malformed and unknown SSE events do not become heartbeat events", async () => {
+    const events = await collectAdapterEvents(new Response([
+      'event: ping\ndata: not-json',
+      'event: ping\ndata: null',
+      'event: ping\ndata: {}',
+      'event: ping\ndata: {"type":"unknown"}',
+      'event: unknown\ndata: {"type":"unknown"}',
+      'event: ping\ndata:',
+      'event: message_stop\ndata: {"type":"message_stop"}',
+    ].join("\n\n")));
+
+    expect(events).toEqual([{ type: "done", usage: undefined }]);
+  });
+
+  test("ping-only EOF still fails without a message_stop", async () => {
+    const events = await collectAdapterEvents(new Response('event: ping\ndata: {"type":"ping"}\n\n'));
+
+    expect(events[0]).toEqual({ type: "heartbeat" });
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
   test("comment-only stream records become adapter heartbeat events", async () => {
     const events = await collectAdapterEvents(new Response(
       ": keepalive\n\n: still-alive\n\n",

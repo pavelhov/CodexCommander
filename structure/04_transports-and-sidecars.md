@@ -253,6 +253,10 @@ closes the stream with `response.incomplete` / `upstream_stall_timeout` and canc
 request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
 the watchdog.
 
+The Anthropic adapter maps both SSE comments and data `ping` events to adapter heartbeats.
+This keeps long thinking and remote compaction alive when upstream sends pings without text or
+thinking deltas. A ping is activity only: it does not create output, usage, or a completed response.
+
 The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as
 `commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's
