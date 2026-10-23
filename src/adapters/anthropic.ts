@@ -1010,6 +1010,13 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
         }
 
         switch (record.event || data.type) {
+              case "ping": {
+                // Anthropic sends data-bearing ping events while work continues without
+                // text/thinking deltas. Preserve that real upstream liveness for the
+                // bridge watchdog, just like the SSE comments handled above.
+                if (data?.type === "ping") yield { type: "heartbeat" };
+                break;
+              }
               case "message_start": {
                 const message = data.message as { usage?: Record<string, number> } | undefined;
                 pendingUsage = mergeAnthropicUsage(pendingUsage, message?.usage);
