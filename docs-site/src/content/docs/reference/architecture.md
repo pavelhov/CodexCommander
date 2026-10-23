@@ -108,6 +108,10 @@ default **stall deadline** is 300 seconds (`stallTimeoutSec`); reaching it abort
 `response.incomplete` with reason `upstream_stall_timeout`, preventing a hung connection from blocking
 Codex indefinitely.
 
+Anthropic SSE comments and `ping` events count as upstream activity, including while Opus is
+thinking during context compaction. Proxy-generated keep-alives do not reset the stall deadline;
+an upstream connection that stops sending activity still times out.
+
 Tool calls are disambiguated into three Responses item types using the namespace map, the freeform
 set, and the tool-search set captured by the parser — so MCP namespaces, `apply_patch`-style freeform
 tools, and client-executed `tool_search` all round-trip. A `buildResponseJSON()` variant produces a
