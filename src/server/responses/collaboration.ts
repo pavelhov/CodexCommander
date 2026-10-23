@@ -424,17 +424,23 @@ export async function multiAgentGuidanceText(
     const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback: compatibleFallback } as CodexCommanderConfig);
     const hasCompatibleGuidance = preferred !== undefined || compactRoster !== "" || fallbackGuidance !== "";
     if (!hasCompatibleGuidance) return null;
+    const modelSelectionContract = preferred !== undefined || compactRoster !== ""
+      ? "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
+        + "pass the chosen exact model in spawn_agent.model. "
+        + "Omitting model inherits the configured default or parent; it does not select from the Commander roster. "
+        + "When setting either override, use fork_turns \"none\" and a self-contained task."
+      : "";
     if (injectionPrompt) {
-      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, preferred?.model, injectionEffort, compactRoster, fallbackGuidance)}</multi_agent_mode>`;
+      const custom = applyInjectionPlaceholders(injectionPrompt, preferred?.model, injectionEffort, annotatedRoster, fallbackGuidance);
+      return `<multi_agent_mode>${custom}${modelSelectionContract ? ` ${modelSelectionContract}` : ""}</multi_agent_mode>`;
     }
-    let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "
-      + "listed models are featured suggestions, not an exhaustive allowlist. "
-      + "A known exact catalog ID that is fresh, routable, and compatible with this surface and task delivery "
-      + "may be passed directly to native spawn_agent; native validation remains authoritative. "
-      + "Do not invent IDs or substitute another family. "
-      + "When setting either override, set fork_turns to \"none\" "
-      + "(or a positive turn count such as \"3\"; full-history forks reject overrides) "
-      + "and make the task message self-contained.";
+    let text = modelSelectionContract;
+    if (modelSelectionContract) {
+      text += " Listed models are featured suggestions, not an exhaustive allowlist. "
+        + "A known exact catalog ID that is fresh, routable, and compatible with this surface and task delivery "
+        + "may be passed directly to native spawn_agent; native validation remains authoritative. "
+        + "Do not invent IDs or substitute another family.";
+    }
     if (preferred) {
       text += ` Preferred sub-agent: model "${preferred.model}"`
         + (injectionEffort ? `, reasoning_effort "${injectionEffort}"` : "")
@@ -442,7 +448,7 @@ export async function multiAgentGuidanceText(
     }
     text += fallbackGuidance;
     text += annotatedRoster;
-    return `<multi_agent_mode>${text}</multi_agent_mode>`;
+    return `<multi_agent_mode>${text.trim()}</multi_agent_mode>`;
   }
 
   const effort = parsed.options.reasoning;
