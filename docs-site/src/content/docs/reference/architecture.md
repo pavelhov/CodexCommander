@@ -102,6 +102,12 @@ understands:
 | `done` | `response.completed` (with usage) |
 | `error` | `response.failed` (with `last_error`) |
 
+Anthropic thinking signatures and redacted blocks survive tool-result continuation even when
+their thinking text is empty. Each signed block keeps its own text/signature pairing in both
+JSON and streaming responses. Opaque reasoning from other providers is not converted into
+invented Anthropic thinking text. Automatic terminal-guard continuations preserve the same
+block order. An unfinished thinking block fails instead of completing with unusable replay state.
+
 The bridge also runs a **heartbeat keep-alive** (RC3): during upstream silence, it emits a
 parser-ignored `response.heartbeat` SSE event every 2 seconds to re-arm Codex's idle timer. The
 default **stall deadline** is 300 seconds (`stallTimeoutSec`); reaching it aborts the upstream and emits
@@ -112,12 +118,18 @@ Anthropic SSE comments and `ping` events count as upstream activity, including w
 thinking during context compaction. Proxy-generated keep-alives do not reset the stall deadline;
 an upstream connection that stops sending activity still times out.
 
-For Opus 5.5 through the canonical Anthropic API, routed context compaction uses at most
+For Opus 5.5 through the canonical Anthropic API, ordinary routed turns default to a
+128,000-token total output allowance when the caller omits a limit. This uses the model's
+[documented capacity for long coding turns](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5#calibrate-effort)
+and preserves the requested reasoning effort. Adaptive thinking and answer text share the
+allowance; effort does not enforce a separate thinking budget. Explicit limits remain
+authoritative, and other models and custom Anthropic-compatible endpoints retain their defaults.
+
+Routed context compaction for the same model and endpoint uses at most
 `medium` reasoning effort and defaults to a 64,000-token total output limit when the caller
 omits one. Adaptive thinking and summary text share that limit; effort does not reserve a
 fixed number of tokens for the summary. Explicit output limits and lower reasoning efforts
-are preserved. This maintenance policy applies to both compaction endpoints; ordinary work
-keeps its requested effort and existing defaults. A truncated summary still fails instead
+are preserved. This maintenance policy applies to both compaction endpoints. A truncated summary still fails instead
 of replacing the conversation history, and the proxy does not automatically retry it.
 The older compact endpoint streams routed Anthropic generation internally, then returns one
 JSON response to its caller. This lets upstream pings keep a long summary alive without
@@ -245,6 +257,12 @@ history, while `responses/parser.ts` and `bridge.ts` handle remote compaction v2
   Codex's catalog as namespaced entries, ranks featured
   [subagent models](/guides/codex-integration/#the-subagent-picker) first, filters
   `disabledModels`, and can fully restore the pristine catalog from a one-time backup.
+
+Canonical Anthropic model discovery recognizes `max_input_tokens` as the input context window.
+Native Opus 5.5 also has a known 1,000,000-token context fallback when live discovery is unavailable;
+the default Codex compaction threshold is 900,000. Explicit context limits remain authoritative,
+and custom destinations do not inherit native Anthropic context assumptions. Existing Codex
+processes must reload the refreshed catalog before using its larger window.
 
 ## Reasoning effort
 

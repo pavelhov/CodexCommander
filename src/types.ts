@@ -254,8 +254,9 @@ export type AdapterEvent =
   | { type: "heartbeat" }
   | { type: "text_delta"; text: string; phase?: CodexCommanderMessagePhase }
   | { type: "thinking_delta"; thinking: string }
-  // Anthropic extended-thinking round-trip: signature_delta for the current thinking block, and
-  // opaque redacted_thinking blocks. Both must be replayed verbatim or tool-use turns 400.
+  // Anthropic extended-thinking round-trip: the complete signature of a finished thinking block
+  // (emitted once at the block boundary; it closes that block), and opaque redacted_thinking
+  // blocks. Both must be replayed verbatim or tool-use turns 400.
   | { type: "thinking_signature"; signature: string }
   | { type: "redacted_thinking"; data: string }
   // Kiro reasoning round-trip: the encrypted `redactedContent` blob for the CURRENT assistant turn.

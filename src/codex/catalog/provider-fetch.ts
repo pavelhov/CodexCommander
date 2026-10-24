@@ -879,7 +879,24 @@ function modelInputModalities(
   return undefined;
 }
 
-export function catalogHintsFromModelsApiItem(providerName: string, item: ProviderModelsApiItem): Partial<CatalogModel> {
+function isOfficialAnthropicModelsApi(source: { adapter: string; url: string } | undefined): boolean {
+  if (source?.adapter !== "anthropic") return false;
+  try {
+    const url = new URL(source.url);
+    return url.origin === "https://api.anthropic.com"
+      && url.pathname === "/v1/models"
+      && !url.username
+      && !url.password;
+  } catch {
+    return false;
+  }
+}
+
+export function catalogHintsFromModelsApiItem(
+  providerName: string,
+  item: ProviderModelsApiItem,
+  source?: { adapter: string; url: string },
+): Partial<CatalogModel> {
   const metadata = plainRecord(item.metadata);
   const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
   const limits = plainRecord(metadata?.limits);
@@ -891,7 +908,11 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       item.context_size,
       item.max_model_len,
       item.max_context_length,
-    );
+    )
+    // Anthropic defines this field as the model's maximum input context window.
+    // Other APIs use it as a separate input ceiling, so require actual source evidence.
+    // https://platform.claude.com/docs/en/api/models/list
+    ?? (isOfficialAnthropicModelsApi(source) ? positiveSafeInteger(item.max_input_tokens) : undefined);
   const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
   const rawReasoningEfforts = capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
   const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
@@ -1137,7 +1158,7 @@ async function fetchProviderModelsWithAuth(
         id: m.id,
         provider: name,
         ...(ownedBy ? { owned_by: ownedBy } : {}),
-        ...catalogHintsFromModelsApiItem(name, m),
+        ...catalogHintsFromModelsApiItem(name, m, { adapter: prov.adapter, url: request.url }),
       }, contextCap);
     })
       .filter(m => shouldExposeProviderModel(name, m.id));

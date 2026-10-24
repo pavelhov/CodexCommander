@@ -900,6 +900,7 @@ export function bridgeToResponsesSSE(
             }
             case "text_delta": {
               if (currentReasoning) closeCurrentReasoning();
+              flushHiddenReasoningEnvelope();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
               // Reasoning consumed by a text turn, not a tool call: no cache target.
@@ -963,10 +964,13 @@ export function bridgeToResponsesSSE(
             case "thinking_signature": {
               pendingSignatureBytes = replaceRetainedString(pendingSignatureBytes, event.signature, "reasoning");
               pendingSignature = event.signature;
-              // Signature arrives at the end of the thinking block. With a visible reasoning item
-              // open, closeCurrentReasoning attaches the envelope; hidden/suppressed blocks flush
-              // an envelope-only reasoning item now.
-              if (!currentReasoning) flushHiddenReasoningEnvelope();
+              // The adapter emits one complete signature per thinking block, just before its
+              // content_block_stop, so it marks the block boundary. Close the visible item now
+              // (matching buildResponseJSON): otherwise an adjacent thinking block would append
+              // to this item and its text would be paired with only the later signature.
+              // Hidden/suppressed blocks flush an envelope-only reasoning item.
+              if (currentReasoning) closeCurrentReasoning();
+              else flushHiddenReasoningEnvelope();
               break;
             }
             case "redacted_thinking": {
@@ -1023,6 +1027,7 @@ export function bridgeToResponsesSSE(
             case "tool_call_start": {
               if (currentMsg) closeCurrentMessage("commentary");
               if (currentReasoning) closeCurrentReasoning();
+              flushHiddenReasoningEnvelope();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
               if (rawReasoningForNextToolCall) {
@@ -1663,7 +1668,7 @@ function buildResponseJSONWithBudget(
         // Only flush on an explicit phase change. A later delta that omits `phase` must keep
         // appending under the previously established phase.
         if (currentText && e.phase !== undefined && currentTextPhase !== e.phase) flushText("commentary");
-        if (currentSummaryReasoning) flushSummaryReasoning();
+        flushSummaryReasoning();
         if (currentRawReasoning) flushRawReasoning();
         rawReasoningForNextToolCall = "";
         if (currentToolCallId) flushToolCall();
@@ -1736,7 +1741,7 @@ function buildResponseJSONWithBudget(
         break;
       case "tool_call_start":
         if (currentText) flushText("commentary");
-        if (currentSummaryReasoning) flushSummaryReasoning();
+        flushSummaryReasoning();
         if (currentRawReasoning) flushRawReasoning();
         if (rawReasoningForNextToolCall) {
           rememberReasoningForCall(e.id, rawReasoningForNextToolCall, replayCacheScope);

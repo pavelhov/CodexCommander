@@ -139,20 +139,20 @@ function sseResponse(events: Array<Record<string, unknown>>): Response {
   });
 }
 
-describe("Opus 5.5 compaction output policy through the real Anthropic adapter", () => {
+describe("Opus 5.5 output policy through the real Anthropic adapter", () => {
   const config = keyProviderConfig({ adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
   type WireScalars = { model: unknown; maxTokens: unknown; thinking: unknown; effort: unknown; stream: unknown; tools: boolean };
-  function stubAnthropic(stopReason = "end_turn") {
+  function stubAnthropic(stopReason = "end_turn", requiredOutputTokens = 45_000) {
     const sent: WireScalars[] = [];
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}"));
       // Retain only synthetic wire-policy scalars, never request history or headers.
       sent.push({ model: body.model, maxTokens: body.max_tokens, thinking: body.thinking?.type,
         effort: body.output_config?.effort, stream: body.stream, tools: body.tools !== undefined });
-      // A compact synthetic workload needs 45000 total generated tokens; no large
-      // generated text is needed to expose the former 40192-token truncation.
-      const outputTokens = Math.min(body.max_tokens, 45_000);
-      const effectiveStop = body.max_tokens < 45_000 ? "max_tokens" : stopReason;
+      // Model the shared thinking/output total with a tiny synthetic response. The
+      // upstream terminal is determined by whether this workload fits the wire cap.
+      const outputTokens = Math.min(body.max_tokens, requiredOutputTokens);
+      const effectiveStop = body.max_tokens < requiredOutputTokens ? "max_tokens" : stopReason;
       if (!body.stream) return jsonResponse({
         content: [{ type: "text", text: "Progress and next steps." }],
         stop_reason: effectiveStop, usage: { input_tokens: 20, output_tokens: outputTokens },
@@ -183,6 +183,43 @@ describe("Opus 5.5 compaction output policy through the real Anthropic adapter",
     expect(terminals).toHaveLength(1);
     return terminals[0].response as { status: string; output: Array<{ type: string; encrypted_content: string }>; incomplete_details?: { reason: string } };
   }
+
+  function ordinaryBody(extra: Record<string, unknown> = {}) {
+    return body({
+      input: [{ type: "message", role: "user", content: "Continue implementing and checking the remaining modules." }],
+      ...extra,
+    });
+  }
+
+  test.each([false, true])("ordinary 60000-token workload completes once with omitted total (stream=%s)", async stream => {
+    const sent = stubAnthropic("end_turn", 60_000);
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(compactionRequest(ordinaryBody({ stream })), config, logCtx);
+    expect(response.status).toBe(200);
+    const result = stream ? terminal(await response.text()) : await response.json() as { status: string; output: Array<{ type: string }> };
+    expect(result.status).toBe("completed");
+    expect(result.output.some(item => item.type === "message")).toBe(true);
+    expect(result.output.some(item => item.type === "compaction")).toBe(false);
+    expect(sent).toEqual([{ model: "claude-opus-5-5", maxTokens: 128_000, thinking: "adaptive",
+      effort: "max", stream, tools: true }]);
+    expect(logCtx.usage?.outputTokens).toBe(60_000);
+  });
+
+  test.each([
+    [false, 4096], [true, 4096], [false, 40_192], [true, 40_192],
+  ])("ordinary caller-capped workload stays incomplete without retry (stream=%s, total=%s)", async (stream, maxOutputTokens) => {
+    const sent = stubAnthropic("end_turn", 60_000);
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(compactionRequest(ordinaryBody({ stream, max_output_tokens: maxOutputTokens })), config, logCtx);
+    expect(response.status).toBe(200);
+    const result = stream ? terminal(await response.text()) : await response.json() as { status: string; incomplete_details?: { reason: string }; output: Array<{ type: string }> };
+    expect(result.status).toBe("incomplete");
+    expect(result.incomplete_details?.reason).toBe("max_output_tokens");
+    expect(result.output.some(item => item.type === "compaction")).toBe(false);
+    expect(sent).toEqual([{ model: "claude-opus-5-5", maxTokens: maxOutputTokens, thinking: "adaptive",
+      effort: "max", stream, tools: true }]);
+    expect(logCtx.usage?.outputTokens).toBe(maxOutputTokens);
+  });
 
   test.each(["v1", "v2"])("%s compaction gets one complete summary at medium with a bounded total", async version => {
     const sent = stubAnthropic();
@@ -224,7 +261,7 @@ describe("Opus 5.5 compaction output policy through the real Anthropic adapter",
         { type: "message", role: "user", content: "Continue." }],
     })), config, { model: "", provider: "" })).text();
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ maxTokens: 40_192, effort: "max" });
+    expect(sent[0]).toMatchObject({ maxTokens: 128_000, effort: "max" });
   });
 
   test.each(["v1", "v2"])("%s max_tokens keeps partial summaries out of replacement history without retrying", async version => {

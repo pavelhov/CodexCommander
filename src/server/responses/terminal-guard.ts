@@ -118,21 +118,36 @@ export function analyzeTerminalTurn(parsed: CodexCommanderParsedRequest, events:
 }
 
 function assistantMessageFromEvents(events: readonly AdapterEvent[]): CodexCommanderAssistantMessage | undefined {
+  const content: CodexCommanderAssistantContentPart[] = [];
   let text = "";
   let thinking = "";
-  let signature: string | undefined;
-  const redacted: string[] = [];
+  const flushText = () => {
+    if (text) content.push({ type: "text", text });
+    text = "";
+  };
+  const flushThinking = (signature?: string) => {
+    if (thinking || signature) content.push({ type: "thinking", thinking, ...(signature ? { signature } : {}) });
+    thinking = "";
+  };
   for (const event of events) {
-    if (event.type === "text_delta") text += event.text;
-    else if (event.type === "thinking_delta") thinking += event.thinking;
-    else if (event.type === "thinking_signature") signature = event.signature;
-    else if (event.type === "redacted_thinking") redacted.push(event.data);
+    if (event.type === "text_delta") {
+      flushThinking();
+      text += event.text;
+    } else if (event.type === "thinking_delta") {
+      flushText();
+      thinking += event.thinking;
+    } else if (event.type === "thinking_signature") {
+      flushText();
+      // The complete signature closes only this block, including an empty signed block.
+      flushThinking(event.signature);
+    } else if (event.type === "redacted_thinking") {
+      flushText();
+      flushThinking();
+      content.push({ type: "thinking", thinking: "", redacted: [event.data] });
+    }
   }
-  const content: CodexCommanderAssistantContentPart[] = [];
-  if (thinking || signature || redacted.length > 0) {
-    content.push({ type: "thinking", thinking, ...(signature ? { signature } : {}), ...(redacted.length > 0 ? { redacted } : {}) });
-  }
-  if (text) content.push({ type: "text", text });
+  flushText();
+  flushThinking();
   if (content.length === 0) return undefined;
   return { role: "assistant", content, timestamp: Date.now() };
 }

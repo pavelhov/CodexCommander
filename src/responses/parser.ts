@@ -279,7 +279,7 @@ function findToolById(messages: CodexCommanderMessage[], callId: string): { name
 function attachPendingReasoningToCallOwner(
   messages: CodexCommanderMessage[],
   callId: string,
-  pendingReasoning: Array<{ part: CodexCommanderThinkingContent; envelopeSigned: boolean }>,
+  pendingReasoning: Array<{ part: CodexCommanderThinkingContent; preserveEnvelopeBoundary: boolean }>,
 ): void {
   if (pendingReasoning.length === 0 || !callId) return;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -310,7 +310,7 @@ export function parseRequest(body: unknown): CodexCommanderParsedRequest {
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
-  const pendingReasoning: Array<{ part: CodexCommanderThinkingContent; envelopeSigned: boolean }> = [];
+  const pendingReasoning: Array<{ part: CodexCommanderThinkingContent; preserveEnvelopeBoundary: boolean }> = [];
   // Assistant placeholder that first folds any pending reasoning into the same turn (official
   // grok-build preserves reasoning across call items; Anthropic replay requires thinking to
   // precede tool_use inside one assistant message).
@@ -461,26 +461,33 @@ export function parseRequest(body: unknown): CodexCommanderParsedRequest {
           continue;
         }
 
-        // Native/non-ccxr1 encrypted-only reasoning is opaque here. Do not create a detached
-        // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
-        if (thinkingText.length > 0) {
+        // A decoded ccxr1 envelope carrying a signature or redacted blocks is replayable provider
+        // state even with empty text: Opus adaptive thinking returns empty signed blocks, and
+        // dropping them loses that turn's reasoning. Native/non-ccxr1 encrypted-only reasoning
+        // stays opaque — never invent replayable plaintext/signatures from it.
+        const opaqueEnvelope = typeof envelope?.sig === "string" || (envelope?.red?.length ?? 0) > 0;
+        if (thinkingText.length > 0 || opaqueEnvelope) {
           const part: CodexCommanderThinkingContent = {
             type: "thinking",
             thinking: thinkingText,
-            signature: envelope?.sig ?? JSON.stringify(reasoning),
+            ...(typeof envelope?.sig === "string"
+              ? { signature: envelope.sig }
+              : thinkingText.length > 0 ? { signature: JSON.stringify(reasoning) } : {}),
             ...(envelope?.red ? { redacted: envelope.red } : {}),
             ...(reasoning.id ? { itemId: reasoning.id } : {}),
           };
-          const envelopeSigned = typeof envelope?.sig === "string";
+          // Envelope-backed parts are block boundaries: merging would drop redacted payloads or
+          // re-pair a signature with text it did not sign.
+          const preserveEnvelopeBoundary = opaqueEnvelope;
           const previous = pendingReasoning[pendingReasoning.length - 1];
 
-          if (!envelopeSigned && previous && !previous.envelopeSigned) {
+          if (!preserveEnvelopeBoundary && previous && !previous.preserveEnvelopeBoundary) {
             previous.part = {
               ...part,
               thinking: `${previous.part.thinking}\n${part.thinking}`,
             };
           } else {
-            pendingReasoning.push({ part, envelopeSigned });
+            pendingReasoning.push({ part, preserveEnvelopeBoundary });
           }
         }
         continue;

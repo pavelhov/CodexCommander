@@ -1,5 +1,5 @@
 import type { CodexAccountMode, CodexCommanderProviderConfig } from "../types";
-import { PROVIDER_REGISTRY, providerMatchesRegistryTransport, type ProviderRegistryEntry } from "./registry";
+import { PROVIDER_REGISTRY, providerMatchesRegistryMetadataDestination, providerMatchesRegistryTransport, type ProviderRegistryEntry } from "./registry";
 
 export interface DerivedKeyLoginProvider {
   label: string;
@@ -298,7 +298,18 @@ export function enrichProviderFromRegistry(name: string, prov: CodexCommanderPro
   if (!prov.models && seed.models) prov.models = [...seed.models];
   if (prov.liveModels === undefined && seed.liveModels !== undefined) prov.liveModels = seed.liveModels;
   if (prov.contextWindow === undefined && seed.contextWindow !== undefined) prov.contextWindow = seed.contextWindow;
-  if (seed.modelContextWindows) prov.modelContextWindows = fillRecord(seed.modelContextWindows, prov.modelContextWindows);
+  if (seed.modelContextWindows) {
+    const nativeAnthropic = entry.adapter === "anthropic" && entry.jawcodeBundle === "anthropic";
+    // Native Claude context limits describe Anthropic's endpoint, not a custom relay saved
+    // under the same preset name. Explicit user model maps remain authoritative everywhere.
+    if (!nativeAnthropic || providerMatchesRegistryMetadataDestination(name, prov)) {
+      const providerWindow = prov.contextWindow;
+      const contextDefaults = nativeAnthropic && typeof providerWindow === "number" && providerWindow > 0
+        ? Object.fromEntries(Object.entries(seed.modelContextWindows).map(([id, window]) => [id, Math.min(window, providerWindow)]))
+        : seed.modelContextWindows;
+      prov.modelContextWindows = fillRecord(contextDefaults, prov.modelContextWindows);
+    }
+  }
   if (seed.modelInputModalities) prov.modelInputModalities = fillRecordOfArrays(seed.modelInputModalities, prov.modelInputModalities);
   if (prov.defaultMaxOutputTokens === undefined && seed.defaultMaxOutputTokens !== undefined) prov.defaultMaxOutputTokens = seed.defaultMaxOutputTokens;
   if (!prov.modelMaxOutputTokens && seed.modelMaxOutputTokens) prov.modelMaxOutputTokens = { ...seed.modelMaxOutputTokens };
