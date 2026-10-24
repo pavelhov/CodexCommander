@@ -168,6 +168,13 @@ Routed entries keep Codex-required metadata such as reasoning levels, shell type
 base instructions, modalities, auto-compact fields, and strict parser booleans. The public slug and
 display name use `provider/model`.
 
+Canonical Anthropic Models API discovery maps `max_input_tokens` to the context window when
+no explicit context field is present. Registry context metadata supplies the known Opus 5.5
+1,000,000-token fallback for the native destination, including offline catalog generation;
+the existing 90% policy then sets auto-compaction to 900,000. Explicit provider/model context
+settings and context caps remain authoritative. Native seed context defaults are destination-bound
+without changing credential or transport matching, so custom gateways do not acquire native limits.
+
 ## Native passthrough
 
 Native bare OpenAI entries form one `openai` group. The provider's Pool(default)/Direct option

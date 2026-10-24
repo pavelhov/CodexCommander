@@ -21,7 +21,7 @@ import {
   setCached,
   type ProviderModelDiscoveryStatus,
 } from "../src/codex/model-cache";
-import type { CodexCommanderConfig } from "../src/types";
+import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
 import type { NormalizedComboConfig } from "../src/combos/types";
 import { enrichProviderFromRegistry } from "../src/providers/derive";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -2381,6 +2381,184 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.max_context_window).toBe(1_000_000);
     expect(routed?.auto_compact_token_limit).toBe(900_000);
     expect(getJawcodeModelMetadata("anthropic", "claude-sonnet-4-6")?.contextWindow).toBe(1_000_000);
+  });
+
+  test("Anthropic Models API input context reaches Codex for Opus 5.5 and future live models", async () => {
+    globalThis.fetch = (async () => Response.json({ data: [
+      { id: "claude-opus-5-5", max_input_tokens: 1_000_000, max_tokens: 128_000 },
+      { id: "claude-future-model", max_input_tokens: 750_000, max_tokens: 64_000 },
+      { id: "claude-smaller-model", context_length: 200_000, max_input_tokens: 1_000_000 },
+    ] })) as typeof fetch;
+    const models = await gatherRoutedModels({
+      providers: { "anthropic-apikey": {
+        adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-test",
+      } },
+    });
+    const entries = buildCatalogEntries(null, [], models);
+    expect(entries.find(entry => entry.slug === "anthropic-apikey/claude-opus-5-5")).toMatchObject({
+      context_window: 1_000_000, max_context_window: 1_000_000, auto_compact_token_limit: 900_000,
+    });
+    expect(entries.find(entry => entry.slug === "anthropic-apikey/claude-future-model")).toMatchObject({
+      context_window: 750_000, max_context_window: 750_000, auto_compact_token_limit: 675_000,
+    });
+    expect(entries.find(entry => entry.slug === "anthropic-apikey/claude-smaller-model")).toMatchObject({
+      context_window: 200_000, max_context_window: 200_000, auto_compact_token_limit: 180_000,
+    });
+  });
+
+  test("native Anthropic Opus 5.5 keeps canonical context when discovery is disabled", async () => {
+    globalThis.fetch = (() => { throw new Error("static models must not fetch"); }) as typeof fetch;
+    for (const provider of ["anthropic", "anthropic-apikey"]) {
+      const models = await gatherRoutedModels({
+        providers: { [provider]: {
+          adapter: "anthropic", baseUrl: "https://api.anthropic.com", liveModels: false,
+          models: ["claude-opus-5-5", "claude-haiku-4-5"],
+        } },
+      });
+      const entries = buildCatalogEntries(null, [], models);
+      expect(entries.find(entry => entry.slug === `${provider}/claude-opus-5-5`)).toMatchObject({
+        context_window: 1_000_000, max_context_window: 1_000_000, auto_compact_token_limit: 900_000,
+      });
+      expect(entries.find(entry => entry.slug === `${provider}/claude-haiku-4-5`)?.context_window)
+        .toBe(200_000);
+    }
+  });
+
+  test("native Anthropic context fallback accepts supported Messages URL variants", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls += 1;
+      throw new Error("static models must not fetch");
+    }) as typeof fetch;
+    for (const provider of ["anthropic", "anthropic-apikey"]) {
+      for (const baseUrl of [
+        "https://api.anthropic.com",
+        "https://api.anthropic.com/",
+        "https://api.anthropic.com/v1",
+        "https://api.anthropic.com/v1/",
+        "https://api.anthropic.com/v1/messages",
+        "https://api.anthropic.com/v1/messages/",
+        "https://api.anthropic.com/V1/MESSAGES///",
+        "https://api.anthropic.com:443/v1/messages",
+      ]) {
+        const models = await gatherRoutedModels({ providers: { [provider]: {
+          adapter: "anthropic", baseUrl, liveModels: false, models: ["claude-opus-5-5"],
+        } } });
+        expect(buildCatalogEntries(null, [], models).find(entry => entry.slug === `${provider}/claude-opus-5-5`))
+          .toMatchObject({ context_window: 1_000_000, max_context_window: 1_000_000, auto_compact_token_limit: 900_000 });
+      }
+    }
+    expect(fetchCalls).toBe(0);
+  });
+
+  test("smaller live Opus 5.5 context outranks its native registry fallback", async () => {
+    const items = [
+      { id: "claude-opus-5-5", max_input_tokens: 200_000 },
+      { id: "claude-opus-5-5", context_length: 200_000, max_input_tokens: 1_000_000 },
+      { id: "claude-opus-5-5", context_length: 200_000, max_input_tokens: 200_000 },
+    ];
+    const fetchedUrls: string[] = [];
+    for (const item of items) {
+      clearModelCache();
+      globalThis.fetch = (async (input) => {
+        fetchedUrls.push(String(input));
+        return Response.json({ data: [item] });
+      }) as typeof fetch;
+      const models = await gatherRoutedModels({
+        providers: { "anthropic-apikey": {
+          adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-test",
+        } },
+      });
+      expect(models.find(model => model.provider === "anthropic-apikey" && model.id === item.id))
+        .toMatchObject({ contextWindow: 200_000, maxInputTokens: item.max_input_tokens });
+      expect(buildCatalogEntries(null, [], models).find(entry => entry.slug === "anthropic-apikey/claude-opus-5-5"))
+        .toMatchObject({ context_window: 200_000, max_context_window: 200_000, auto_compact_token_limit: 180_000 });
+    }
+    expect(fetchedUrls).toEqual(items.map(() => "https://api.anthropic.com/v1/models?limit=1000"));
+  });
+
+  test.each([
+    "https://api.anthropic.com",
+    "https://api.anthropic.com/",
+    "https://api.anthropic.com/v1",
+    "https://api.anthropic.com/v1/",
+    "https://api.anthropic.com/v1/messages",
+    "https://api.anthropic.com/v1/messages/",
+    "https://api.anthropic.com/V1/MESSAGES///",
+    "https://api.anthropic.com:443/v1/messages",
+  ])("native Anthropic Messages URL alias %s discovers smaller live context through the canonical Models URL", async baseUrl => {
+    const fetchedUrls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      const url = String(input);
+      fetchedUrls.push(url);
+      return url === "https://api.anthropic.com/v1/models?limit=1000"
+        ? Response.json({ data: [{ id: "claude-opus-5-5", max_input_tokens: 200_000 }] })
+        : Response.json({ error: "unexpected fixture URL" }, { status: 404 });
+    }) as typeof fetch;
+    clearModelCache();
+    const models = await gatherRoutedModels({ providers: { "anthropic-apikey": {
+      adapter: "anthropic", baseUrl, authMode: "key", apiKey: "sk-test",
+    } } });
+    expect(buildCatalogEntries(null, [], models).find(entry => entry.slug === "anthropic-apikey/claude-opus-5-5"))
+      .toMatchObject({ context_window: 200_000, max_context_window: 200_000, auto_compact_token_limit: 180_000 });
+    expect(fetchedUrls).toEqual(["https://api.anthropic.com/v1/models?limit=1000"]);
+  });
+
+  test("explicit Anthropic context and input caps still lower Opus 5.5 catalog budgets", async () => {
+    globalThis.fetch = (async () => Response.json({ data: [
+      { id: "claude-opus-5-5", max_input_tokens: 1_000_000, max_tokens: 128_000 },
+    ] })) as typeof fetch;
+    const cases: Array<{
+      provider: Partial<CodexCommanderProviderConfig>;
+      providerCap?: number;
+      context: number;
+      compact: number;
+    }> = [
+      { provider: { contextWindow: 250_000 }, context: 250_000, compact: 225_000 },
+      { provider: { modelContextWindows: { "claude-opus-5-5": 250_000 } }, context: 250_000, compact: 225_000 },
+      { provider: {}, providerCap: 350_000, context: 350_000, compact: 315_000 },
+      { provider: { modelMaxInputTokens: { "claude-opus-5-5": 200_000 } }, context: 1_000_000, compact: 200_000 },
+      {
+        provider: { contextWindow: 250_000, modelContextWindows: { "claude-opus-5-5": 500_000 } },
+        context: 500_000, compact: 450_000,
+      },
+    ];
+    for (const liveModels of [true, false]) {
+      for (const item of cases) {
+        const models = await gatherRoutedModels({
+          modelCacheTtlMs: 0,
+          ...(item.providerCap ? { providerContextCaps: { "anthropic-apikey": item.providerCap } } : {}),
+          providers: { "anthropic-apikey": {
+            adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-test", liveModels,
+            models: ["claude-opus-5-5"],
+            ...item.provider,
+          } },
+        });
+        expect(buildCatalogEntries(null, [], models).find(entry => entry.slug === "anthropic-apikey/claude-opus-5-5"))
+          .toMatchObject({ context_window: item.context, max_context_window: item.context, auto_compact_token_limit: item.compact });
+      }
+    }
+  });
+
+  test("custom Anthropic endpoints do not inherit the native Opus 5.5 context", async () => {
+    globalThis.fetch = (async () => Response.json({ data: [
+      { id: "claude-opus-5-5", max_input_tokens: 1_000_000 },
+    ] })) as typeof fetch;
+    for (const provider of ["anthropic-apikey", "custom-anthropic"]) {
+      for (const liveModels of [true, false]) {
+        const models = await gatherRoutedModels({
+          modelCacheTtlMs: 0,
+          providers: { [provider]: {
+            adapter: "anthropic", baseUrl: "https://custom-anthropic.test", apiKey: "sk-test", liveModels,
+            models: ["claude-opus-5-5"],
+          } },
+        });
+        expect(models.find(model => model.provider === provider && model.id === "claude-opus-5-5")?.contextWindow)
+          .toBeUndefined();
+        expect(buildCatalogEntries(null, [], models).find(entry => entry.slug === `${provider}/claude-opus-5-5`))
+          .toMatchObject({ context_window: 128_000, max_context_window: 128_000, auto_compact_token_limit: 115_200 });
+      }
+    }
   });
 
   test("routed entries resolve jawcode provider aliases", () => {

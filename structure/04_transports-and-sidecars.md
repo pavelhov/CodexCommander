@@ -33,14 +33,19 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+For verified Opus 5.5 on the canonical Anthropic API, the Anthropic adapter defaults ordinary
+requests with omitted output limits to the documented 128,000-token total, independently of
+effort. The requested ordinary effort and explicit output limits remain unchanged. Adaptive
+thinking shares this total with answer text; the legacy effort-to-budget heuristic is not a
+separate thinking allowance. Other models and custom destinations keep their existing defaults.
+
 The Anthropic adapter applies a maintenance-only budget to fresh routed compaction requests
 for the verified Opus 5.5 model on the canonical Anthropic API: effort is capped at `medium`
 without raising lower efforts, and an omitted output limit becomes 64,000 total tokens.
 Explicit limits remain authoritative. Adaptive thinking has no fixed `budget_tokens`
-reservation, so the ordinary effort-to-output heuristic cannot guarantee room for summary
+reservation, so an effort-to-output heuristic cannot guarantee room for summary
 text. Both v1 compact and v2 `compaction_trigger` requests carry `_compactionRequest` to this
-boundary; replayed summaries do not activate it. Other models, custom destinations, and ordinary
-work retain their existing behavior. Token-limit stops remain incomplete and install no partial
+boundary; replayed summaries do not activate it. Token-limit stops remain incomplete and install no partial
 compaction item; there is no automatic retry or model substitution.
 Routed Anthropic v1 compact generation streams internally and consumes the bounded Responses
 terminal through the SSE decoder before building the v1 JSON replacement history. This preserves
@@ -452,8 +457,12 @@ URL keeps the generic `max_tokens` default unless it opts in explicitly.
   assistant turn (`pendingReasoning` in `src/responses/parser.ts`) so the Grok chat wire carries
   ONE assistant message with `reasoning_content` — exact-prefix cache stability. Unsigned
   siblings newline-join; `ccxr1`-signed siblings stay separate parts (Anthropic replay keeps
-  each signature on its own text); boundaries (user/tool-result/agent) clear pending state;
-  call items fold pending reasoning into the same turn.
+  each signature on its own text, including valid empty signed or redacted blocks). Streaming
+  closes each completed signed block separately, matching JSON reconstruction; boundaries
+  (user/tool-result/agent) clear pending state;
+  call items fold pending reasoning into the same turn. Terminal-guard continuations preserve
+  those block boundaries and order too. An open Anthropic thinking block cannot finish successfully
+  at EOF, `message_stop`, or a new content-block start.
 - **Grok CLI credential ownership:** `source:"local-cli"` xAI credentials re-read
   `~/.grok/auth.json` (read-only) and adopt a newer usable generation with zero IdP calls
   (`shouldAdoptGrokGeneration`, later-expiresAt authority). CodexCommander never submits the native

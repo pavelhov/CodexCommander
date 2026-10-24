@@ -16,6 +16,7 @@ import {
   cursorModelReasoningEfforts,
 } from "../adapters/cursor/discovery";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "./command-code-efforts";
+import { isCanonicalAnthropicEndpoint } from "../lib/anthropic-endpoint";
 
 export type ProviderAuthKind = "forward" | "oauth" | "key" | "local";
 export type MetadataModelIdNormalize = "case-insensitive";
@@ -261,8 +262,9 @@ export type ProviderConfigSeed = Pick<
 // Shared between the OAuth (Claude account) and API-key Anthropic entries so both expose the
 // same static model seed.
 // Model and context-window snapshot refreshed 2026-07-10.
-const ANTHROPIC_MODELS = ["claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
-const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// Opus 5.5's 1M context verified 2026-10-23: https://platform.claude.com/docs/en/models/opus-5-5/overview.
+const ANTHROPIC_MODELS = ["claude-opus-5-5", "claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
+const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-opus-5-5": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
 
 const ZAI_GLM_52_MODELS = ["glm-5.2", "glm-5.2[1m]"];
 const ZAI_GLM_52_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
@@ -2223,6 +2225,19 @@ function normalizedProviderEndpoint(value: string): string {
   } catch {
     return trimmed.replace(/\/+$/, "");
   }
+}
+
+/** Configured endpoint evidence for registry metadata; does not decide routing or auth. */
+export function providerMatchesRegistryMetadataDestination(
+  id: string,
+  provider: Pick<CodexCommanderProviderConfig, "baseUrl" | "adapter">,
+): boolean {
+  const entry = getProviderRegistryEntry(id);
+  if (!entry || provider.adapter !== entry.adapter) return false;
+  if (entry.adapter === "anthropic" && entry.jawcodeBundle === "anthropic") {
+    return isCanonicalAnthropicEndpoint(provider.baseUrl);
+  }
+  return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
 }
 
 /**
