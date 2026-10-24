@@ -6,7 +6,7 @@ import { catalogHintsFromModelsApiItem } from "../src/codex/catalog/provider-fet
 import { clearModelCache, getFreshCached, setCached } from "../src/codex/model-cache";
 import { buildModelsRequest } from "../src/oauth";
 import { KEY_LOGIN_PROVIDERS, validateApiKey } from "../src/oauth/key-providers";
-import { deriveKeyLoginMap, providerConfigSeed } from "../src/providers/derive";
+import { deriveKeyLoginMap, enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import {
   extractProviderModelItems,
   providerModelDiscoverySpecError,
@@ -15,6 +15,7 @@ import {
 } from "../src/providers/model-discovery";
 import {
   PROVIDER_REGISTRY,
+  providerMatchesRegistryMetadataDestination,
   registryEntryForProviderDestination,
   type ProviderModelDiscoverySpec,
 } from "../src/providers/registry";
@@ -257,6 +258,38 @@ describe("registry-owned provider model discovery", () => {
     })).toEqual({});
   });
 
+  test("official Anthropic input context metadata supplies the catalog window", () => {
+    const source = { adapter: "anthropic", url: "https://api.anthropic.com/v1/models" };
+    const item = { id: "claude-opus-5-5", max_input_tokens: 1_000_000, max_tokens: 128_000 };
+    expect(catalogHintsFromModelsApiItem("anthropic", item, source)).toEqual({
+      contextWindow: 1_000_000,
+      maxInputTokens: 1_000_000,
+    });
+    expect(catalogHintsFromModelsApiItem("renamed-anthropic", {
+      ...item,
+      id: "claude-future-model",
+      context_length: 200_000,
+    }, source)).toEqual({ contextWindow: 200_000, maxInputTokens: 1_000_000 });
+    for (const max_input_tokens of [0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(catalogHintsFromModelsApiItem("anthropic", { ...item, max_input_tokens }, source))
+        .toEqual({});
+    }
+  });
+
+  test("input ceilings do not become context windows without official Anthropic source evidence", () => {
+    const item = { id: "claude-opus-5-5", max_input_tokens: 1_000_000 };
+    expect(catalogHintsFromModelsApiItem("anthropic", item)).toEqual({ maxInputTokens: 1_000_000 });
+    for (const source of [
+      { adapter: "anthropic", url: "https://relay.example/v1/models" },
+      { adapter: "anthropic", url: "https://api.anthropic.com/relay/models" },
+      { adapter: "anthropic", url: "https://api.anthropic.com.evil.example/v1/models" },
+      { adapter: "openai-chat", url: "https://api.anthropic.com/v1/models" },
+    ]) {
+      expect(catalogHintsFromModelsApiItem("anthropic", item, source))
+        .toEqual({ maxInputTokens: 1_000_000 });
+    }
+  });
+
   test("infers Codex-safe input modalities from bounded architecture metadata", () => {
     expect(catalogHintsFromModelsApiItem("example", {
       id: "vision-chat",
@@ -369,6 +402,87 @@ describe("registry-owned provider model discovery", () => {
 });
 
 describe("same-named custom provider preservation", () => {
+  test("Anthropic native URL normalization keeps key and OAuth discovery headers and custom paths", () => {
+    const key = buildModelsRequest({
+      adapter: "anthropic", baseUrl: "https://api.anthropic.com/V1/MESSAGES///", authMode: "key",
+    }, "fixture-key", "anthropic-apikey");
+    expect(key.url).toBe("https://api.anthropic.com/v1/models?limit=1000");
+    expect(key.headers).toEqual({ "anthropic-version": "2023-06-01", "x-api-key": "fixture-key" });
+    const oauth = buildModelsRequest({
+      adapter: "anthropic", baseUrl: "https://api.anthropic.com/v1/messages", authMode: "oauth",
+    }, "fixture-token", "anthropic");
+    expect(oauth.url).toBe("https://api.anthropic.com/v1/models?limit=1000");
+    expect(oauth.headers["anthropic-version"]).toBe("2023-06-01");
+    expect(oauth.headers.Authorization).toBe("Bearer fixture-token");
+    expect(oauth.headers["anthropic-beta"]).toContain("oauth-");
+    expect(oauth.headers["x-api-key"]).toBeUndefined();
+    for (const baseUrl of [
+      "https://custom.example/prefix/v1",
+      "https://custom.example/prefix/v1/messages",
+      "https://custom.example/prefix/V1/MESSAGES///",
+      "https://api.anthropic.com:8443/v1/messages",
+      "https://api.anthropic.com/proxy/v1/messages",
+      "https://api.anthropic.com/v1/messages?relay=1",
+      ["https://fixture-user:fixture-pass", "api.anthropic.com/v1/messages"].join("@"),
+    ]) {
+      const custom = buildModelsRequest({ adapter: "anthropic", baseUrl, authMode: "key" }, "fixture-key", "custom-anthropic");
+      expect(custom.url).toBe(`${baseUrl.replace(/\/v1\/?$/, "")}/v1/models?limit=1000`);
+      expect(custom.headers).toEqual({ "anthropic-version": "2023-06-01", "x-api-key": "fixture-key" });
+    }
+  });
+
+  test("native Anthropic context metadata does not match unrelated URL components or adapters", () => {
+    for (const baseUrl of [
+      "http://api.anthropic.com/v1",
+      "https://api.anthropic.com:8443/v1/messages",
+      ["https://user:password", "api.anthropic.com/v1/messages"].join("@"),
+      "https://api.anthropic.com/v1/messages?relay=1",
+      "https://api.anthropic.com/v1/messages#relay",
+      "https://api.anthropic.com/v1/messages?",
+      "https://api.anthropic.com/v1/messages#",
+      "https://api.anthropic.com/proxy/v1/messages",
+      "https://api.anthropic.com/v1/custom",
+      "https://api.anthropic.com/v1/messages/custom",
+      "https://api.anthropic.com.evil.example/v1/messages",
+      "https://custom.example/v1/messages",
+    ]) {
+      expect(providerMatchesRegistryMetadataDestination("anthropic-apikey", { adapter: "anthropic", baseUrl }))
+        .toBe(false);
+    }
+    expect(providerMatchesRegistryMetadataDestination("anthropic-apikey", {
+      adapter: "openai-chat", baseUrl: "https://api.anthropic.com/v1/messages",
+    })).toBe(false);
+    expect(providerMatchesRegistryMetadataDestination("together", {
+      adapter: "openai-chat", baseUrl: "https://api.together.xyz/v1",
+    })).toBe(true);
+    expect(providerMatchesRegistryMetadataDestination("together", {
+      adapter: "openai-chat", baseUrl: "https://api.together.xyz/v1/messages",
+    })).toBe(false);
+  });
+
+  test("Anthropic metadata enrichment leaves credential and destination routing unchanged", () => {
+    for (const [name, authMode] of [["anthropic", "oauth"], ["anthropic-apikey", "key"]] as const) {
+      const configured: CodexCommanderProviderConfig = {
+        adapter: "anthropic",
+        baseUrl: "https://custom.example/anthropic",
+        authMode,
+        apiKey: "test-key",
+        modelContextWindows: { "claude-opus-5-5": 64_000 },
+      };
+      const enriched = structuredClone(configured);
+      enrichProviderFromRegistry(name, enriched);
+      expect(enriched).toMatchObject(configured);
+      expect(enriched.modelContextWindows).toEqual(configured.modelContextWindows);
+      const routed = routeModel({ providers: { [name]: enriched } }, `${name}/claude-opus-5-5`);
+      expect(routed.provider).toMatchObject({
+        adapter: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        authMode,
+        apiKey: "test-key",
+      });
+    }
+  });
+
   test("keeps an opted-in fixed key-provider collision on its configured destination and adapter", async () => {
     await withTogetherDiscovery({}, () => {
       for (const baseUrl of ["https://custom.example/anthropic", "https://api.together.xyz/v1"]) {

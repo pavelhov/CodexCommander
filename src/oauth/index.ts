@@ -9,6 +9,7 @@ import {
   withConfigMutationLockSync,
 } from "../config";
 import { maskEmail } from "../lib/privacy";
+import { canonicalAnthropicApiRoot } from "../lib/anthropic-endpoint";
 import { KiroTokenRefreshError, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
 import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
 import { loginXai, refreshXaiToken, XaiTokenRequestError } from "./xai";
@@ -858,7 +859,8 @@ export function buildModelsRequest(
     return { url: discoveryUrl(`${effectiveProvider.baseUrl}/v1beta/models?pageSize=1000`), headers };
   }
   if (effectiveProvider.adapter === "anthropic") {
-    const base = effectiveProvider.baseUrl.replace(/\/v1\/?$/, "");
+    const base = canonicalAnthropicApiRoot(effectiveProvider.baseUrl)
+      ?? effectiveProvider.baseUrl.replace(/\/v1\/?$/, "");
     headers["anthropic-version"] = "2023-06-01";
     if (effectiveProvider.authMode === "oauth") {
       headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;

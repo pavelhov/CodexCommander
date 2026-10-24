@@ -79,19 +79,107 @@ describe("anthropic extended-thinking gate", () => {
     else expect(b.thinking).toMatchObject({ type: "enabled" });
   });
 
-  test("ordinary Opus 5.5 max effort keeps its existing default", async () => {
-    const b = await bodyOf(parsed("max", {}, "claude-opus-5-5"));
-    expect(b.max_tokens).toBe(40_192);
+  test.each([
+    "claude-opus-5-5",
+    "anthropic/claude-opus-5-5",
+    "claude-opus-5-5-20260922",
+    "claude-opus-5-5[1m]",
+    "claude-opus-5-5/vendor-suffix",
+  ])("ordinary native Opus 5.5 %s gets its documented long-turn default", async modelId => {
+    const request = parsed("max", {}, modelId);
+    const b = await bodyOf(request);
+    expect(b.max_tokens).toBe(128_000);
+    expect(b.thinking).toEqual({ type: "adaptive" });
     expect(b.output_config).toEqual({ effort: "max" });
+    expect(request.options).toEqual({ reasoning: "max" });
   });
 
-  test("custom Anthropic-compatible destinations keep their existing Opus 5.5 limits", async () => {
+  test.each([
+    [undefined, undefined], ["none", undefined], ["minimal", "low"], ["low", "low"],
+    ["medium", "medium"], ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
+    ["ultra", "max"], ["ludicrous", "high"],
+  ])("ordinary native Opus 5.5 default preserves requested effort %s", async (effort, expected) => {
+    const request = parsed(effort, {}, "claude-opus-5-5");
+    const b = await bodyOf(request);
+    expect(b.max_tokens).toBe(128_000);
+    expect(b.output_config).toEqual(expected ? { effort: expected } : undefined);
+    expect(b.thinking).toEqual(expected ? { type: "adaptive" } : undefined);
+    expect(request.options.reasoning).toBe(effort);
+  });
+
+  test.each([4096, 64_000, 160_000])("ordinary native Opus 5.5 preserves explicit total %s", async maxOutputTokens => {
+    for (const effort of [undefined, "none", "max"]) {
+      const request = parsed(effort, { maxOutputTokens }, "claude-opus-5-5");
+      const b = await bodyOf(request);
+      expect(b.max_tokens).toBe(maxOutputTokens);
+      expect(b.output_config).toEqual(effort === "max" ? { effort: "max" } : undefined);
+      expect(request.options.maxOutputTokens).toBe(maxOutputTokens);
+    }
+  });
+
+  test.each([
+    ["claude-opus-5-4", 40_192], ["claude-opus-5-6", 40_192],
+    ["claude-opus-6-5", 40_192], ["claude-opus-5-50", 40_192],
+    ["claude-sonnet-5-5", 40_192], ["claude-fable-5", 40_192],
+    ["custom-model", 32_000], ["claude-opus-4-6", 32_000],
+  ])("ordinary Opus 5.5 policy leaves other model %s unchanged", async (modelId, expectedMax) => {
+    const b = await bodyOf(parsed("max", {}, modelId));
+    expect(b.max_tokens).toBe(expectedMax);
+    if (expectedMax === 40_192) expect(b.output_config).toEqual({ effort: "max" });
+    else expect(b.thinking).toMatchObject({ type: "enabled" });
+  });
+
+  test.each([false, true])("custom Anthropic-compatible destination keeps Opus 5.5 limits (compaction=%s)", async compaction => {
     const request = parsed("max", {}, "claude-opus-5-5");
-    request._compactionRequest = true;
+    request._compactionRequest = compaction;
     const built = await createAnthropicAdapter({ ...provider, baseUrl: "https://gateway.example" }).buildRequest(request);
     const b = JSON.parse(String(built.body));
     expect(b.max_tokens).toBe(40_192);
     expect(b.output_config).toEqual({ effort: "max" });
+  });
+
+  test.each([
+    "http://api.anthropic.com",
+    "https://api.anthropic.com:8443/v1/messages",
+    ["https://fixture-user:fixture-pass", "api.anthropic.com/v1/messages"].join("@"),
+    "https://api.anthropic.com/v1/messages?relay=1",
+    "https://api.anthropic.com/v1/messages#relay",
+    "https://api.anthropic.com/v1/messages?",
+    "https://api.anthropic.com/v1/messages#",
+    "https://api.anthropic.com/proxy/v1/messages",
+    "https://api.anthropic.com/v1/custom",
+    "https://api.anthropic.com.evil.example/v1/messages",
+  ])("non-native Anthropic URL %s retains legacy Opus budgets and effort", async baseUrl => {
+    for (const compaction of [false, true]) {
+      const request = parsed("max", {}, "claude-opus-5-5");
+      request._compactionRequest = compaction;
+      const built = await createAnthropicAdapter({ ...provider, baseUrl }).buildRequest(request);
+      const b = JSON.parse(String(built.body));
+      expect(b.max_tokens).toBe(40_192);
+      expect(b.output_config).toEqual({ effort: "max" });
+      expect(request.options).toEqual({ reasoning: "max" });
+    }
+  });
+
+  test.each([
+    "https://api.anthropic.com",
+    "https://api.anthropic.com/",
+    "https://api.anthropic.com/v1",
+    "https://api.anthropic.com/v1/",
+    "https://api.anthropic.com/v1/messages",
+    "https://api.anthropic.com/v1/messages/",
+    "https://api.anthropic.com/V1/MESSAGES///",
+    "https://api.anthropic.com:443/v1/messages",
+  ])("native Anthropic URL %s shares ordinary and compaction budgets", async baseUrl => {
+    for (const compaction of [false, true]) {
+      const request = parsed("max", {}, "claude-opus-5-5");
+      request._compactionRequest = compaction;
+      const built = await createAnthropicAdapter({ ...provider, baseUrl }).buildRequest(request);
+      const b = JSON.parse(String(built.body));
+      expect(b.max_tokens).toBe(compaction ? 64_000 : 128_000);
+      expect(b.output_config).toEqual({ effort: compaction ? "medium" : "max" });
+      expect(request.options).toEqual({ reasoning: "max" });
+    }
   });
 
   test("reasoning 'none' does NOT enable thinking and preserves temperature/top_p", async () => {

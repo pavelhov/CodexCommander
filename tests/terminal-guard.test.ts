@@ -5,7 +5,53 @@ import {
   guardTerminalEventStream,
 } from "../src/server/responses/terminal-guard";
 import { buildResponseJSON } from "../src/bridge";
+import { createAnthropicAdapter } from "../src/adapters/anthropic";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
 import type { AdapterEvent, CodexCommanderParsedRequest } from "../src/types";
+
+function anthropicThinkingTurn(withTool = false): Response {
+  const frame = (type: string, data: Record<string, unknown>) =>
+    `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+  const frames = [frame("message_start", { message: { usage: { input_tokens: 10 } } })];
+  let index = 0;
+  for (const block of [
+    { type: "redacted_thinking", data: "FAKE_REDACTED_BEFORE" },
+    { type: "thinking", thinking: "first signed chain", signature: "FakeFirstSignature123456==" },
+    { type: "redacted_thinking", data: "FAKE_REDACTED_MIDDLE" },
+    { type: "thinking", thinking: "", signature: "FakeEmptySignature123456==" },
+    { type: "thinking", thinking: "second signed chain", signature: "FakeSecondSignature123456==" },
+    { type: "redacted_thinking", data: "FAKE_REDACTED_AFTER" },
+  ]) {
+    frames.push(frame("content_block_start", {
+      index, content_block: block.type === "thinking" ? { type: "thinking", thinking: "" } : block,
+    }));
+    if (block.type === "thinking") {
+      if (block.thinking) frames.push(frame("content_block_delta", {
+        index, delta: { type: "thinking_delta", thinking: block.thinking },
+      }));
+      // Real streams fragment signatures; the adapter closes each complete signature at stop.
+      for (const signature of [block.signature!.slice(0, 7), block.signature!.slice(7)]) {
+        frames.push(frame("content_block_delta", { index, delta: { type: "signature_delta", signature } }));
+      }
+    }
+    frames.push(frame("content_block_stop", { index }));
+    index += 1;
+  }
+  frames.push(frame("content_block_start", { index, content_block: { type: "text", text: "" } }));
+  frames.push(frame("content_block_delta", { index, delta: { type: "text_delta", text: "I'll fix the parser." } }));
+  frames.push(frame("content_block_stop", { index }));
+  if (withTool) {
+    index += 1;
+    frames.push(frame("content_block_start", {
+      index, content_block: { type: "tool_use", id: "toolu_fake", name: "exec_command", input: {} },
+    }));
+    frames.push(frame("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: "{}" } }));
+    frames.push(frame("content_block_stop", { index }));
+  }
+  frames.push(frame("message_delta", { delta: { stop_reason: withTool ? "tool_use" : "end_turn" }, usage: { output_tokens: 2 } }));
+  frames.push(frame("message_stop", {}));
+  return new Response(frames.join(""), { headers: { "content-type": "text/event-stream" } });
+}
 
 function parsed(userText: string, withTools = true): CodexCommanderParsedRequest {
   return {
@@ -159,6 +205,82 @@ describe("terminal guard", () => {
     expect(next.context.messages).toHaveLength(3);
     expect(next.context.messages[1]).toMatchObject({ role: "assistant" });
     expect(next.context.messages[2]).toMatchObject({ role: "developer" });
+  });
+
+  test("replays native signed blocks, empty signed blocks and redactions intact in the no-tool continuation", async () => {
+    const adapter = withTestTranslatorBudget(createAnthropicAdapter({
+      adapter: "anthropic", baseUrl: "https://example.test", apiKey: "sk-test",
+    }));
+    const original = parsed("Fix the parser");
+    original.modelId = "claude-opus-5-5";
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(anthropicThinkingTurn())) events.push(event);
+    expect(analyzeTerminalTurn(original, events).decision).toBe("continue");
+
+    const expectedContent = [
+      { type: "redacted_thinking", data: "FAKE_REDACTED_BEFORE" },
+      { type: "thinking", thinking: "first signed chain", signature: "FakeFirstSignature123456==" },
+      { type: "redacted_thinking", data: "FAKE_REDACTED_MIDDLE" },
+      { type: "thinking", thinking: "", signature: "FakeEmptySignature123456==" },
+      { type: "thinking", thinking: "second signed chain", signature: "FakeSecondSignature123456==" },
+      { type: "redacted_thinking", data: "FAKE_REDACTED_AFTER" },
+      { type: "text", text: "I'll fix the parser." },
+    ];
+    const assistantContent = async (next: CodexCommanderParsedRequest) => {
+      const request = await adapter.buildRequest(next) as { body: string };
+      const body = JSON.parse(request.body) as { messages: Array<{ role: string; content: unknown }> };
+      return body.messages.find(message => message.role === "assistant")?.content;
+    };
+    expect(await assistantContent(buildContinuationRequest(original, events))).toEqual(expectedContent);
+    expect(original.context.messages).toHaveLength(1);
+
+    let continuations = 0;
+    const output: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: original,
+      firstEvents: (async function* () { yield* events; })(),
+      adapterName: "anthropic",
+      continuation: async next => {
+        continuations += 1;
+        expect(await assistantContent(next)).toEqual(expectedContent);
+        return (async function* (): AsyncGenerator<AdapterEvent> {
+          yield { type: "tool_call_start", id: "toolu_next", name: "exec_command" };
+          yield { type: "tool_call_delta", arguments: "{}" };
+          yield { type: "tool_call_end" };
+          yield { type: "done" };
+        })();
+      },
+    })) output.push(event);
+    expect(continuations).toBe(1);
+    expect(output.filter(event => event.type === "assistant_boundary")).toHaveLength(1);
+    expect(output.filter(event => event.type === "thinking_signature")).toEqual(events.filter(event => event.type === "thinking_signature"));
+    expect(output.filter(event => event.type === "redacted_thinking")).toEqual(events.filter(event => event.type === "redacted_thinking"));
+    expect(output.filter(event => event.type === "done")).toHaveLength(1);
+    expect(output.some(event => event.type === "tool_call_start")).toBe(true);
+  });
+
+  test("native signed thinking does not activate the guard without available tools or after a tool call", async () => {
+    for (const withTool of [false, true]) {
+      const adapter = withTestTranslatorBudget(createAnthropicAdapter({
+        adapter: "anthropic", baseUrl: "https://example.test", apiKey: "sk-test",
+      }));
+      let continuations = 0;
+      const output: AdapterEvent[] = [];
+      for await (const event of guardTerminalEventStream({
+        parsed: parsed("Fix the parser", withTool),
+        firstEvents: adapter.parseStream(anthropicThinkingTurn(withTool)),
+        adapterName: "anthropic",
+        continuation: () => {
+          continuations += 1;
+          return (async function* (): AsyncGenerator<AdapterEvent> { yield { type: "done" }; })();
+        },
+      })) output.push(event);
+      expect(continuations).toBe(0);
+      expect(output.some(event => event.type === "assistant_boundary")).toBe(false);
+      expect(output.filter(event => event.type === "thinking_signature")).toHaveLength(3);
+      expect(output.filter(event => event.type === "done")).toHaveLength(1);
+      expect(output.some(event => event.type === "tool_call_start")).toBe(withTool);
+    }
   });
 
   test("can guard a fetch-based adapter stream with a continuation callback", async () => {

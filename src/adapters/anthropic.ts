@@ -1,5 +1,6 @@
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
+import { isCanonicalAnthropicEndpoint } from "../lib/anthropic-endpoint";
 import type {
   AdapterEvent,
   CodexCommanderAssistantMessage,
@@ -43,6 +44,8 @@ const REASONING_MAX_TOKENS_CEILING = 32_000;
 /** Ordinary adaptive-thinking sizing: heuristic max effort allowance (32k) + 8192.
  * Adaptive effort is soft guidance, so this total does not reserve a hard visible-output portion. */
 const ADAPTIVE_THINKING_CEILING = 40_192;
+/** Documented total-token allowance for long native Opus 5.5 agent turns. */
+const OPUS_5_5_MAX_TOKENS = 128_000;
 /** Bounded thinking + summary total for native Opus 5.5 maintenance compactions. */
 const OPUS_5_5_COMPACTION_MAX_TOKENS = 64_000;
 /** Anthropic's documented minimum `thinking.budget_tokens`. */
@@ -854,20 +857,22 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
       enforceAnthropicImageLimits(messages);
       const tools = toolsToAnthropicFormat(parsed, toolNames);
 
-      // Compaction is a handoff summary, not another maximum-effort agent turn. Opus 5.5
-      // always thinks; adaptive effort has no fixed thinking budget and can consume the
-      // ordinary 40192-token total before finishing its summary. Keep this policy local
-      // to the known model and native endpoint: compatible gateways may have lower limits.
-      const version = parsed._compactionRequest === true ? claudeFamilyVersion(parsed.modelId) : undefined;
-      const opusCompaction = version?.family === "opus" && version.major === 5 && version.minor === 5
-        && usesNativeAnthropicEndpoint(provider);
+      // Adaptive effort has no fixed thinking reservation: the legacy effort heuristic
+      // can exhaust its shared total before an ordinary Opus 5.5 turn finishes. Use the
+      // documented long-turn allowance only for this known model and native endpoint;
+      // compatible gateways may have lower limits. Compaction keeps its smaller summary
+      // allowance and effort cap, while an explicit caller total always wins.
+      const version = claudeFamilyVersion(parsed.modelId);
+      const nativeOpus55 = version?.family === "opus" && version.major === 5 && version.minor === 5
+        && isCanonicalAnthropicEndpoint(provider.baseUrl);
+      const opusCompaction = nativeOpus55 && parsed._compactionRequest === true;
       const requestedEffort = parsed.options.reasoning;
       const reasoningEffort = opusCompaction
         && requestedEffort !== "none" && requestedEffort !== "minimal" && requestedEffort !== "low"
         ? "medium"
         : requestedEffort;
       const maxOutputTokens = parsed.options.maxOutputTokens
-        ?? (opusCompaction ? OPUS_5_5_COMPACTION_MAX_TOKENS : undefined);
+        ?? (nativeOpus55 ? (opusCompaction ? OPUS_5_5_COMPACTION_MAX_TOKENS : OPUS_5_5_MAX_TOKENS) : undefined);
       // Do not mutate parsed.options: requested-effort diagnostics describe the client.
       // Anthropic has no reasoningLog field for output_config.effort in the shared contract.
 
@@ -912,8 +917,8 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
           const explicitMaxOut = maxOutputTokens;
           const wantBudget = reasoningBudget(reasoningEffort);
           const floor = wantBudget + OUTPUT_HEADROOM;
-          // Preserve caller limits and the scoped compaction total. Ordinary omitted limits
-          // use heuristic sizing; adaptive thinking does not enforce wantBudget separately.
+          // Preserve caller limits and scoped model totals. Other omitted limits use
+          // heuristic sizing; adaptive thinking does not enforce wantBudget separately.
           body.max_tokens = explicitMaxOut !== undefined
             ? explicitMaxOut
             : Math.min(ADAPTIVE_THINKING_CEILING, Math.max(DEFAULT_MAX_TOKENS, floor));
@@ -993,6 +998,19 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
 
       const budgetEncoder = new TextEncoder();
       let currentBlockType = "";
+      // Accumulated signature_delta fragments for the open thinking block; emitted once, whole,
+      // at content_block_stop so downstream sees exactly one signature per signed block.
+      let currentThinkingSignature = "";
+      // Retained bytes charged to the translator budget for currentThinkingSignature. The SSE
+      // decoder releases its per-frame charge, so the cross-frame collector charges itself.
+      let currentThinkingSignatureBytes = 0;
+      const resetThinkingSignature = (): void => {
+        if (currentThinkingSignatureBytes > 0) {
+          budget.releaseRetained(currentThinkingSignatureBytes, { kind: "reasoning" });
+        }
+        currentThinkingSignature = "";
+        currentThinkingSignatureBytes = 0;
+      };
       let currentToolCallId = "";
       let currentToolCallName = "";
       let currentToolCallJson = "";
@@ -1044,7 +1062,12 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
               case "content_block_start": {
                 const block = data.content_block as { type: string; id?: string; name?: string; data?: string } | undefined;
                 if (!block) break;
+                if (currentBlockType === "thinking" || currentBlockType === "reasoning") {
+                  yield { type: "error", message: "Anthropic stream started a new block before thinking content_block_stop — possible truncation" };
+                  return;
+                }
                 currentBlockType = block.type;
+                resetThinkingSignature();
                 if (block.type === "tool_use") {
                   currentToolCallId = usableToolUseId(block.id);
                   currentToolCallName = toolNames.fromWire(block.name ?? "");
@@ -1075,9 +1098,20 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
                   // later text blocks independent.
                   yield { type: "thinking_delta", thinking: delta.reasoning };
                 } else if (delta.type === "signature_delta" && typeof delta.signature === "string" && (currentBlockType === "thinking" || currentBlockType === "reasoning")) {
-                  // Arrives once, just before the thinking block's content_block_stop; block-scoped
-                  // so a stray signature on a non-thinking block can never be captured.
-                  yield { type: "thinking_signature", signature: delta.signature };
+                  // Block-scoped so a stray signature on a non-thinking block can never be
+                  // captured. Fragments are concatenated and released at content_block_stop.
+                  const previousBytes = currentThinkingSignatureBytes;
+                  const nextBytes = previousBytes + budgetEncoder.encode(delta.signature).byteLength;
+                  const reservation = budget.reserveTransient(nextBytes, { kind: "reasoning" });
+                  try {
+                    currentThinkingSignature += delta.signature;
+                    currentThinkingSignatureBytes = nextBytes;
+                    reservation.commitRetained();
+                    if (previousBytes > 0) budget.releaseRetained(previousBytes, { kind: "reasoning" });
+                  } catch (error) {
+                    reservation.release();
+                    throw error;
+                  }
                 } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string" && currentBlockType === "tool_use") {
                   // Forwarded immediately: the bridge maps each delta to a client-visible
                   // response.function_call_arguments.delta frame, so withholding fragments until
@@ -1099,6 +1133,12 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
                 break;
               }
               case "content_block_stop": {
+                if ((currentBlockType === "thinking" || currentBlockType === "reasoning") && currentThinkingSignature) {
+                  // A signature is only valid for its completed block; a block cut off before
+                  // its stop never yields a partial, unreplayable signature.
+                  yield { type: "thinking_signature", signature: currentThinkingSignature };
+                }
+                resetThinkingSignature();
                 if (currentBlockType === "tool_use") {
                   // The non-stream path repairs an unparseable payload in toolUseArguments(); the
                   // stream cannot, because the fragments are already downstream. Fail the turn
@@ -1128,6 +1168,10 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
                 break;
               }
               case "message_stop": {
+                if (currentBlockType === "thinking" || currentBlockType === "reasoning") {
+                  yield { type: "error", message: "Anthropic stream ended before thinking content_block_stop — possible truncation" };
+                  return;
+                }
                 yield* emitDone();
                 break;
               }
@@ -1153,8 +1197,13 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
         return;
       } finally {
         if (currentToolCallId) budget.closeCall(currentToolCallId);
+        resetThinkingSignature();
       }
       if (!emittedDone) {
+        if (currentBlockType === "thinking" || currentBlockType === "reasoning") {
+          yield { type: "error", message: "Anthropic stream ended before thinking content_block_stop — possible truncation" };
+          return;
+        }
         // Fail closed on transport EOF. Compatible providers may omit message_stop after message_delta.stop_reason.
         if (pendingStopReason !== undefined) {
           const stopReason = pendingStopReason === "max_tokens"
