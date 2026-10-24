@@ -33,6 +33,19 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+The Anthropic adapter applies a maintenance-only budget to fresh routed compaction requests
+for the verified Opus 5.5 model on the canonical Anthropic API: effort is capped at `medium`
+without raising lower efforts, and an omitted output limit becomes 64,000 total tokens.
+Explicit limits remain authoritative. Adaptive thinking has no fixed `budget_tokens`
+reservation, so the ordinary effort-to-output heuristic cannot guarantee room for summary
+text. Both v1 compact and v2 `compaction_trigger` requests carry `_compactionRequest` to this
+boundary; replayed summaries do not activate it. Other models, custom destinations, and ordinary
+work retain their existing behavior. Token-limit stops remain incomplete and install no partial
+compaction item; there is no automatic retry or model substitution.
+Routed Anthropic v1 compact generation streams internally and consumes the bounded Responses
+terminal through the SSE decoder before building the v1 JSON replacement history. This preserves
+the header deadline, ping-aware stall watchdog, and client cancellation for long summaries.
+
 ### Responses reasoning effort boundary
 
 `openai-responses` preserves the caller's Responses request shape and the upstream response shape;

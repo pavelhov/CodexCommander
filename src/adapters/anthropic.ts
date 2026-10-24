@@ -40,9 +40,11 @@ function toAnthropicContentPart(p: CodexCommanderContentPart): unknown {
 const DEFAULT_MAX_TOKENS = 8192;
 /** Safe ceiling for `max_tokens` (thinking + visible output) across current Claude 4.x models. */
 const REASONING_MAX_TOKENS_CEILING = 32_000;
-/** Adaptive-thinking ceiling: max effort budget (32k) + OUTPUT_HEADROOM (8k).
- *  Must exceed REASONING_MAX_TOKENS_CEILING so effort=max actually preserves visible-output room. */
+/** Ordinary adaptive-thinking sizing: heuristic max effort allowance (32k) + 8192.
+ * Adaptive effort is soft guidance, so this total does not reserve a hard visible-output portion. */
 const ADAPTIVE_THINKING_CEILING = 40_192;
+/** Bounded thinking + summary total for native Opus 5.5 maintenance compactions. */
+const OPUS_5_5_COMPACTION_MAX_TOKENS = 64_000;
 /** Anthropic's documented minimum `thinking.budget_tokens`. */
 const MIN_THINKING_BUDGET = 1024;
 /** Visible-output room added above the thinking budget when sizing `max_tokens`. */
@@ -852,11 +854,28 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
       enforceAnthropicImageLimits(messages);
       const tools = toolsToAnthropicFormat(parsed, toolNames);
 
+      // Compaction is a handoff summary, not another maximum-effort agent turn. Opus 5.5
+      // always thinks; adaptive effort has no fixed thinking budget and can consume the
+      // ordinary 40192-token total before finishing its summary. Keep this policy local
+      // to the known model and native endpoint: compatible gateways may have lower limits.
+      const version = parsed._compactionRequest === true ? claudeFamilyVersion(parsed.modelId) : undefined;
+      const opusCompaction = version?.family === "opus" && version.major === 5 && version.minor === 5
+        && usesNativeAnthropicEndpoint(provider);
+      const requestedEffort = parsed.options.reasoning;
+      const reasoningEffort = opusCompaction
+        && requestedEffort !== "none" && requestedEffort !== "minimal" && requestedEffort !== "low"
+        ? "medium"
+        : requestedEffort;
+      const maxOutputTokens = parsed.options.maxOutputTokens
+        ?? (opusCompaction ? OPUS_5_5_COMPACTION_MAX_TOKENS : undefined);
+      // Do not mutate parsed.options: requested-effort diagnostics describe the client.
+      // Anthropic has no reasoningLog field for output_config.effort in the shared contract.
+
       const body: Record<string, unknown> = {
         model: parsed.modelId,
         messages,
         stream: parsed.stream,
-        max_tokens: parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
+        max_tokens: maxOutputTokens ?? DEFAULT_MAX_TOKENS,
       };
       if (isOAuth) {
         // Claude OAuth (Pro/Max) requires the first system block to be the Claude Code identity.
@@ -880,21 +899,21 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
       // anyway, and thinking shares the caller's `max_tokens` — which truncates a small-budget
       // request before it can emit its stop sequence (#545). Say "disabled" out loud where the
       // model both defaults to thinking and accepts being told not to.
-      if (parsed.options.reasoning === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
+      if (reasoningEffort === "none" && supportsExplicitThinkingDisable(parsed.modelId)) {
         body.thinking = { type: "disabled" };
-      } else if (typeof parsed.options.reasoning === "string" && parsed.options.reasoning !== "none") {
+      } else if (typeof reasoningEffort === "string" && reasoningEffort !== "none") {
         if (usesAdaptiveThinking(parsed.modelId)) {
           // Adaptive-thinking models replace the token budget with an effort knob and reject
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
           // output, so high effort needs the same total-token headroom as budget thinking or a
           // default 8192-token request can spend everything on thought and return empty text.
           body.thinking = { type: "adaptive" };
-          body.output_config = { effort: adaptiveEffort(parsed.options.reasoning) };
-          const explicitMaxOut = parsed.options.maxOutputTokens;
-          const wantBudget = reasoningBudget(parsed.options.reasoning);
+          body.output_config = { effort: adaptiveEffort(reasoningEffort) };
+          const explicitMaxOut = maxOutputTokens;
+          const wantBudget = reasoningBudget(reasoningEffort);
           const floor = wantBudget + OUTPUT_HEADROOM;
-          // Preserve explicit caller limits as-is; for omitted limits use the adaptive ceiling
-          // so effort=max (budget=32k) still leaves OUTPUT_HEADROOM tokens for visible output.
+          // Preserve caller limits and the scoped compaction total. Ordinary omitted limits
+          // use heuristic sizing; adaptive thinking does not enforce wantBudget separately.
           body.max_tokens = explicitMaxOut !== undefined
             ? explicitMaxOut
             : Math.min(ADAPTIVE_THINKING_CEILING, Math.max(DEFAULT_MAX_TOKENS, floor));
@@ -903,8 +922,8 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
           // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
           // 400s ("max_tokens must be greater than thinking.budget_tokens"). Size them so max_tokens
           // always exceeds the budget within a model-safe ceiling, reserving room for visible output.
-          const maxOut = parsed.options.maxOutputTokens ?? DEFAULT_MAX_TOKENS;
-          const wantBudget = reasoningBudget(parsed.options.reasoning);
+          const maxOut = maxOutputTokens ?? DEFAULT_MAX_TOKENS;
+          const wantBudget = reasoningBudget(reasoningEffort);
           const maxTokens = Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
           const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));
           body.max_tokens = maxTokens;

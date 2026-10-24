@@ -27,6 +27,8 @@ import { supportsNativeResponsesCompactEndpoint } from "../src/providers/openai-
 import type { RequestLogContext } from "../src/server/request-log";
 import { acquireNativeMainProfileDrain, tryAdmitTurn } from "../src/server/lifecycle";
 import type { CodexCommanderConfig, CodexCommanderProviderConfig } from "../src/types";
+import { decodeCompactionSummary, encodeCompactionSummary } from "../src/responses/compaction";
+import { translatorAggregateCurrentBytesForTests, translatorLiveBudgetCountForTests } from "../src/lib/translator-budget";
 
 const originalFetch = globalThis.fetch;
 
@@ -136,6 +138,231 @@ function sseResponse(events: Array<Record<string, unknown>>): Response {
     headers: { "content-type": "text/event-stream" },
   });
 }
+
+describe("Opus 5.5 compaction output policy through the real Anthropic adapter", () => {
+  const config = keyProviderConfig({ adapter: "anthropic", baseUrl: "https://api.anthropic.com" });
+  type WireScalars = { model: unknown; maxTokens: unknown; thinking: unknown; effort: unknown; stream: unknown; tools: boolean };
+  function stubAnthropic(stopReason = "end_turn") {
+    const sent: WireScalars[] = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      // Retain only synthetic wire-policy scalars, never request history or headers.
+      sent.push({ model: body.model, maxTokens: body.max_tokens, thinking: body.thinking?.type,
+        effort: body.output_config?.effort, stream: body.stream, tools: body.tools !== undefined });
+      // A compact synthetic workload needs 45000 total generated tokens; no large
+      // generated text is needed to expose the former 40192-token truncation.
+      const outputTokens = Math.min(body.max_tokens, 45_000);
+      const effectiveStop = body.max_tokens < 45_000 ? "max_tokens" : stopReason;
+      if (!body.stream) return jsonResponse({
+        content: [{ type: "text", text: "Progress and next steps." }],
+        stop_reason: effectiveStop, usage: { input_tokens: 20, output_tokens: outputTokens },
+      });
+      return sseResponse([
+        { type: "message_start", message: { usage: { input_tokens: 20, output_tokens: 0 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+        { type: "ping" },
+        { type: "content_block_stop", index: 0 },
+        { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "Progress and next steps." } },
+        { type: "content_block_stop", index: 1 },
+        { type: "message_delta", delta: { stop_reason: effectiveStop }, usage: { output_tokens: outputTokens } },
+        { type: "message_stop" },
+      ]);
+    }) as typeof fetch;
+    return sent;
+  }
+  function body(extra: Record<string, unknown> = {}) {
+    return baseCompactionBody({ model: "gw/claude-opus-5-5", reasoning: { effort: "max" }, stream: true, ...extra });
+  }
+  function terminal(text: string) {
+    const frames = text.split("\n\n").flatMap(frame => {
+      const data = frame.split("\n").find(line => line.startsWith("data: "))?.slice(6);
+      return data && data !== "[DONE]" ? [JSON.parse(data)] : [];
+    });
+    const terminals = frames.filter(frame => frame.type === "response.completed" || frame.type === "response.incomplete");
+    expect(terminals).toHaveLength(1);
+    return terminals[0].response as { status: string; output: Array<{ type: string; encrypted_content: string }>; incomplete_details?: { reason: string } };
+  }
+
+  test.each(["v1", "v2"])("%s compaction gets one complete summary at medium with a bounded total", async version => {
+    const sent = stubAnthropic();
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    if (version === "v1") {
+      const requestBody = body();
+      (requestBody.input as Array<{ type: string }>).pop();
+      const response = await handleResponsesCompact(compactionRequest(requestBody), config, logCtx);
+      expect(response.status).toBe(200);
+      const json = await response.json() as { output: Array<{ type: string; content: Array<{ text: string }> }> };
+      expect(json.output.at(-1)?.content[0]?.text).toContain("Progress and next steps.");
+      expect(json.output.every(item => item.type === "message")).toBe(true);
+    } else {
+      const response = await handleResponses(compactionRequest(body()), config, logCtx);
+      const result = terminal(await response.text());
+      expect(result.status).toBe("completed");
+      expect(result.output).toHaveLength(1);
+      expect(result.output[0]!.type).toBe("compaction");
+      expect(decodeCompactionSummary(result.output[0]!.encrypted_content)).toBe("Progress and next steps.");
+    }
+    expect(sent).toEqual([{ model: "claude-opus-5-5", maxTokens: 64_000, thinking: "adaptive",
+      effort: "medium", stream: true, tools: false }]);
+    expect(logCtx.usage?.outputTokens).toBe(45_000);
+  });
+
+  test.each([4096, 96_000])("both compaction endpoints preserve caller total %s", async maxOutputTokens => {
+    const sent = stubAnthropic();
+    const requestBody = body({ max_output_tokens: maxOutputTokens });
+    await (await handleResponses(compactionRequest(requestBody), config, { model: "", provider: "" })).text();
+    await (await handleResponsesCompact(compactionRequest(requestBody), config, { model: "", provider: "" })).text();
+    expect(sent).toHaveLength(2);
+    expect(sent.map(item => [item.maxTokens, item.effort])).toEqual([[maxOutputTokens, "medium"], [maxOutputTokens, "medium"]]);
+  });
+
+  test.each(["compaction", "context_compaction"])("stored %s history does not start the maintenance policy", async type => {
+    const sent = stubAnthropic();
+    await (await handleResponses(compactionRequest(body({
+      input: [{ type, encrypted_content: encodeCompactionSummary("Earlier progress.") },
+        { type: "message", role: "user", content: "Continue." }],
+    })), config, { model: "", provider: "" })).text();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ maxTokens: 40_192, effort: "max" });
+  });
+
+  test.each(["v1", "v2"])("%s max_tokens keeps partial summaries out of replacement history without retrying", async version => {
+    const sent = stubAnthropic("max_tokens");
+    if (version === "v1") {
+      const response = await handleResponsesCompact(compactionRequest(body()), config, { model: "", provider: "" });
+      expect(response.status).toBe(502);
+      const json = await response.json() as { error: { message: string }; output?: unknown };
+      expect(json.error.message).toContain("did not complete");
+      expect(json.output).toBeUndefined();
+    } else {
+      const response = await handleResponses(compactionRequest(body()), config, { model: "", provider: "" });
+      const result = terminal(await response.text());
+      expect(result.status).toBe("incomplete");
+      expect(result.incomplete_details?.reason).toBe("max_output_tokens");
+      expect(result.output.some(item => item.type === "compaction")).toBe(false);
+    }
+    expect(sent).toHaveLength(1);
+  });
+
+  function delayedAnthropic(end: "complete" | "eof" | "error" | "wait") {
+    let sends = 0;
+    let cancellations = 0;
+    let pingCount = 0;
+    let upstreamBody: ReadableStream<Uint8Array> | undefined;
+    let fetched!: () => void;
+    const fetchStarted = new Promise<void>(resolve => { fetched = resolve; });
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      sends++;
+      const stream = JSON.parse(String(init?.body ?? "{}")).stream === true;
+      fetched();
+      if (!stream) {
+        // A nonstreaming provider cannot return headers until generation is done.
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 90);
+          init?.signal?.addEventListener("abort", () => { clearTimeout(timer); reject(init.signal?.reason); }, { once: true });
+        });
+        return jsonResponse({ content: [{ type: "text", text: "Delayed summary." }], stop_reason: "end_turn" });
+      }
+      const encoder = new TextEncoder();
+      let pingTimer: ReturnType<typeof setInterval>;
+      let finishTimer: ReturnType<typeof setTimeout> | undefined;
+      let stopped = false;
+      let controller: ReadableStreamDefaultController<Uint8Array>;
+      const clear = () => {
+        clearInterval(pingTimer);
+        clearTimeout(finishTimer);
+        init?.signal?.removeEventListener("abort", onAbort);
+      };
+      const cancel = () => {
+        if (stopped) return;
+        stopped = true;
+        cancellations++;
+        clear();
+      };
+      // Match fetch semantics: aborting after headers rejects a locked body read too.
+      const onAbort = () => { cancel(); controller.error(init?.signal?.reason); };
+      upstreamBody = new ReadableStream<Uint8Array>({
+        start(source) {
+          controller = source;
+          init?.signal?.addEventListener("abort", onAbort, { once: true });
+          pingTimer = setInterval(() => {
+            pingCount++;
+            controller.enqueue(encoder.encode('event: ping\ndata: {"type":"ping"}\n\n'));
+          }, 10);
+          if (end !== "wait") finishTimer = setTimeout(() => {
+            clear();
+            stopped = true;
+            controller.enqueue(encoder.encode('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Delayed summary."}}\n\n'));
+            if (end === "complete") controller.enqueue(encoder.encode('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":20,"output_tokens":45000}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n'));
+            if (end === "error") controller.enqueue(encoder.encode('event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Synthetic upstream failure"}}\n\n'));
+            controller.close();
+          }, 90);
+        },
+        cancel,
+      });
+      return new Response(upstreamBody, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    return { fetchStarted, sends: () => sends, cancellations: () => cancellations,
+      pingCount: () => pingCount, body: () => upstreamBody };
+  }
+
+  test("v1 consumes Anthropic SSE beyond the header deadline and returns one JSON history", async () => {
+    const liveBudgets = translatorLiveBudgetCountForTests();
+    const retainedBytes = translatorAggregateCurrentBytesForTests();
+    const upstream = delayedAnthropic("complete");
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponsesCompact(compactionRequest(body()), { ...config, connectTimeoutMs: 30 }, logCtx);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const json = await response.json() as { output: Array<{ type: string; content: Array<{ text: string }> }> };
+    expect(json.output.at(-1)?.content[0]?.text).toContain("Delayed summary.");
+    expect(json.output.every(item => item.type === "message")).toBe(true);
+    expect(logCtx.usage?.outputTokens).toBe(45_000);
+    expect(upstream.sends()).toBe(1);
+    expect(upstream.pingCount()).toBeGreaterThan(0);
+    expect(upstream.body()?.locked).toBe(false);
+    expect(translatorLiveBudgetCountForTests()).toBe(liveBudgets);
+    expect(translatorAggregateCurrentBytesForTests()).toBe(retainedBytes);
+  });
+
+  test.each(["eof", "error"] as const)("v1 Anthropic SSE %s cannot install a partial summary", async end => {
+    const liveBudgets = translatorLiveBudgetCountForTests();
+    const retainedBytes = translatorAggregateCurrentBytesForTests();
+    const upstream = delayedAnthropic(end);
+    const response = await handleResponsesCompact(compactionRequest(body()), { ...config, connectTimeoutMs: 30 }, { model: "", provider: "" });
+    expect(response.status).toBe(502);
+    const json = await response.json() as { error?: unknown; output?: unknown };
+    expect(json.error).toBeDefined();
+    expect(json.output).toBeUndefined();
+    expect(upstream.sends()).toBe(1);
+    expect(upstream.body()?.locked).toBe(false);
+    expect(translatorLiveBudgetCountForTests()).toBe(liveBudgets);
+    expect(translatorAggregateCurrentBytesForTests()).toBe(retainedBytes);
+  });
+
+  test("v1 client abort cancels the Anthropic SSE reader and returns no history", async () => {
+    const liveBudgets = translatorLiveBudgetCountForTests();
+    const retainedBytes = translatorAggregateCurrentBytesForTests();
+    const upstream = delayedAnthropic("wait");
+    const abort = new AbortController();
+    const pending = handleResponsesCompact(compactionRequest(body(), abort.signal), { ...config, connectTimeoutMs: 30 }, { model: "", provider: "" });
+    await upstream.fetchStarted;
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    abort.abort();
+    const response = await pending;
+    // The shared bridge closes its adapter generator asynchronously on cancellation.
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
+    expect(response.status).toBe(499);
+    const json = await response.json() as { output?: unknown };
+    expect(json.output).toBeUndefined();
+    expect(upstream.sends()).toBe(1);
+    expect(upstream.cancellations()).toBe(1);
+    expect(upstream.body()?.locked).toBe(false);
+    expect(translatorLiveBudgetCountForTests()).toBe(liveBudgets);
+    expect(translatorAggregateCurrentBytesForTests()).toBe(retainedBytes);
+  });
+});
 
 describe("supportsNativeResponsesCompactEndpoint (#422)", () => {
   const canonicalForward = {
