@@ -112,6 +112,17 @@ Anthropic SSE comments and `ping` events count as upstream activity, including w
 thinking during context compaction. Proxy-generated keep-alives do not reset the stall deadline;
 an upstream connection that stops sending activity still times out.
 
+For Opus 5.5 through the canonical Anthropic API, routed context compaction uses at most
+`medium` reasoning effort and defaults to a 64,000-token total output limit when the caller
+omits one. Adaptive thinking and summary text share that limit; effort does not reserve a
+fixed number of tokens for the summary. Explicit output limits and lower reasoning efforts
+are preserved. This maintenance policy applies to both compaction endpoints; ordinary work
+keeps its requested effort and existing defaults. A truncated summary still fails instead
+of replacing the conversation history, and the proxy does not automatically retry it.
+The older compact endpoint streams routed Anthropic generation internally, then returns one
+JSON response to its caller. This lets upstream pings keep a long summary alive without
+extending the connection-header timeout or removing the silence watchdog.
+
 Tool calls are disambiguated into three Responses item types using the namespace map, the freeform
 set, and the tool-search set captured by the parser — so MCP namespaces, `apply_patch`-style freeform
 tools, and client-executed `tool_search` all round-trip. A `buildResponseJSON()` variant produces a

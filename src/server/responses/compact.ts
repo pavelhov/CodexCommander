@@ -2,6 +2,8 @@ import { resolveCodexTaskIdentity } from "../../codex/task-identity";
 import { rememberNativeArtifacts } from "../../codex/native-ownership";
 import { nativeClientMetadata, nativeCompatibilityPolicy, nativeRequestOwner, nativeReplayScope, nativeTurnId, NATIVE_RESPONSES_HEADERS } from "../../responses/native-policy";
 import { UpstreamSendBudget } from "../../lib/upstream-send-budget";
+import { decodeServerSentEvents } from "../../lib/sse-decoder";
+import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { initializeRequestDispatch, requestDispatchContext } from "../request-log";
 import { cleanupResponseDispatch, responseDispatch, observeDispatch } from "../../usage/dispatch-http";
 import type { Server } from "bun";
@@ -121,6 +123,37 @@ import { decodeRequestErrorResponse, handleResponses, usesCodexForwardPoolAuth }
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 
 export const COMPACT_RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
+
+type CompactTurnResponse = { output?: unknown[]; status?: unknown; error?: unknown };
+
+/** Consume the bounded internal Responses stream; the external compact protocol stays JSON. */
+async function readCompactTurnStream(response: Response, signal: AbortSignal, budget: TranslatorBudget): Promise<CompactTurnResponse> {
+  if (!response.body) throw new Error("missing compaction stream");
+  for await (const record of decodeServerSentEvents(response.body, { signal, translatorBudget: budget })) {
+    if (signal.aborted) throw signal.reason;
+    if (record.data === "[DONE]") break;
+    const reservation = budget.reserveTransient(Buffer.byteLength(record.data), { kind: "retained_collectors" });
+    try {
+      const frame = JSON.parse(record.data) as { type?: string; response?: CompactTurnResponse; error?: unknown };
+      const type = frame.type ?? record.event;
+      if (type === "response.completed" || type === "response.incomplete" || type === "response.failed") {
+        if (!frame.response || typeof frame.response !== "object" || Array.isArray(frame.response)) {
+          throw new Error("invalid compaction terminal");
+        }
+        // The parsed terminal remains live until v1 history is materialized below.
+        reservation.commitRetained();
+        return frame.response;
+      }
+      if (type === "error") {
+        reservation.commitRetained();
+        return { error: frame.error ?? "compaction stream failed" };
+      }
+    } finally {
+      reservation.release();
+    }
+  }
+  throw new Error("compaction stream ended without a terminal response");
+}
 
 export function compactResponseTooLargeError(): Response {
   return new Response(JSON.stringify({
@@ -583,9 +616,13 @@ export async function handleResponsesCompact(
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
   // tools) and decode the resulting ccx1 envelope into plain v1 replacement-history items.
   const inputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
+  // Anthropic's nonstreaming headers can arrive only after all thinking and summary
+  // generation, exceeding the connection deadline. Use the normal streaming bridge so
+  // upstream headers arrive promptly and genuine pings keep its stall watchdog alive.
+  const streamInternally = route.provider.adapter === "anthropic";
   const internalBody = {
     ...raw,
-    stream: false,
+    stream: streamInternally,
     input: [...inputItems, { type: "compaction_trigger" }],
   };
   const internalHeaders = new Headers({ "content-type": "application/json" });
@@ -598,48 +635,64 @@ export async function handleResponsesCompact(
     headers: internalHeaders,
     body: JSON.stringify(internalBody),
   });
-  const response = await handleResponses(internalReq, config, logCtx, { abortSignal: req.signal, turnAdmissionLease });
-  if (!response.ok) return response;
-  let json: { output?: unknown[]; status?: unknown; error?: unknown };
+  const budget = streamInternally ? createTranslatorBudget() : undefined;
   try {
-    json = await response.json() as { output?: unknown[]; status?: unknown; error?: unknown };
-  } catch {
-    return formatErrorResponse(502, "server_error", "compaction turn returned a non-JSON response");
-  }
-  // The internal turn answers 200 even when it failed or was truncated, so the body
-  // has to be inspected. Reporting a failure beats installing "(no summary
-  // available)" as replacement history and silently losing the conversation (#422).
-  if (json.error) {
-    const message = typeof json.error === "string"
-      ? json.error
-      : (json.error as { message?: unknown })?.message;
-    return formatErrorResponse(502, "upstream_error", typeof message === "string" ? message : "compaction turn failed");
-  }
-  if (json.status !== "completed") {
-    return formatErrorResponse(
-      502,
-      "upstream_error",
-      `compaction turn did not complete (status: ${String(json.status ?? "unknown")})`,
+    const response = await handleResponses(internalReq, config, logCtx, {
+      abortSignal: req.signal, turnAdmissionLease, ...(budget ? { translatorBudget: budget } : {}),
+    });
+    if (!response.ok) return response;
+    let json: CompactTurnResponse;
+    try {
+      json = budget
+        ? await readCompactTurnStream(response, req.signal, budget)
+        : await response.json() as CompactTurnResponse;
+    } catch (error) {
+      if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+      return formatErrorResponse(502, "server_error", isTranslatorBudgetExceededError(error)
+        ? "compaction turn exceeded the safe translation buffer limit"
+        : budget ? "compaction turn returned an invalid or incomplete response"
+          : "compaction turn returned a non-JSON response");
+    }
+    if (req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+    // The internal turn answers 200 even when it failed or was truncated, so the body
+    // has to be inspected. Reporting a failure beats installing "(no summary
+    // available)" as replacement history and silently losing the conversation (#422).
+    if (json.error) {
+      const message = typeof json.error === "string"
+        ? json.error
+        : (json.error as { message?: unknown })?.message;
+      return formatErrorResponse(502, "upstream_error", typeof message === "string" ? message : "compaction turn failed");
+    }
+    if (json.status !== "completed") {
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        `compaction turn did not complete (status: ${String(json.status ?? "unknown")})`,
+      );
+    }
+    const compactionItems = (json.output ?? []).filter(
+      (item): item is { type: string; encrypted_content?: string } =>
+        !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
     );
+    if (compactionItems.length !== 1) {
+      return formatErrorResponse(
+        502,
+        "invalid_response_error",
+        `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
+      );
+    }
+    const encrypted = compactionItems[0]!.encrypted_content;
+    const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
+    // An empty `ccx1:` envelope decodes to "" rather than null, so length is what matters.
+    if (decoded === null || decoded.trim().length === 0) {
+      return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
+    }
+    const summary = decoded;
+    const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
+    return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
+  } finally {
+    // The compact handler owns the shared budget until its internal stream and
+    // decoder have both released their readers, including abort/error paths.
+    budget?.dispose();
   }
-  const compactionItems = (json.output ?? []).filter(
-    (item): item is { type: string; encrypted_content?: string } =>
-      !!item && typeof item === "object" && (item as { type?: string }).type === "compaction",
-  );
-  if (compactionItems.length !== 1) {
-    return formatErrorResponse(
-      502,
-      "invalid_response_error",
-      `compaction turn produced ${compactionItems.length} compaction items, expected exactly 1`,
-    );
-  }
-  const encrypted = compactionItems[0]!.encrypted_content;
-  const decoded = typeof encrypted === "string" ? decodeCompactionSummary(encrypted) : null;
-  // An empty `ccx1:` envelope decodes to "" rather than null, so length is what matters.
-  if (decoded === null || decoded.trim().length === 0) {
-    return formatErrorResponse(502, "invalid_response_error", "compaction turn produced an empty summary");
-  }
-  const summary = decoded;
-  const output = buildCompactV1Output(extractCompactUserMessages(inputItems), summary);
-  return new Response(JSON.stringify({ output }), { headers: { "Content-Type": "application/json" } });
 }
