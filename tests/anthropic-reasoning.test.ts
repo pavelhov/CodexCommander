@@ -25,6 +25,75 @@ async function bodyOf(p: CodexCommanderParsedRequest): Promise<Record<string, un
 }
 
 describe("anthropic extended-thinking gate", () => {
+  test.each([
+    "claude-opus-5-5",
+    "anthropic/claude-opus-5-5",
+    "claude-opus-5-5-20260922",
+    "claude-opus-5-5[1m]",
+    "claude-opus-5-5/vendor-suffix",
+  ])("Opus 5.5 compaction %s uses medium effort and a bounded default total", async modelId => {
+    const request = parsed("max", {}, modelId);
+    request._compactionRequest = true;
+    const b = await bodyOf(request);
+    expect(b.max_tokens).toBe(64_000);
+    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.output_config).toEqual({ effort: "medium" });
+    expect(request.options.reasoning).toBe("max");
+    expect(request.options.maxOutputTokens).toBeUndefined();
+  });
+
+  test.each([
+    [undefined, "medium"], ["medium", "medium"], ["high", "medium"],
+    ["xhigh", "medium"], ["max", "medium"], ["ultra", "medium"],
+    ["low", "low"], ["minimal", "low"], ["none", undefined],
+  ])("Opus 5.5 compaction keeps effort %s at most medium", async (effort, expected) => {
+    const request = parsed(effort, {}, "claude-opus-5-5");
+    request._compactionRequest = true;
+    const b = await bodyOf(request);
+    expect(b.max_tokens).toBe(64_000);
+    expect(b.output_config).toEqual(expected ? { effort: expected } : undefined);
+    expect(b.thinking).toEqual(expected ? { type: "adaptive" } : undefined);
+    expect(request.options.reasoning).toBe(effort);
+  });
+
+  test.each([4096, 96_000])("Opus 5.5 compaction preserves explicit total %s", async maxOutputTokens => {
+    const request = parsed("max", { maxOutputTokens }, "claude-opus-5-5");
+    request._compactionRequest = true;
+    const b = await bodyOf(request);
+    expect(b.max_tokens).toBe(maxOutputTokens);
+    expect(b.output_config).toEqual({ effort: "medium" });
+    expect(request.options).toEqual({ reasoning: "max", maxOutputTokens });
+  });
+
+  test.each([
+    ["claude-opus-5-4", 40_192], ["claude-opus-5-6", 40_192],
+    ["claude-opus-6-5", 40_192], ["claude-opus-5-50", 40_192],
+    ["claude-sonnet-5-5", 40_192], ["claude-fable-5", 40_192],
+    ["custom-model", 32_000], ["claude-opus-4-6", 32_000],
+  ])("compaction policy leaves other model %s unchanged", async (modelId, expectedMax) => {
+    const request = parsed("max", {}, modelId);
+    request._compactionRequest = true;
+    const b = await bodyOf(request);
+    expect(b.max_tokens).toBe(expectedMax);
+    if (expectedMax === 40_192) expect(b.output_config).toEqual({ effort: "max" });
+    else expect(b.thinking).toMatchObject({ type: "enabled" });
+  });
+
+  test("ordinary Opus 5.5 max effort keeps its existing default", async () => {
+    const b = await bodyOf(parsed("max", {}, "claude-opus-5-5"));
+    expect(b.max_tokens).toBe(40_192);
+    expect(b.output_config).toEqual({ effort: "max" });
+  });
+
+  test("custom Anthropic-compatible destinations keep their existing Opus 5.5 limits", async () => {
+    const request = parsed("max", {}, "claude-opus-5-5");
+    request._compactionRequest = true;
+    const built = await createAnthropicAdapter({ ...provider, baseUrl: "https://gateway.example" }).buildRequest(request);
+    const b = JSON.parse(String(built.body));
+    expect(b.max_tokens).toBe(40_192);
+    expect(b.output_config).toEqual({ effort: "max" });
+  });
+
   test("reasoning 'none' does NOT enable thinking and preserves temperature/top_p", async () => {
     const b = await bodyOf(parsed("none", { temperature: 0.3, topP: 0.9 }));
     expect(b.thinking).toBeUndefined();
@@ -69,10 +138,10 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.output_config).toEqual({ effort: "low" });
   });
 
-  test("adaptive-thinking model resizes max_tokens for high effort (issue #246)", async () => {
+  test("adaptive-thinking model uses the ordinary max-effort total (issue #246)", async () => {
     const b = await bodyOf(parsed("max", {}, "claude-fable-5"));
-    // Exact regression: effort=max budget is 32000; adaptive ceiling adds OUTPUT_HEADROOM (8192)
-    // so max_tokens = 40192, genuinely above the reasoning budget at full effort.
+    // Ordinary sizing uses a 32000-token allowance plus 8192, not a hard thinking
+    // budget: adaptive thinking can consume any portion of this shared total.
     expect(b.max_tokens as number).toBe(40_192);
     expect(b.thinking).toEqual({ type: "adaptive" });
     expect(b.output_config).toEqual({ effort: "max" });
@@ -102,7 +171,7 @@ describe("anthropic extended-thinking gate", () => {
     ["xhigh", 32_768],
     ["max", 40_192],
     ["ultra", 40_192], // ultra mirrors the codex-rs boundary and clamps to max on the wire.
-  ])("adaptive-thinking %s effort reserves visible-output headroom", async (effort, expected) => {
+  ])("adaptive-thinking %s effort uses its ordinary total-token default", async (effort, expected) => {
     const b = await bodyOf(parsed(effort, {}, "claude-fable-5"));
     expect(b.max_tokens).toBe(expected);
   });

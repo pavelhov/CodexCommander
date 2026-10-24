@@ -1056,12 +1056,23 @@ describe("server local API auth", () => {
 
     const upstream = Bun.serve({
       port: 0,
-      fetch() {
-        // Anthropic non-stream response carrying the summarizer's text.
-        return Response.json({
-          content: [{ type: "text", text: "compact summary body" }],
-          usage: { input_tokens: 10, output_tokens: 5 },
-        });
+      async fetch(request) {
+        const body = await request.json() as { stream?: boolean };
+        expect(body.stream).toBe(true);
+        return new Response([
+          'event: message_start\n',
+          'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+          'event: content_block_start\n',
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+          'event: content_block_delta\n',
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"compact summary body"}}\n\n',
+          'event: content_block_stop\n',
+          'data: {"type":"content_block_stop","index":0}\n\n',
+          'event: message_delta\n',
+          'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
+          'event: message_stop\n',
+          'data: {"type":"message_stop"}\n\n',
+        ].join(""), { headers: { "content-type": "text/event-stream" } });
       },
     });
     saveConfig({
