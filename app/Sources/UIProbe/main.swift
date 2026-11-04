@@ -217,7 +217,7 @@ private enum Fixture {
         }
         """
 
-        let quotasJSON = """
+        var quotasJSON = """
         [
           {
             "provider": "openai",
@@ -249,6 +249,16 @@ private enum Fixture {
           }
         ]
         """
+
+        if CommandLine.arguments.contains("--pool-quota") {
+            quotasJSON = """
+            [{"provider":"openai","label":"ChatGPT","source":"chatgpt:wham","updatedAt":\(ms),
+              "quota":{"weeklyPercent":29,"updatedAt":\(ms)},
+              "aggregation":{"presentation":"aggregate","includedAccounts":1,"excludedAccounts":0,
+                "currentAccount":{"quota":{"weeklyPercent":29,
+                  "weeklyResetAt":\(now.addingTimeInterval(86400).timeIntervalSince1970)}}}}]
+            """
+        }
 
         // Grok is intentionally configured but absent from quota reports: this is the
         // expired/transient-probe state that must remain visible without a fake value.

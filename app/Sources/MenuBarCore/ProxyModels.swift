@@ -411,10 +411,28 @@ public struct ProviderQuota: Decodable, Equatable, Sendable {
     public let updatedAt: Double
 }
 
+/// Pool percentages and the effective subscription's reset schedule have different scopes.
+public struct QuotaAggregation: Decodable, Equatable, Sendable {
+    public let presentation: String?
+    public let currentAccount: CurrentAccount?
+
+    public struct CurrentAccount: Decodable, Equatable, Sendable {
+        public let quota: ResetSchedule?
+    }
+
+    public struct ResetSchedule: Decodable, Equatable, Sendable {
+        public let fiveHourResetAt: Double?
+        public let weeklyResetAt: Double?
+        public let monthlyResetAt: Double?
+        public let customWindows: [QuotaWindow]?
+    }
+}
+
 public struct QuotaReport: Decodable, Equatable, Sendable {
     public let provider: String
     public let label: String
     public let source: String
+    public let aggregation: QuotaAggregation?
     public let quota: ProviderQuota
     public let updatedAt: Double
 }
@@ -549,6 +567,22 @@ public extension QuotaReport {
     /// is the measurement timestamp; the enclosing report timestamp is publication time.
     var freshnessDate: Date? {
         Self.date(from: quota.updatedAt)
+    }
+
+    /// Never attach an individual subscription's reset to the combined pool quota.
+    /// The expanded panel labels this schedule explicitly as the current account.
+    func currentAccountResetAt(for window: NormalizedQuota) -> Date? {
+        guard ["openai", "chatgpt"].contains(provider.lowercased()),
+              aggregation?.presentation == "aggregate",
+              let schedule = aggregation?.currentAccount?.quota else { return nil }
+        let value: Double?
+        switch window.windowLabel {
+        case "5h": value = schedule.fiveHourResetAt
+        case "week": value = schedule.weeklyResetAt
+        case "month": value = schedule.monthlyResetAt
+        default: value = schedule.customWindows?.first { $0.label == window.windowLabel }?.resetAt
+        }
+        return Self.date(from: value)
     }
 
     /// Every window the provider reported, in display order.

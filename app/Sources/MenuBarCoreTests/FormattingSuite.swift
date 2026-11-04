@@ -38,6 +38,23 @@ enum FormattingSuite {
             t.equal(Format.resetsIn(nil), "—")
         }
 
+        t.test("format: reset detail includes local date, time, zone, and honest state") {
+            let now = Date(timeIntervalSince1970: 1_784_915_000)
+            let reset = now.addingTimeInterval(3 * 86400 + 4 * 3600)
+            let locale = Locale(identifier: "en_US_POSIX")
+            let utc = TimeZone(secondsFromGMT: 0)!
+            let text = Format.quotaResetDetail(reset, now: now, locale: locale, timeZone: utc)
+            t.expect(text.contains("Jul") && text.contains(":"), "date and clock time are visible")
+            t.expect(text.contains("GMT"), "time zone is visible")
+            t.expect(text.hasSuffix(" · in 3d 4h"), "countdown accompanies exact time")
+            let pacific = Format.quotaResetDetail(reset, now: now, locale: locale,
+                                                  timeZone: TimeZone(identifier: "America/Los_Angeles")!)
+            t.expect(pacific != text, "reset follows the supplied local time zone")
+            t.equal(Format.quotaResetDetail(nil), "Reset time unavailable")
+            t.expect(Format.quotaResetDetail(now, now: now).hasPrefix("Reset time passed · "),
+                     "past resets do not claim a future renewal")
+        }
+
         t.test("format: staleness ages read naturally") {
             let now = Date(timeIntervalSince1970: 1_784_915_000)
             t.equal(Format.age(now.addingTimeInterval(-10), now: now), "just now")

@@ -656,7 +656,11 @@ final class QuotaBarView: NSView {
 
 /// One real quota window row inside an expanded provider card.
 final class QuotaWindowRowView: NSView {
-    init(window: NormalizedQuota) {
+    init(
+        window: NormalizedQuota,
+        showsResetDetail: Bool = false,
+        currentAccountResetAt: Date? = nil
+    ) {
         super.init(frame: .zero)
 
         let title = makeLabel(windowTitle(window.windowLabel), font: Theme.caption, color: Theme.text)
@@ -671,7 +675,7 @@ final class QuotaWindowRowView: NSView {
         used.translatesAutoresizingMaskIntoConstraints = false
         used.widthAnchor.constraint(equalToConstant: 58).isActive = true
         let reset = makeLabel(
-            resetText(window.resetAt, windowLabel: window.windowLabel),
+            currentAccountResetAt != nil ? "Account reset" : resetText(window.resetAt, windowLabel: window.windowLabel),
             font: Theme.micro,
             color: Theme.faint
         )
@@ -684,12 +688,32 @@ final class QuotaWindowRowView: NSView {
 
         let row = makeRow([title, bar, used, reset], spacing: 6)
         row.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(row)
+        let content = NSStackView(views: [row])
+        content.orientation = .vertical
+        content.alignment = .leading
+        content.spacing = 2
+        content.translatesAutoresizingMaskIntoConstraints = false
+        let detail: String?
+        if showsResetDetail, let currentAccountResetAt {
+            detail = Format.quotaResetDetail(currentAccountResetAt)
+        } else {
+            detail = showsResetDetail ? Format.quotaResetDetail(window.resetAt) : nil
+        }
+        if let detail {
+            let label = makeLabel(detail, font: Theme.micro, color: Theme.muted)
+            label.lineBreakMode = .byWordWrapping
+            label.maximumNumberOfLines = 0
+            label.preferredMaxLayoutWidth = Theme.width - Theme.gutter * 2 - 20
+            content.addArrangedSubview(label)
+            label.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
+        }
+        addSubview(content)
         NSLayoutConstraint.activate([
-            row.topAnchor.constraint(equalTo: topAnchor),
-            row.leadingAnchor.constraint(equalTo: leadingAnchor),
-            row.trailingAnchor.constraint(equalTo: trailingAnchor),
-            row.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
+            row.widthAnchor.constraint(equalTo: content.widthAnchor),
             bar.widthAnchor.constraint(greaterThanOrEqualToConstant: 78),
             bar.heightAnchor.constraint(equalToConstant: 5),
             heightAnchor.constraint(greaterThanOrEqualToConstant: 20),
@@ -697,10 +721,12 @@ final class QuotaWindowRowView: NSView {
 
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
+        let resetDescription = (currentAccountResetAt != nil ? "Current account, " : "")
+            + (detail ?? resetText(window.resetAt, windowLabel: window.windowLabel))
         setAccessibilityLabel(
             window.hasPercent
-                ? "\(windowTitle(window.windowLabel)): \(Format.percent(window.percent)) used, \(resetText(window.resetAt, windowLabel: window.windowLabel))"
-                : "\(windowTitle(window.windowLabel)): unavailable"
+                ? "\(windowTitle(window.windowLabel)): \(Format.percent(window.percent)) used, \(resetDescription)"
+                : "\(windowTitle(window.windowLabel)): unavailable, \(resetDescription)"
         )
     }
 
