@@ -677,6 +677,28 @@ runner.test("ui: expanded ChatGPT windows show exact resets and collapse hides t
     runner.equal(details().count, 3, "expanding restores reset detail")
 }
 
+runner.test("ui: pool quota reads the current subscription reset without changing pool usage") {
+    let reset = Date().addingTimeInterval(86400).timeIntervalSince1970
+    let quotas = decodeQuotas("""
+    [{"provider":"openai","label":"ChatGPT","source":"chatgpt:wham","updatedAt":1,
+      "quota":{"weeklyPercent":29,"updatedAt":1},
+      "aggregation":{"presentation":"aggregate","includedAccounts":2,
+        "weekly":{"nextRecoveryAt":\((reset - 3600) * 1000)},
+        "currentAccount":{"quota":{"weeklyPercent":50,"weeklyResetAt":\(reset)}}}}]
+    """)
+    let accordion = ProviderQuotaAccordionView()
+    accordion.apply(makeSnapshot(quotas: quotas))
+    let fields = textFields(in: accordion).map(\.stringValue)
+    runner.expect(fields.contains("29% used"), "combined pool usage is retained")
+    runner.expect(fields.contains("Current account · " + Format.quotaResetDetail(Date(timeIntervalSince1970: reset))),
+                  "account reset uses the live nested response format and labels its scope")
+    runner.expect(!fields.contains("Reset time unavailable"), "known subscription reset is visible")
+    runner.expect(fields.contains("Account reset"), "summary does not claim the whole pool resets")
+    accordion.toggleForTesting("openai")
+    runner.expect(!textFields(in: accordion).contains { $0.stringValue.hasPrefix("Current account · ") },
+                  "collapse hides the subscription detail")
+}
+
 runner.test("ui: configured Grok stays visible when its quota report is unavailable") {
     let quotas = decodeQuotas("""
     [

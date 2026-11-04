@@ -361,7 +361,8 @@ final class ProviderQuotaRowView: NSView {
                     for window in windows {
                         arranged.append(QuotaWindowRowView(
                             window: window,
-                            showsResetDetail: ["openai", "chatgpt"].contains(row.provider.lowercased())
+                            showsResetDetail: ["openai", "chatgpt"].contains(row.provider.lowercased()),
+                            currentAccountResetAt: report.currentAccountResetAt(for: window)
                         ))
                     }
                     for reference in references {

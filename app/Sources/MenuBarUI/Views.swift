@@ -656,7 +656,11 @@ final class QuotaBarView: NSView {
 
 /// One real quota window row inside an expanded provider card.
 final class QuotaWindowRowView: NSView {
-    init(window: NormalizedQuota, showsResetDetail: Bool = false) {
+    init(
+        window: NormalizedQuota,
+        showsResetDetail: Bool = false,
+        currentAccountResetAt: Date? = nil
+    ) {
         super.init(frame: .zero)
 
         let title = makeLabel(windowTitle(window.windowLabel), font: Theme.caption, color: Theme.text)
@@ -671,7 +675,7 @@ final class QuotaWindowRowView: NSView {
         used.translatesAutoresizingMaskIntoConstraints = false
         used.widthAnchor.constraint(equalToConstant: 58).isActive = true
         let reset = makeLabel(
-            resetText(window.resetAt, windowLabel: window.windowLabel),
+            currentAccountResetAt != nil ? "Account reset" : resetText(window.resetAt, windowLabel: window.windowLabel),
             font: Theme.micro,
             color: Theme.faint
         )
@@ -689,7 +693,12 @@ final class QuotaWindowRowView: NSView {
         content.alignment = .leading
         content.spacing = 2
         content.translatesAutoresizingMaskIntoConstraints = false
-        let detail = showsResetDetail ? Format.quotaResetDetail(window.resetAt) : nil
+        let detail: String?
+        if showsResetDetail, let currentAccountResetAt {
+            detail = "Current account · \(Format.quotaResetDetail(currentAccountResetAt))"
+        } else {
+            detail = showsResetDetail ? Format.quotaResetDetail(window.resetAt) : nil
+        }
         if let detail {
             let label = makeLabel(detail, font: Theme.micro, color: Theme.muted)
             label.lineBreakMode = .byWordWrapping
