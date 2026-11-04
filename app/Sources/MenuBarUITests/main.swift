@@ -654,6 +654,29 @@ runner.test("ui: ChatGPT/OpenAI expands first; Kimi and Grok stay collapsed") {
     runner.equal(accordion.expandedProviderIDs, ["kimi"], "one open section")
 }
 
+runner.test("ui: expanded ChatGPT windows show exact resets and collapse hides them") {
+    let reset = Date().addingTimeInterval(3 * 86400).timeIntervalSince1970
+    let quotas = decodeQuotas("""
+    [{"provider":"openai","label":"ChatGPT","source":"test","updatedAt":1,
+      "quota":{"updatedAt":1,"fiveHourPercent":12,"fiveHourResetAt":\(reset),
+               "weeklyPercent":22,"weeklyResetAt":\(reset * 1000),"monthlyPercent":30}}]
+    """)
+    let accordion = ProviderQuotaAccordionView()
+    accordion.apply(makeSnapshot(quotas: quotas))
+    func details() -> [String] {
+        textFields(in: accordion).map(\.stringValue).filter {
+            $0.contains(" · in ") || $0 == "Reset time unavailable"
+        }
+    }
+    runner.equal(details().count, 3, "each window has reset detail, including missing times")
+    runner.equal(details()[0], details()[1], "seconds and milliseconds produce the same reset")
+    runner.expect(details()[0].contains(":"), "clock time is visible")
+    accordion.toggleForTesting("openai")
+    runner.equal(details().count, 0, "collapsed provider hides reset details")
+    accordion.toggleForTesting("openai")
+    runner.equal(details().count, 3, "expanding restores reset detail")
+}
+
 runner.test("ui: configured Grok stays visible when its quota report is unavailable") {
     let quotas = decodeQuotas("""
     [

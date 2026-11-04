@@ -244,7 +244,11 @@ remains intact. Unrelated Codex preference edits made after sync are allowed. If
 changed, custom, ambiguous, or cannot be proved safely, CodexCommander leaves the existing route
 unchanged rather than guessing. Do not delete or edit the journal manually.
 
-ChatGPT appears first and expanded when its quota report is available. Kimi and Grok appear as
+ChatGPT appears first and expanded when its quota report is available. Each expanded ChatGPT quota
+window shows its provider-reported reset date and time in your Mac's time zone, plus a countdown.
+Missing reset times are shown as **Reset time unavailable**; a past timestamp says **Reset time passed**
+until refreshed quota data arrives. These are usage-limit resets, not subscription billing dates.
+Kimi and Grok appear as
 collapsed summaries. A configured quota-capable provider that returns no report stays visible as
 **Quota unavailable**; expand it to open Provider settings. When a linked Grok or Kimi CLI login is
 stale, the row instead says **Login needs refresh** and tells you to run `grok` or `kimi`, then use

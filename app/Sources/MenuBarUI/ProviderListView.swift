@@ -359,7 +359,10 @@ final class ProviderQuotaRowView: NSView {
                         arranged.append(ObservedLimitEventRowView(event: limitEvent))
                     }
                     for window in windows {
-                        arranged.append(QuotaWindowRowView(window: window))
+                        arranged.append(QuotaWindowRowView(
+                            window: window,
+                            showsResetDetail: ["openai", "chatgpt"].contains(row.provider.lowercased())
+                        ))
                     }
                     for reference in references {
                         arranged.append(ReferenceQuotaWindowRowView(window: reference))
