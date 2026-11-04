@@ -57,6 +57,23 @@ public enum Format {
         return "\(max(minutes, 1))m"
     }
 
+    /// Exact provider-reported reset in the user's local time, with a coarse countdown.
+    public static func quotaResetDetail(
+        _ date: Date?, now: Date = Date(),
+        locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> String {
+        guard let date, date.timeIntervalSince1970.isFinite else {
+            return "Reset time unavailable"
+        }
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.timeZone = timeZone
+        formatter.setLocalizedDateFormatFromTemplate("MMMdjmmz")
+        let timestamp = formatter.string(from: date)
+        if date <= now { return "Reset time passed · \(timestamp)" }
+        return "Resets \(timestamp) · in \(resetsIn(date, now: now))"
+    }
+
     /// "2m ago" for staleness labels on the degraded state.
     public static func age(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return unknown }

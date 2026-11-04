@@ -41,6 +41,38 @@ enum ModelDecodingSuite {
     """
 
     static func run(_ t: TestRunner) {
+        t.test("quota: pool account resets remain separate from aggregate percentages") {
+            let reset: Double = 1_900_000_000
+            let json = """
+            {"provider":"openai","label":"ChatGPT","source":"chatgpt:wham","updatedAt":1,
+             "quota":{"weeklyPercent":29,"monthlyPercent":10,"updatedAt":1},
+             "aggregation":{"presentation":"aggregate","includedAccounts":2,
+               "weekly":{"nextRecoveryAt":1800000000000},
+               "currentAccount":{"quota":{"weeklyPercent":50,"weeklyResetAt":\(reset),
+                 "monthlyResetAt":\(reset * 1000)}}}}
+            """
+            let report = try decode(QuotaReport.self, json)
+            let windows = report.normalizedWindows()
+            t.equal(windows[0].percent, 29, "pool percentage stays combined")
+            t.isNil(windows[0].resetAt, "pool is not given a single subscription's reset")
+            t.equal(report.currentAccountResetAt(for: windows[0]), Date(timeIntervalSince1970: reset),
+                    "uses account reset, not earlier partial pool recovery")
+            t.equal(report.currentAccountResetAt(for: windows[1]), Date(timeIntervalSince1970: reset),
+                    "both timestamp units are supported")
+        }
+
+        t.test("quota: missing and nonaggregate account schedules do not invent resets") {
+            for aggregation in ["null", "{}", "{\"presentation\":\"aggregate\",\"currentAccount\":{\"quota\":null}}",
+                                "{\"presentation\":\"coverage-only\",\"currentAccount\":{\"quota\":{\"weeklyResetAt\":1900000000}}}"] {
+                let report = try decode(QuotaReport.self, """
+                {"provider":"openai","label":"ChatGPT","source":"test","updatedAt":1,
+                 "quota":{"weeklyPercent":29,"updatedAt":1},"aggregation":\(aggregation)}
+                """)
+                t.isNil(report.currentAccountResetAt(for: report.normalizedWindows()[0]),
+                        "absent or inapplicable metadata stays unknown")
+            }
+        }
+
         t.test("build provenance: formats only stamped git revisions") {
             t.equal(
                 BuildProvenance.shortRevision(
