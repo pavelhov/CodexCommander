@@ -690,12 +690,12 @@ runner.test("ui: pool quota reads the current subscription reset without changin
     accordion.apply(makeSnapshot(quotas: quotas))
     let fields = textFields(in: accordion).map(\.stringValue)
     runner.expect(fields.contains("29% used"), "combined pool usage is retained")
-    runner.expect(fields.contains("Current account · " + Format.quotaResetDetail(Date(timeIntervalSince1970: reset))),
+    runner.expect(fields.contains(Format.quotaResetDetail(Date(timeIntervalSince1970: reset))),
                   "account reset uses the live nested response format and labels its scope")
     runner.expect(!fields.contains("Reset time unavailable"), "known subscription reset is visible")
     runner.expect(fields.contains("Account reset"), "summary does not claim the whole pool resets")
     accordion.toggleForTesting("openai")
-    runner.expect(!textFields(in: accordion).contains { $0.stringValue.hasPrefix("Current account · ") },
+    runner.expect(!textFields(in: accordion).contains { $0.stringValue.hasPrefix("Resets ") },
                   "collapse hides the subscription detail")
 }
 

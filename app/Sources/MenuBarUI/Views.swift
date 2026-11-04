@@ -695,7 +695,7 @@ final class QuotaWindowRowView: NSView {
         content.translatesAutoresizingMaskIntoConstraints = false
         let detail: String?
         if showsResetDetail, let currentAccountResetAt {
-            detail = "Current account · \(Format.quotaResetDetail(currentAccountResetAt))"
+            detail = Format.quotaResetDetail(currentAccountResetAt)
         } else {
             detail = showsResetDetail ? Format.quotaResetDetail(window.resetAt) : nil
         }
@@ -721,10 +721,12 @@ final class QuotaWindowRowView: NSView {
 
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
+        let resetDescription = (currentAccountResetAt != nil ? "Current account, " : "")
+            + (detail ?? resetText(window.resetAt, windowLabel: window.windowLabel))
         setAccessibilityLabel(
             window.hasPercent
-                ? "\(windowTitle(window.windowLabel)): \(Format.percent(window.percent)) used, \(detail ?? resetText(window.resetAt, windowLabel: window.windowLabel))"
-                : "\(windowTitle(window.windowLabel)): unavailable, \(detail ?? resetText(window.resetAt, windowLabel: window.windowLabel))"
+                ? "\(windowTitle(window.windowLabel)): \(Format.percent(window.percent)) used, \(resetDescription)"
+                : "\(windowTitle(window.windowLabel)): unavailable, \(resetDescription)"
         )
     }
 

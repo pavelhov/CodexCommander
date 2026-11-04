@@ -246,7 +246,7 @@ unchanged rather than guessing. Do not delete or edit the journal manually.
 
 ChatGPT appears first and expanded when its quota report is available. Each expanded ChatGPT quota
 window shows its provider-reported reset date and time in your Mac's time zone, plus a countdown.
-In Pool mode, percentages describe combined capacity. The reset detail is labeled **Current account**
+In Pool mode, percentages describe combined capacity. The reset detail is labeled **Account reset**
 and uses the effective subscription's reset schedule; other accounts can reset at different times.
 Missing reset times are shown as **Reset time unavailable**; a past timestamp says **Reset time passed**
 until refreshed quota data arrives. These are usage-limit resets, not subscription billing dates.
