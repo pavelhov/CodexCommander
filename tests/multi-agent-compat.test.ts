@@ -275,7 +275,8 @@ describe("multiAgentGuidanceText", () => {
         injectionPrompt: "Use {{model}}.",
       },
     );
-    expect(custom).toBe('<multi_agent_mode>Use team/gpt-5.6-sol.</multi_agent_mode>');
+    expect(custom).toContain("<multi_agent_mode>Use team/gpt-5.6-sol.");
+    expect(custom).toContain("spawn_agent.model");
 
     const exactBare = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
@@ -294,7 +295,8 @@ describe("multiAgentGuidanceText", () => {
         injectionPrompt: "Use {{model}}.",
       },
     );
-    expect(exactBareCustom).toBe("<multi_agent_mode>Use local-fast.</multi_agent_mode>");
+    expect(exactBareCustom).toContain("<multi_agent_mode>Use local-fast.");
+    expect(exactBareCustom).toContain("spawn_agent.model");
 
     const bareParent = await multiAgentGuidanceText(
       parsedFixture({ tools: [{ name: "spawn_agent" }] }),
@@ -602,6 +604,32 @@ describe("multiAgentGuidanceText", () => {
     expect(v2).not.toContain("Must not appear");
   });
 
+  test("custom V2 guidance keeps the spawn model contract and eligible roster annotations", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [
+      { slug: "vendor/scoped-worker", efforts: ["high"] },
+      { slug: "native-reviewer", efforts: ["high", "max"] },
+    ]);
+    const text = await multiAgentGuidanceText(
+      parsedFixture({ tools: [{ name: "spawn_agent" }] }),
+      {
+        injectionPrompt: "CUSTOM task-fit instructions. {{roster}}",
+        subagentRoster: [
+          { model: "vendor/scoped-worker", guidance: "Use for bounded implementation" },
+          { model: "native-reviewer", guidance: "Use for difficult review" },
+          { model: "missing/worker", guidance: "Excluded guidance must remain absent" },
+        ],
+      },
+    );
+    expect(text).toContain("CUSTOM task-fit instructions.");
+    expect(text).toContain("spawn_agent.model");
+    expect(text).toContain("Omitting model inherits");
+    expect(text).toContain("Use for bounded implementation");
+    expect(text).toContain("Use for difficult review");
+    expect(text).not.toContain("Excluded guidance must remain absent");
+    expect(text).not.toContain("positive turn count");
+  });
+
   test("bare-native notes do not attach to unrelated provider rows", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [
@@ -706,7 +734,7 @@ describe("multiAgentGuidanceText", () => {
     expect(text).not.toContain("Incompatible routed note");
   });
 
-  test("custom roster placeholder omits roster notes", async () => {
+  test("custom roster placeholder includes eligible roster notes", async () => {
     const dir = codexHomeFixture(V2_ON);
     catalogFixture(dir, [{
       slug: "xai/grok-4.6",
@@ -726,7 +754,7 @@ describe("multiAgentGuidanceText", () => {
 
     expect(text).toContain('"xai/grok-4.6"');
     expect(text).toContain("low/medium/high/xhigh");
-    expect(text).not.toContain("Use for independent review");
+    expect(text).toContain("Use for independent review");
   });
 
   test("native encrypted V2 guidance advertises only routes with encrypted-task capability", async () => {
@@ -864,10 +892,8 @@ describe("multiAgentGuidanceText", () => {
       },
     );
 
-    expect(text).toBe(
-      '<multi_agent_mode>CUSTOM model= effort=max'
-        + ' Available models (reasoning_effort high/max): "gpt-5.6-terra".</multi_agent_mode>',
-    );
+    expect(text).toContain('CUSTOM model= effort=max Available models (reasoning_effort high/max): "gpt-5.6-terra".');
+    expect(text).toContain("spawn_agent.model");
     expect(text).not.toContain("gpt-5.6-luna");
   });
 

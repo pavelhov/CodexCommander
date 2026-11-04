@@ -64,6 +64,18 @@ describe("Codex delegation templates", () => {
     expect(bundle.agentsBlockText).toContain("synthesis");
   });
 
+  test.each(["balanced", "orchestrator"] as const)("%s explicitly requests roster model overrides in both managed instruction sources", mode => {
+    const bundle = renderCodexDelegationBundle(mode);
+    for (const instructions of [bundle.skillText, bundle.agentsBlockText]) {
+      expect(instructions).toContain("explicitly requests model overrides");
+      expect(instructions).toContain("spawn_agent.model");
+      expect(instructions).toContain("inherits");
+      expect(instructions).toContain("fresh");
+      expect(instructions).toContain("compatible");
+    }
+    expect(bundle.skillText).not.toContain("positive partial count");
+  });
+
   test.each(["balanced", "orchestrator"] as const)(
     "%s manual setup follows platform default discovery instead of equating an unset CODEX_HOME with the Unix default",
     (mode) => {
