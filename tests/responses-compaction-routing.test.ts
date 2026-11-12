@@ -207,10 +207,11 @@ describe("Opus 5.5 output policy through the real Anthropic adapter", () => {
 
   test.each([
     [false, 4096], [true, 4096], [false, 40_192], [true, 40_192],
-  ])("ordinary caller-capped workload stays incomplete without retry (stream=%s, total=%s)", async (stream, maxOutputTokens) => {
+  ])("request policy keeps ordinary caller-capped workload incomplete without retry (stream=%s, total=%s)", async (stream, maxOutputTokens) => {
     const sent = stubAnthropic("end_turn", 60_000);
     const logCtx: RequestLogContext = { model: "", provider: "" };
-    const response = await handleResponses(compactionRequest(ordinaryBody({ stream, max_output_tokens: maxOutputTokens })), config, logCtx);
+    const response = await handleResponses(compactionRequest(ordinaryBody({ stream, max_output_tokens: maxOutputTokens })),
+      { ...config, outputTokenPolicy: "request" }, logCtx);
     expect(response.status).toBe(200);
     const result = stream ? terminal(await response.text()) : await response.json() as { status: string; incomplete_details?: { reason: string }; output: Array<{ type: string }> };
     expect(result.status).toBe("incomplete");
@@ -219,6 +220,20 @@ describe("Opus 5.5 output policy through the real Anthropic adapter", () => {
     expect(sent).toEqual([{ model: "claude-opus-5-5", maxTokens: maxOutputTokens, thinking: "adaptive",
       effort: "max", stream, tools: true }]);
     expect(logCtx.usage?.outputTokens).toBe(maxOutputTokens);
+  });
+
+  test.each([false, true])("default model-max completes an ordinary workload with a smaller caller total without retry (stream=%s)", async stream => {
+    const sent = stubAnthropic("end_turn", 60_000);
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(compactionRequest(ordinaryBody({ stream, max_output_tokens: 32_768 })), config, logCtx);
+    expect(response.status).toBe(200);
+    const result = stream ? terminal(await response.text()) : await response.json() as { status: string; output: Array<{ type: string }> };
+    expect(result.status).toBe("completed");
+    expect(result.output.some(item => item.type === "message")).toBe(true);
+    expect(result.output.some(item => item.type === "compaction")).toBe(false);
+    expect(sent).toEqual([{ model: "claude-opus-5-5", maxTokens: 128_000, thinking: "adaptive",
+      effort: "max", stream, tools: true }]);
+    expect(logCtx.usage?.outputTokens).toBe(60_000);
   });
 
   test.each(["v1", "v2"])("%s compaction gets one complete summary at medium with a bounded total", async version => {

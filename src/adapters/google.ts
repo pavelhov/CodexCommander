@@ -1,4 +1,5 @@
 import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./base";
+import { resolveOutputTokenBudget } from "../output-budget";
 import { debugDroppedFrame } from "../lib/debug";
 import { createHash } from "node:crypto";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
@@ -335,7 +336,8 @@ export function createGoogleAdapter(provider: CodexCommanderProviderConfig): Pro
       if (toolConfig) body.toolConfig = toolConfig;
 
       const generationConfig: Record<string, unknown> = {};
-      if (parsed.options.maxOutputTokens) generationConfig.maxOutputTokens = parsed.options.maxOutputTokens;
+      const maxOutputTokens = resolveOutputTokenBudget(provider, parsed);
+      if (maxOutputTokens !== undefined) generationConfig.maxOutputTokens = maxOutputTokens;
       if (parsed.options.temperature !== undefined) generationConfig.temperature = parsed.options.temperature;
       if (parsed.options.topP !== undefined) generationConfig.topP = parsed.options.topP;
       if (parsed.options.stopSequences) generationConfig.stopSequences = parsed.options.stopSequences;

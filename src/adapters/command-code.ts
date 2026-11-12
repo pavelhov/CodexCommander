@@ -1,4 +1,5 @@
 import { dispatchHttpFetch, cleanupResponseDispatch, closeAdapterObservation, observeAdapterEvent, observeDispatch, responseDispatch } from "../usage/dispatch-http";
+import { resolveOutputTokenBudget } from "../output-budget";
 import { randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -356,7 +357,7 @@ export function createCommandCodeAdapter(provider: CodexCommanderProviderConfig)
           messages: wireMessages(parsed.context.messages),
           tools: wireTools(tools),
           system,
-          max_tokens: parsed.options.maxOutputTokens ?? provider.defaultMaxOutputTokens ?? 64_000,
+          max_tokens: resolveOutputTokenBudget(provider, parsed, provider.defaultMaxOutputTokens ?? 64_000),
           // The proprietary /alpha/generate endpoint is NDJSON-stream-only; the proxy converts
           // the buffered/streamed events to the client's requested shape (parsed.stream).
           stream: true,

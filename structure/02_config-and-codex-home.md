@@ -281,11 +281,20 @@ catalog/request tier metadata may use `priority`. Do not collapse these spelling
 
 ## Provider output defaults
 
-`CodexCommanderProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` are OpenAI Chat wire defaults,
-not context-window metadata. They are applied only when a Responses request omits
-`max_output_tokens`; an explicit request value wins, then a model-specific configured value, then
-the provider default, then the adapter omits the output-budget field. `chatCompletionTokenField`
-selects that field (`max_tokens` by default or `max_completion_tokens` for providers such as Kimi).
+`CodexCommanderProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` supply output
+defaults for translated Anthropic, Chat Completions, Google, and Command Code requests. Under
+`outputTokenPolicy: "request"`, an explicit request value wins, followed by a
+model-specific configured budget, the provider default, known model capacity, and the adapter's
+existing fallback. Known output capacities come from destination-matched registry metadata and
+the generated model snapshot. They are independent of context-window caps.
+
+The top-level `outputTokenPolicy` defaults to `model-max` for existing and new configurations.
+It selects a known model capacity ahead of explicit and configured budgets for ordinary requests.
+Unknown capacities use request and adapter fallbacks.
+Compaction keeps its maintenance budgets. Resolved provider objects carry this policy and
+registry provenance only for the request, without modifying saved provider entries.
+`chatCompletionTokenField` selects the Chat Completions field (`max_tokens` by default or
+`max_completion_tokens` for providers such as Kimi).
 
 Both numeric fields must stay positive finite integers at disk-config and management validation boundaries.
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,

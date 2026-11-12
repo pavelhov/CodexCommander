@@ -1,6 +1,7 @@
 import type { IncomingMeta, ProviderAdapter } from "./base";
 import { debugDroppedFrame } from "../lib/debug";
 import { isCanonicalAnthropicEndpoint } from "../lib/anthropic-endpoint";
+import { knownModelOutputTokenLimit, resolveOutputTokenBudget } from "../output-budget";
 import type {
   AdapterEvent,
   CodexCommanderAssistantMessage,
@@ -39,7 +40,7 @@ function toAnthropicContentPart(p: CodexCommanderContentPart): unknown {
 
 /** Default `max_tokens` when Codex omits `max_output_tokens`. */
 const DEFAULT_MAX_TOKENS = 8192;
-/** Safe ceiling for `max_tokens` (thinking + visible output) across current Claude 4.x models. */
+/** Compatibility fallback when a legacy thinking model has no verified output limit. */
 const REASONING_MAX_TOKENS_CEILING = 32_000;
 /** Ordinary adaptive-thinking sizing: heuristic max effort allowance (32k) + 8192.
  * Adaptive effort is soft guidance, so this total does not reserve a hard visible-output portion. */
@@ -857,11 +858,8 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
       enforceAnthropicImageLimits(messages);
       const tools = toolsToAnthropicFormat(parsed, toolNames);
 
-      // Adaptive effort has no fixed thinking reservation: the legacy effort heuristic
-      // can exhaust its shared total before an ordinary Opus 5.5 turn finishes. Use the
-      // documented long-turn allowance only for this known model and native endpoint;
-      // compatible gateways may have lower limits. Compaction keeps its smaller summary
-      // allowance and effort cap, while an explicit caller total always wins.
+      // Native Opus maintenance keeps its smaller summary allowance and effort cap.
+      // Ordinary turns resolve their total independently from reasoning effort.
       const version = claudeFamilyVersion(parsed.modelId);
       const nativeOpus55 = version?.family === "opus" && version.major === 5 && version.minor === 5
         && isCanonicalAnthropicEndpoint(provider.baseUrl);
@@ -871,8 +869,8 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
         && requestedEffort !== "none" && requestedEffort !== "minimal" && requestedEffort !== "low"
         ? "medium"
         : requestedEffort;
-      const maxOutputTokens = parsed.options.maxOutputTokens
-        ?? (nativeOpus55 ? (opusCompaction ? OPUS_5_5_COMPACTION_MAX_TOKENS : OPUS_5_5_MAX_TOKENS) : undefined);
+      const maxOutputTokens = resolveOutputTokenBudget(provider, parsed,
+        nativeOpus55 ? (opusCompaction ? OPUS_5_5_COMPACTION_MAX_TOKENS : OPUS_5_5_MAX_TOKENS) : undefined);
       // Do not mutate parsed.options: requested-effort diagnostics describe the client.
       // Anthropic has no reasoningLog field for output_config.effort in the shared contract.
 
@@ -927,12 +925,16 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
           // visible output) and budget_tokens >= 1024. Codex sends the SAME value for both, which
           // 400s ("max_tokens must be greater than thinking.budget_tokens"). Size them so max_tokens
           // always exceeds the budget within a model-safe ceiling, reserving room for visible output.
-          const maxOut = maxOutputTokens ?? DEFAULT_MAX_TOKENS;
           const wantBudget = reasoningBudget(reasoningEffort);
-          const maxTokens = Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOut, wantBudget + OUTPUT_HEADROOM));
-          const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));
+          const knownLimit = knownModelOutputTokenLimit(provider, parsed.modelId);
+          const maxTokens = knownLimit !== undefined && maxOutputTokens !== undefined
+            ? maxOutputTokens
+            : Math.min(REASONING_MAX_TOKENS_CEILING, Math.max(maxOutputTokens ?? DEFAULT_MAX_TOKENS, wantBudget + OUTPUT_HEADROOM));
           body.max_tokens = maxTokens;
-          body.thinking = { type: "enabled", budget_tokens: budget };
+          if (maxTokens > MIN_THINKING_BUDGET) {
+            const budget = Math.max(MIN_THINKING_BUDGET, Math.min(wantBudget, maxTokens - OUTPUT_FLOOR));
+            body.thinking = { type: "enabled", budget_tokens: budget };
+          }
         }
         // Extended thinking disallows temperature != 1 and top_p — drop both or the API 400s.
         delete body.temperature;
