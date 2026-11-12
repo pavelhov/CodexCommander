@@ -1,4 +1,5 @@
 import type { KiroOAuthMetadata } from "./oauth/types";
+import type { OutputTokenPolicy } from "./output-budget";
 
 export interface CodexCommanderParsedRequest {
   modelId: string;
@@ -527,6 +528,8 @@ export interface SubagentRosterEntry {
 
 export interface CodexCommanderConfig {
   port: number;
+  /** Ordinary request output allowance. Compaction retains its bounded request budget. */
+  outputTokenPolicy?: OutputTokenPolicy;
   /** Maximum usage-log bytes read for one management snapshot. */
   managementUsageMaxReadBytes?: number;
   providers: Record<string, CodexCommanderProviderConfig>;
@@ -1017,6 +1020,9 @@ export interface RateLimitRetryPolicy {
  */
 export interface CodexCommanderProviderConfig {
   adapter: string;
+  /** Request-local policy and canonical provider provenance, never persisted. */
+  _outputTokenPolicy?: OutputTokenPolicy;
+  _registryId?: string;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;
@@ -1120,8 +1126,9 @@ export interface CodexCommanderProviderConfig {
   /** Model-specific max input token limits. Values cap auto_compact_token_limit. */
   modelMaxInputTokens?: Record<string, number>;
   /**
-   * Provider-wide fallback for chat-completions `max_tokens` when the caller omits
-   * Responses `max_output_tokens`. Adapters still let an explicit request win.
+   * Provider-wide output fallback for translated Chat, Anthropic, Google, and Command
+   * Code requests when the caller omits a total. Model-max selects a verified model
+   * allowance when available. Maintenance compactions retain their budgets.
    */
   defaultMaxOutputTokens?: number;
   /** Model-specific fallback output token budgets. Exact/model-pattern entries beat the provider default. */

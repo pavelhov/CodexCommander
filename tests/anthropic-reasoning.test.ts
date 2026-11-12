@@ -25,6 +25,44 @@ async function bodyOf(p: CodexCommanderParsedRequest): Promise<Record<string, un
 }
 
 describe("anthropic extended-thinking gate", () => {
+  test.each([undefined, "medium", "high", "xhigh", "max"])("Fable 5.2 effort %s uses its full ordinary allowance when no cap is supplied", async effort => {
+    const request = parsed(effort, {}, "claude-fable-5-2");
+    const body = await bodyOf(request);
+    expect(body.max_tokens).toBe(128_000);
+    expect(request.options.maxOutputTokens).toBeUndefined();
+  });
+
+  test("model-max raises Fable's explicit limit while request policy preserves it", async () => {
+    const request = parsed("xhigh", { maxOutputTokens: 32_768 }, "claude-fable-5-2");
+    const adapter = createAnthropicAdapter({ ...provider, _outputTokenPolicy: "model-max" });
+    const body = JSON.parse((await adapter.buildRequest(request)).body);
+    expect(body.max_tokens).toBe(128_000);
+    expect((await bodyOf(request)).max_tokens).toBe(32_768);
+    expect(request.options.maxOutputTokens).toBe(32_768);
+  });
+
+  test("known legacy Haiku uses its full allowance and preserves explicit request totals", async () => {
+    const body = await bodyOf(parsed("xhigh", {}, "claude-haiku-4-5"));
+    expect(body.max_tokens).toBe(64_000);
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 24_576 });
+    expect((await bodyOf(parsed("high", { maxOutputTokens: 8000 }, "claude-haiku-4-5"))).max_tokens).toBe(8000);
+  });
+
+  test.each([8000, 100_000])("unknown legacy models retain their compatibility heuristic for explicit %s", async explicit => {
+    const request = parsed("high", { maxOutputTokens: explicit }, "custom-model");
+    for (const policy of ["request", "model-max"] as const) {
+      const adapter = createAnthropicAdapter({ ...provider, _outputTokenPolicy: policy });
+      const body = JSON.parse((await adapter.buildRequest(request)).body);
+      expect(body.max_tokens).toBe(explicit === 8000 ? 24_576 : 32_000);
+    }
+  });
+
+  test("known legacy models keep tiny explicit totals without an invalid thinking reservation", async () => {
+    const body = await bodyOf(parsed("high", { maxOutputTokens: 64 }, "claude-haiku-4-5"));
+    expect(body.max_tokens).toBe(64);
+    expect(body.thinking).toBeUndefined();
+  });
+
   test.each([
     "claude-opus-5-5",
     "anthropic/claude-opus-5-5",
@@ -120,12 +158,12 @@ describe("anthropic extended-thinking gate", () => {
   test.each([
     ["claude-opus-5-4", 40_192], ["claude-opus-5-6", 40_192],
     ["claude-opus-6-5", 40_192], ["claude-opus-5-50", 40_192],
-    ["claude-sonnet-5-5", 40_192], ["claude-fable-5", 40_192],
-    ["custom-model", 32_000], ["claude-opus-4-6", 32_000],
-  ])("ordinary Opus 5.5 policy leaves other model %s unchanged", async (modelId, expectedMax) => {
+    ["claude-sonnet-5-5", 40_192], ["claude-fable-5", 128_000],
+    ["custom-model", 32_000], ["claude-opus-4-6", 128_000],
+  ])("ordinary model %s resolves a known allowance or compatibility fallback", async (modelId, expectedMax) => {
     const b = await bodyOf(parsed("max", {}, modelId));
     expect(b.max_tokens).toBe(expectedMax);
-    if (expectedMax === 40_192) expect(b.output_config).toEqual({ effort: "max" });
+    if (modelId !== "custom-model" && modelId !== "claude-opus-4-6") expect(b.output_config).toEqual({ effort: "max" });
     else expect(b.thinking).toMatchObject({ type: "enabled" });
   });
 
@@ -226,11 +264,10 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.output_config).toEqual({ effort: "low" });
   });
 
-  test("adaptive-thinking model uses the ordinary max-effort total (issue #246)", async () => {
+  test("adaptive-thinking model uses its known output allowance (issue #246)", async () => {
     const b = await bodyOf(parsed("max", {}, "claude-fable-5"));
-    // Ordinary sizing uses a 32000-token allowance plus 8192, not a hard thinking
-    // budget: adaptive thinking can consume any portion of this shared total.
-    expect(b.max_tokens as number).toBe(40_192);
+    // Adaptive thinking and visible output share the known model allowance.
+    expect(b.max_tokens as number).toBe(128_000);
     expect(b.thinking).toEqual({ type: "adaptive" });
     expect(b.output_config).toEqual({ effort: "max" });
   });
@@ -253,15 +290,9 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.max_tokens as number).toBe(64000);
   });
 
-  test.each([
-    ["medium", 16_384], // medium keeps its 8192 budget + headroom; never falls through to unknown.
-    ["high", 24_576],
-    ["xhigh", 32_768],
-    ["max", 40_192],
-    ["ultra", 40_192], // ultra mirrors the codex-rs boundary and clamps to max on the wire.
-  ])("adaptive-thinking %s effort uses its ordinary total-token default", async (effort, expected) => {
+  test.each(["medium", "high", "xhigh", "max", "ultra"])("adaptive-thinking %s effort retains the known model allowance", async effort => {
     const b = await bodyOf(parsed(effort, {}, "claude-fable-5"));
-    expect(b.max_tokens).toBe(expected);
+    expect(b.max_tokens).toBe(128_000);
   });
 
   test("adaptive-thinking model clamps unsupported 'ultra' effort to 'max'", async () => {
@@ -274,8 +305,8 @@ describe("anthropic extended-thinking gate", () => {
   test("adaptive-thinking model clamps unknown efforts to 'high'", async () => {
     const b = await bodyOf(parsed("ludicrous", {}, "claude-fable-5"));
     expect(b.output_config).toEqual({ effort: "high" });
-    // Unknown clamps to high on the wire AND budgets like high (16384 + headroom).
-    expect(b.max_tokens).toBe(24_576);
+    // The effort mapping leaves the model output allowance independent.
+    expect(b.max_tokens).toBe(128_000);
   });
 
   test("non-adaptive model maps ultra to the max thinking budget", async () => {

@@ -33,11 +33,16 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
-For verified Opus 5.5 on the canonical Anthropic API, the Anthropic adapter defaults ordinary
-requests with omitted output limits to the documented 128,000-token total, independently of
-effort. The requested ordinary effort and explicit output limits remain unchanged. Adaptive
-thinking shares this total with answer text; the legacy effort-to-budget heuristic is not a
-separate thinking allowance. Other models and custom destinations keep their existing defaults.
+Ordinary requests use shared output-budget resolution across adapters that expose an output
+limit. The top-level `outputTokenPolicy` defaults to `model-max` for existing and new
+configurations. It uses a known model allowance even when the caller supplies a smaller cap.
+The `request` policy honors explicit caps and configured fallbacks. Output metadata is scoped
+to the provider destination. Unknown capacities use request and adapter fallbacks, while
+protocols with no output-limit field use upstream-owned generation limits.
+
+Native Fable 5.2 and Opus 5.5 have documented 128,000-token output allowances. Adaptive thinking
+shares the total with answer text. Effort controls reasoning depth independently of that
+total. Compaction requests retain their maintenance budget policy under either setting.
 
 The Anthropic adapter applies a maintenance-only budget to fresh routed compaction requests
 for the verified Opus 5.5 model on the canonical Anthropic API: effort is capped at `medium`

@@ -13,6 +13,7 @@ import {
   estimateClaudeRequestTokens,
   fetchWithHeaderDeadline,
   handleClaudeMessages,
+  handleClaudeCountTokens,
   readBoundedPassthroughBody,
   resolvePassthroughBodyGuard,
   tapAnthropicSseForLog,
@@ -93,6 +94,7 @@ function mockConfig(baseUrl: string, claudeCode?: CodexCommanderConfig["claudeCo
     port: 0,
     multiAgentGuidanceEnabled: true,
     defaultProvider: "mock",
+    outputTokenPolicy: "request",
     providers: {
       mock: { adapter: "openai-chat", baseUrl, apiKey: "k", allowPrivateNetwork: true },
     },
@@ -275,6 +277,71 @@ test("native generated-agent passthrough preserves legacy thinking", async () =>
     await server.stop(true);
     upstream.stop(true);
   }
+});
+
+test("native Anthropic Messages applies model-max only to known model output allowances", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    captured.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return Response.json({
+      id: "msg_output_budget",
+      type: "message",
+      role: "assistant",
+      model: "claude-haiku-4-5",
+      content: [{ type: "text", text: "ok" }],
+      stop_reason: "end_turn",
+      usage: { input_tokens: 1, output_tokens: 1 },
+    });
+  }) as typeof globalThis.fetch;
+  for (const [policy, model, requested, expected, baseUrl] of [
+    [undefined, "claude-haiku-4-5", 8_000, 64_000],
+    [undefined, "claude-haiku-4-5", undefined, 64_000],
+    [undefined, "claude-fable-5-2", 32_768, 128_000],
+    ["request", "claude-fable-5-2", 32_768, 32_768],
+    ["request", "claude-haiku-4-5", 8_000, 8_000],
+    ["request", "claude-haiku-4-5", undefined, undefined],
+    ["model-max", "claude-haiku-4-5", 8_000, 64_000],
+    ["model-max", "claude-haiku-4-5", undefined, 64_000],
+    ["model-max", "claude-unknown", 8_000, 8_000],
+    ["model-max", "claude-unknown", undefined, undefined],
+    ["model-max", "claude-opus-5-5", 8_000, 8_000, "https://gateway.example.test"],
+    ["model-max", "claude-opus-5-5", 8_000, 8_000, "https://api.anthropic.com.gateway.example.test"],
+  ] as const) {
+    const config = {
+      ...mockConfig("https://example.test/v1", baseUrl ? { anthropicBaseUrl: baseUrl } : undefined),
+      outputTokenPolicy: policy,
+    };
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
+      body: JSON.stringify({
+        model,
+        ...(requested !== undefined ? { max_tokens: requested } : {}),
+        thinking: { type: "enabled", budget_tokens: 2_048 },
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    }), config, { model: "unknown", provider: "unknown" });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured.at(-1)?.max_tokens).toBe(expected);
+    expect(captured.at(-1)?.thinking).toEqual({ type: "enabled", budget_tokens: 2_048 });
+  }
+});
+
+test("native Anthropic token counting preserves its body with model-max enabled", async () => {
+  let captured: Record<string, unknown> | undefined;
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+    captured = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({ input_tokens: 4 });
+  }) as typeof globalThis.fetch;
+  const response = await handleClaudeCountTokens(new Request("http://localhost/v1/messages/count_tokens", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": "sk-ant-test" },
+    body: JSON.stringify({ model: "claude-haiku-4-5", messages: [{ role: "user", content: "hello" }] }),
+  }), { ...mockConfig("https://example.test/v1"), outputTokenPolicy: "model-max" });
+  expect(response.status).toBe(200);
+  await response.text();
+  expect(captured).not.toHaveProperty("max_tokens");
 });
 
 test("native Anthropic passthrough clears the header deadline before streaming the body", async () => {

@@ -118,14 +118,18 @@ Anthropic SSE comments and `ping` events count as upstream activity, including w
 thinking during context compaction. Proxy-generated keep-alives do not reset the stall deadline;
 an upstream connection that stops sending activity still times out.
 
-For Opus 5.5 through the canonical Anthropic API, ordinary routed turns default to a
-128,000-token total output allowance when the caller omits a limit. This uses the model's
-[documented capacity for long coding turns](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5#calibrate-effort)
-and preserves the requested reasoning effort. Adaptive thinking and answer text share the
-allowance; effort does not enforce a separate thinking budget. Explicit limits remain
-authoritative, and other models and custom Anthropic-compatible endpoints retain their defaults.
+Ordinary routed turns use known provider/model output allowances by default, including
+requests with smaller caller-supplied caps. Set the global `outputTokenPolicy` to `request`
+to honor explicit caps and configured fallback budgets. Output metadata is matched to the
+provider destination before selecting an allowance.
 
-Routed context compaction for the same model and endpoint uses at most
+Native Claude Fable 5.2 and Opus 5.5 have 128,000-token output allowances. Adaptive thinking
+and answer text share the allowance, while effort controls reasoning depth. Protocols
+that expose no output-budget field leave generation limits to the upstream service.
+See [output token allowances](/reference/configuration/providers/#output-token-allowances)
+for configuration and coverage.
+
+Routed context compaction for Opus 5.5 through the canonical Anthropic API uses at most
 `medium` reasoning effort and defaults to a 64,000-token total output limit when the caller
 omits one. Adaptive thinking and summary text share that limit; effort does not reserve a
 fixed number of tokens for the summary. Explicit output limits and lower reasoning efforts

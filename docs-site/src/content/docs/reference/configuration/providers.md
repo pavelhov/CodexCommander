@@ -14,6 +14,7 @@ authenticated.
 | `disabledModels?` | `string[]` | — | Models hidden from Codex's catalog and `/v1/models`, but not blocked from direct proxy calls. A routed id is removed from listings. An account-qualified native id hides only that selector row; a bare native GPT id hides the bare row and every account-selector row for that model. The dashboard Models page exposes only routed and bare native rows; use this configuration field directly to hide one selector-qualified row. |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | Per-provider Codex-visible context caps. A cap only lowers a known context window. |
 | `contextCapValue?` | `number` | `350000` | Value used by the dashboard context-cap controls; changing it updates every enabled `providerContextCaps` entry. |
+| `outputTokenPolicy?` | `"request" \| "model-max"` | `"model-max"` | Uses the known output allowance for ordinary requests, including requests with a smaller caller-supplied cap. Select `request` to honor caller caps and configured fallback budgets. |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | ChatGPT/Codex pool account metadata managed by Codex Auth. Secrets live separately in `codex-accounts.json`. |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | Accounts excluded from Pool selection until resumed, including the main `__main__` account when paused. |
 | `codexAccountNamespaces?` | `Record<string, string>` | — | Optional map from an arbitrary public model selector to a stored Codex account target. Each selector whose target is present adds separate `<selector>/<native-openai-model>` rows to the Codex picker; each row uses only that account. With any selector active, bare native rows are hidden in the picker, but their ids remain routable and listed by raw `/v1/models` unless explicitly disabled. |
@@ -37,6 +38,31 @@ case-insensitively; a namespaced combo alias cannot reuse a selector as its name
 configured pool ids or selector targets also cannot reuse a selector. Keep raw account ids and
 emails private; the selector is the public name. See [Routing Configuration](/reference/configuration/routing/)
 for exact-selection behavior and precedence.
+
+## Output token allowances
+
+Ordinary requests use the known output allowance for their selected provider and model by
+default. This also applies when an existing configuration omits `outputTokenPolicy`.
+
+```json
+{
+  "outputTokenPolicy": "request"
+}
+```
+
+With the default `model-max` policy, a smaller caller-supplied output cap is raised when CodexCommander has
+matching output-limit metadata for the route. For example, a 32,768-token request for native
+Claude Fable 5.2 can use its 128,000-token allowance. Thinking and visible output share that
+allowance.
+
+The `request` setting shown above honors explicit caller caps. Requests that omit a cap can
+use known model allowances after configured fallback budgets. Unknown capacities use the
+request or adapter fallback. Adapters whose upstream protocol has no output-limit field use
+the upstream's allowance.
+
+Context compaction keeps its maintenance budgets. Provider output ceilings and context
+windows still apply, and reaching a ceiling produces an incomplete response. A larger
+allowance can permit longer generation and higher usage.
 
 ## Reserved OpenAI providers
 
@@ -67,8 +93,8 @@ metadata, and Pro virtual ids rewrite to the base wire model with `reasoning.mod
 | `modelContextWindows?` | `Record<string, number>` | Per-model context caps. These override `contextWindow` and never raise smaller live metadata. |
 | `modelInputModalities?` | `Record<string, string[]>` | Per-model input hints such as `["text"]` or `["text", "image"]`. |
 | `modelMaxInputTokens?` | `Record<string, number>` | Positive per-model max input limits used for catalog auto-compaction hints. |
-| `defaultMaxOutputTokens?` | `number` | Provider-wide `openai-chat` fallback when the client omits `max_output_tokens`. |
-| `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model `openai-chat` fallback budgets; exact/pattern matches beat the provider default. |
+| `defaultMaxOutputTokens?` | `number` | Provider-wide fallback for translated Anthropic, Chat Completions, Google, and Command Code requests when the client omits an output cap. |
+| `modelMaxOutputTokens?` | `Record<string, number>` | Positive per-model fallback budgets for translated requests. Exact/pattern matches beat the provider default. The `model-max` policy uses known model allowances ahead of these budgets. |
 | `chatCompletionTokenField?` | `"max_tokens" \| "max_completion_tokens"` | Chat Completions output-budget field. Defaults to `max_tokens`; canonical Kimi Coding Plan presets use `max_completion_tokens`. |
 | `headers?` | `Record<string, string>` | Extra upstream headers. Authorization, cookies, API-key headers, embedded newlines, and invalid names are rejected. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Default OpenRouter `order`, `only`, and `allowFallbacks` preferences; valid only for canonical OpenRouter with `openai-chat`. |

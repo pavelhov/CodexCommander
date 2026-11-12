@@ -10,6 +10,7 @@ import {
 import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
+import { effectiveOutputTokenPolicy } from "./output-budget";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
 import {
@@ -253,7 +254,7 @@ function routedProviderConfig(providerName: string, provider: CodexCommanderProv
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransport(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
-    return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
+    return { ...provider, _registryId: undefined, apiKey: usableResolvedApiKey(provider.apiKey) };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const explicitKeyOverride = registryEntry.authKind === "oauth"
@@ -310,6 +311,7 @@ function routedProviderConfig(providerName: string, provider: CodexCommanderProv
 
   return {
     ...provider,
+    _registryId: registryEntry.id,
     adapter: registryEntry.adapter,
     baseUrl,
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
@@ -679,6 +681,7 @@ export function routeModel(
   policyEvidence?: PolicyRequestEvidence,
 ): RouteResult {
   const route = routeModelInternal(config, modelId, false, policyEvidence);
+  route.provider = { ...route.provider, _outputTokenPolicy: effectiveOutputTokenPolicy(config) };
   // Policy routes carry a full evaluation trace already; never rebuild it.
   if (route.routeDecision) return route;
   const accountRef = route.codexAccountNamespace;

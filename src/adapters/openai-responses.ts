@@ -1,4 +1,5 @@
 import { isNativeResponsesProvider, NATIVE_RESPONSES_HEADERS } from "../responses/native-policy";
+import { knownModelOutputTokenLimit, resolveOutputTokenBudget } from "../output-budget";
 import { createHash } from "node:crypto";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { namespacedToolName, type AdapterEvent, type CodexCommanderParsedRequest, type CodexCommanderProviderConfig, type CodexCommanderUsage } from "../types";
@@ -1234,6 +1235,11 @@ export function createResponsesPassthroughAdapter(provider: CodexCommanderProvid
           parsed._openAiVirtualSelectedModelId,
         );
         outBody = normalizeImageGenClientTools(outBody);
+      }
+      if (!forward && provider._outputTokenPolicy === "model-max"
+        && knownModelOutputTokenLimit(provider, parsed.modelId) !== undefined
+        && parsed._compactionRequest !== true && isPlainObject(outBody)) {
+        outBody = { ...outBody, max_output_tokens: resolveOutputTokenBudget(provider, parsed) };
       }
       if (!native && (forward || parsed._previousResponseInputExpanded === true)) {
         outBody = repairOversizedReplayCallIds(outBody);
