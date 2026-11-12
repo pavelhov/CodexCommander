@@ -2,6 +2,7 @@ import type { AdapterRequest, ProviderAdapter } from "./base";
 import type { AdapterEvent, CodexCommanderAssistantMessage, CodexCommanderContentPart, CodexCommanderMessage, CodexCommanderParsedRequest, CodexCommanderProviderConfig, CodexCommanderTextContent, CodexCommanderThinkingContent, CodexCommanderToolCall, CodexCommanderUsage } from "../types";
 import { isAllowedToolChoice, modelInList, namespacedToolName, resolveToolChoiceWireName, toolAllowedByChoice } from "../types";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { resolveOutputTokenBudget } from "../output-budget";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { isDebugEnabled } from "../lib/debug-settings";
 import { isCyberPolicyCode } from "../lib/errors";
@@ -881,7 +882,8 @@ export function createOpenAIChatAdapter(provider: CodexCommanderProviderConfig):
         stream: parsed.stream,
       };
       if (modelInList(provider.reasoningSplitModels, parsed.modelId)) body.reasoning_split = true;
-      const maxTokens = resolveMaxTokens(provider, parsed);
+      const requestedMaxTokens = resolveMaxTokens(provider, parsed);
+      const maxTokens = resolveOutputTokenBudget(provider, parsed, requestedMaxTokens);
       const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
       if (openRouterRouting) body.provider = openRouterProviderPayload(openRouterRouting);
       if (tools) body.tools = tools;
@@ -921,7 +923,7 @@ export function createOpenAIChatAdapter(provider: CodexCommanderProviderConfig):
             wireValue: reasoningEffort,
           };
         } else if (modelInList(provider.thinkingBudgetModels, parsed.modelId)) {
-          const budget = thinkingBudgetForEffort(parsed, reasoningEffort, maxTokens);
+          const budget = thinkingBudgetForEffort(parsed, reasoningEffort, requestedMaxTokens);
           if (budget !== undefined) {
             body.thinking_budget = budget;
             reasoningLog = {

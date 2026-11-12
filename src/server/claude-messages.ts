@@ -29,6 +29,8 @@ import {
 } from "../claude/outbound";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
+import { isCanonicalAnthropicEndpoint } from "../lib/anthropic-endpoint";
+import { effectiveOutputTokenPolicy, resolveNativeAnthropicOutputTokens } from "../output-budget";
 import { NoEligiblePolicyCandidateError, routeModel } from "../router";
 import { providerMatchesRegistryTransport } from "../providers/registry";
 import { evidenceFromBody } from "../routing/request-evidence";
@@ -351,6 +353,17 @@ async function anthropicNativePassthrough(
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
   const search = new URL(req.url).search;
+  const outputTokenPolicy = effectiveOutputTokenPolicy(config);
+  if (pathname === "/v1/messages" && outputTokenPolicy === "model-max"
+    && isCanonicalAnthropicEndpoint(base)) {
+    const maxTokens = resolveNativeAnthropicOutputTokens(
+      outputTokenPolicy,
+      model,
+      typeof body.max_tokens === "number" ? body.max_tokens : undefined,
+      false,
+    );
+    if (maxTokens !== undefined) body = { ...body, max_tokens: maxTokens };
+  }
   // Native passthrough bypasses the anthropic adapter, so the generous image pipeline
   // (implementation contract) must run here: tier-normalize then
   // guard the already-Anthropic-wire messages before serialization. Applies to
