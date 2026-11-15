@@ -222,6 +222,7 @@ Native compact responses are buffered with a 32 MiB maximum, including responses
 | --- | --- | --- |
 | 400 | `invalid_request_error` | Invalid JSON/body shape or missing model |
 | 404 | `invalid_request_error` | The requested model cannot be routed |
+| 429 | `insufficient_quota` | A routed Anthropic compaction request encountered confirmed account-quota exhaustion |
 | 499 | `client_cancelled` | The client cancelled while forwarding or buffering |
 | 502 | `compact_response_too_large` | Native compact output exceeded 32 MiB |
 | 502 | `upstream_error` | Connection, read, or synthetic compaction turn failure |

@@ -1,3 +1,4 @@
+import { usesCompactionQuotaRecovery, isCompactionQuotaHttpFailure, compactionQuotaErrorResponse, recoverCompactionQuotaEvents } from "../../responses/compaction-quota";
 import { resolveCodexTaskIdentity } from "../../codex/task-identity";
 import { rememberNativeArtifacts } from "../../codex/native-ownership";
 import { isNativeResponsesProvider, nativeClientMetadata, nativeCompatibilityPolicy, nativeLocalReplayAuthorized, nativeRequestOwner, nativeReplayScope, nativeTurnId, NATIVE_RESPONSES_HEADERS } from "../../responses/native-policy";
@@ -1900,6 +1901,16 @@ async function handleResponsesInner(
   // message, and leave Codex fataling on a missing compaction item (#422).
   const routedCompaction = parsed._compactionRequest === true
     && !isCanonicalOpenAiForwardProvider(route.provider);
+  const compactionQuotaRecovery = usesCompactionQuotaRecovery(route.provider, routedCompaction);
+  const compactionQuotaFailures = new WeakMap<Response, Promise<boolean>>();
+  const isExhaustedCompaction = (response: Response): Promise<boolean> => {
+    let result = compactionQuotaFailures.get(response);
+    if (!result) {
+      result = isCompactionQuotaHttpFailure(response, compactionQuotaRecovery, options.abortSignal);
+      compactionQuotaFailures.set(response, result);
+    }
+    return result;
+  };
   if (routedCompaction) {
     delete parsed.context.tools;
     delete parsed._webSearch;
@@ -2966,6 +2977,7 @@ async function handleResponsesInner(
         upstreamResponse.status === 429
         && rateLimitPolicy !== null
         && rateLimitRetries < rateLimitPolicy.attempts
+        && !(await isExhaustedCompaction(upstreamResponse))
       ) {
         rateLimitRetries += 1;
         // Release unread body + deliberate wait via the shared same-target helper.
@@ -3082,11 +3094,14 @@ async function handleResponsesInner(
       // Capture quota evidence from the real upstream response before the client
       // error envelope adds any synthetic Retry-After fallback.
       recordUpstreamRetryAfter(logCtx, upstreamResponse.headers.get("retry-after"));
+      const exhaustedCompaction = await isExhaustedCompaction(upstreamResponse);
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
-        return failure.response;
+        return exhaustedCompaction
+          ? compactionQuotaErrorResponse(`Provider error ${upstreamResponse.status}: ${failure.classificationText}`, upstreamResponse.headers.get("retry-after"))
+          : failure.response;
       }
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
       cleanupResponseDispatch(upstreamResponse);
@@ -3110,6 +3125,7 @@ async function handleResponsesInner(
         message,
         upstreamRetryAfter: upstreamResponse.headers.get("retry-after"),
       });
+      if (exhaustedCompaction) return compactionQuotaErrorResponse(message, upstreamResponse.headers.get("retry-after"));
       return formatErrorResponse(upstreamResponse.status, "upstream_error", message, {
         ...(retryAfter !== undefined ? { retryAfter } : {}),
       });
@@ -3376,7 +3392,9 @@ async function handleResponsesInner(
   };
 
   if (parsed.stream) {
-    const initialEventStream = observeAdapterStream(upstreamResponse, activeAdapter.parseStream(upstreamResponse, translatorBudget));
+    const initialEventStream = observeAdapterStream(upstreamResponse, recoverCompactionQuotaEvents(
+      activeAdapter.parseStream(upstreamResponse, translatorBudget), upstreamResponse.headers, compactionQuotaRecovery,
+    ));
     const eventStream = terminalGuardEnabled
       ? guardTerminalEventStream({
           parsed,
@@ -3425,14 +3443,19 @@ async function handleResponsesInner(
     const bridgeTurnAc = new AbortController();
     const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc, cleanupUpstreamAbort, options.turnAdmissionLease);
     return new Response(trackedSse, {
-      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" },
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no",
+        ...(compactionQuotaRecovery && sanitizedRetryAfter(upstreamResponse.headers.get("retry-after"), Date.now())
+          ? { "Retry-After": upstreamResponse.headers.get("retry-after")! } : {}),
+      },
     });
   }
 
   if (activeAdapter.parseResponse) {
     let events: AdapterEvent[];
     try {
-      const initialEvents = await activeAdapter.parseResponse(upstreamResponse, translatorBudget);
+      const parsedEvents = await activeAdapter.parseResponse(upstreamResponse, translatorBudget, { compactionQuotaRecovery });
+      const initialEvents: AdapterEvent[] = [];
+      for await (const event of recoverCompactionQuotaEvents(parsedEvents, upstreamResponse.headers, compactionQuotaRecovery)) initialEvents.push(event);
       for (const event of initialEvents) observeAdapterEvent(upstreamResponse, event);
       observeDispatch(() => responseDispatch(upstreamResponse)?.terminal("unknown"));
       if (terminalGuardEnabled) {
@@ -3481,7 +3504,10 @@ async function handleResponsesInner(
         activeAdapter.name === "kiro" ? { force: true } : undefined,
       );
     }
-    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json",
+      ...(compactionQuotaRecovery && sanitizedRetryAfter(upstreamResponse.headers.get("retry-after"), Date.now())
+        ? { "Retry-After": upstreamResponse.headers.get("retry-after")! } : {}),
+    } });
   }
 
   return formatErrorResponse(400, "invalid_request_error", "Non-streaming not supported by this adapter");

@@ -36,7 +36,7 @@ export interface ProviderAdapter {
   fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
 
   parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent>;
-  parseResponse?(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]>;
+  parseResponse?(response: Response, budget: TranslatorBudget, options?: { compactionQuotaRecovery?: boolean }): Promise<AdapterEvent[]>;
   runTurn?(
     parsed: CodexCommanderParsedRequest,
     incoming: IncomingMeta,

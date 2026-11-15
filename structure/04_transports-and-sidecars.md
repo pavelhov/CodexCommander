@@ -56,6 +56,15 @@ Routed Anthropic v1 compact generation streams internally and consumes the bound
 terminal through the SSE decoder before building the v1 JSON replacement history. This preserves
 the header deadline, ping-aware stall watchdog, and client cancellation for long summaries.
 
+Fresh routed Anthropic compaction preserves confirmed account exhaustion as `insufficient_quota`
+through HTTP and streaming error responses. Evidence must come from the failed upstream response,
+including a rejected five-hour or seven-day window with a future reset, or an explicit structured
+hard-quota error. Generic rate-limit errors, retry delays, and cached account usage alone do not
+establish exhaustion. Eligible account recovery precedes this terminal classification. Compatible
+Codex clients own fallback to the current model after a model-switch compaction fails.
+An all-cooled Anthropic OAuth pool rejection has no response-local exhaustion proof and keeps its
+existing generic 429 behavior.
+
 ### Responses reasoning effort boundary
 
 `openai-responses` preserves the caller's Responses request shape and the upstream response shape;

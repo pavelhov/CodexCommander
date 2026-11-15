@@ -305,6 +305,8 @@ export type AdapterEvent =
       errorType?: string;
       code?: string;
       retryable?: boolean;
+      /** Inert provider evidence; fresh compaction policy may interpret an explicit hard quota type. */
+      providerErrorType?: "insufficient_quota" | "rate_limit_error";
     };
 
 /**
