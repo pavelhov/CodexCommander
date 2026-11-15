@@ -1,3 +1,4 @@
+import { compactionQuotaErrorResponse, isExplicitQuotaError, usesCompactionQuotaRecovery } from "../../responses/compaction-quota";
 import { resolveCodexTaskIdentity } from "../../codex/task-identity";
 import { rememberNativeArtifacts } from "../../codex/native-ownership";
 import { nativeClientMetadata, nativeCompatibilityPolicy, nativeRequestOwner, nativeReplayScope, nativeTurnId, NATIVE_RESPONSES_HEADERS } from "../../responses/native-policy";
@@ -661,6 +662,9 @@ export async function handleResponsesCompact(
       const message = typeof json.error === "string"
         ? json.error
         : (json.error as { message?: unknown })?.message;
+      if (usesCompactionQuotaRecovery(route.provider, true) && isExplicitQuotaError(json.error)) {
+        return compactionQuotaErrorResponse(typeof message === "string" ? message : "compaction turn failed", response.headers.get("retry-after"));
+      }
       return formatErrorResponse(502, "upstream_error", typeof message === "string" ? message : "compaction turn failed");
     }
     if (json.status !== "completed") {
