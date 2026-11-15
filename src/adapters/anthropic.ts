@@ -1178,8 +1178,13 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
                 break;
               }
               case "error": {
-                const err = data.error as { message?: string } | undefined;
-                yield { type: "error", message: err?.message ?? "Anthropic error" };
+                const err = data.error as { message?: string; type?: unknown; code?: unknown } | undefined;
+                yield {
+                  type: "error", message: err?.message ?? "Anthropic error",
+                  ...(err?.type === "insufficient_quota" || err?.code === "insufficient_quota"
+                    ? { providerErrorType: "insufficient_quota" as const }
+                    : err?.type === "rate_limit_error" ? { providerErrorType: "rate_limit_error" as const } : {}),
+                };
                 return;
               }
         }
@@ -1245,12 +1250,22 @@ export function createAnthropicAdapter(provider: CodexCommanderProviderConfig, c
       }
     },
 
-    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
+    async parseResponse(response: Response, budget: TranslatorBudget, options?: { compactionQuotaRecovery?: boolean }): Promise<AdapterEvent[]> {
       const json = await response.json() as Record<string, unknown>;
       const responseBytes = new TextEncoder().encode(JSON.stringify(json)).byteLength;
       budget.chargeRetained(responseBytes, { kind: "retained_collectors" });
       try {
       const events: AdapterEvent[] = [];
+      if (options?.compactionQuotaRecovery && json.type === "error" && json.error && typeof json.error === "object") {
+        const error = json.error as { message?: unknown; type?: unknown; code?: unknown };
+        events.push({ type: "error", message: typeof error.message === "string" ? error.message : "Anthropic error",
+          ...(error.type === "insufficient_quota" || error.code === "insufficient_quota"
+            ? { providerErrorType: "insufficient_quota" as const }
+            : error.type === "rate_limit_error" ? { providerErrorType: "rate_limit_error" as const } : {}),
+        });
+        retainTranslatedEventBatch(events, budget);
+        return events;
+      }
       const content = json.content as { type: string; text?: string; id?: string; name?: string; input?: unknown; thinking?: string; reasoning?: string; signature?: string; data?: string }[] | undefined;
       if (content) {
         for (const block of content) {

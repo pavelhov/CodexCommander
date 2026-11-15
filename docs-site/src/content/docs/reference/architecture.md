@@ -139,6 +139,14 @@ The older compact endpoint streams routed Anthropic generation internally, then 
 JSON response to its caller. This lets upstream pings keep a long summary alive without
 extending the connection-header timeout or removing the silence watchdog.
 
+Anthropic compaction failures with confirmed exhausted account quota retain the
+`insufficient_quota` error code. Compatible Codex clients can then try their newly selected
+model for compaction after a model switch. Rejected five-hour or seven-day response headers
+with a future reset, or an explicit structured quota error, establish exhaustion. Generic
+429 errors and long retry delays keep their existing rate-limit behavior. The client owns
+the model fallback and must support it. A local cooldown rejection from an already cooled
+OAuth account pool retains its existing behavior because it has no upstream quota proof.
+
 Tool calls are disambiguated into three Responses item types using the namespace map, the freeform
 set, and the tool-search set captured by the parser — so MCP namespaces, `apply_patch`-style freeform
 tools, and client-executed `tool_search` all round-trip. A `buildResponseJSON()` variant produces a
