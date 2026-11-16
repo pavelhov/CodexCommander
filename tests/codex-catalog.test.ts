@@ -1304,6 +1304,30 @@ describe("Codex catalog routed normalization", () => {
     expect(mergedNoRoster.find(e => e.slug === "gpt-5.6-sol")?.priority).toBe(1);
     expect(mergedNoRoster.find(e => e.slug === "gpt-5.6-terra")?.priority).toBe(2);
     expect(mergedNoRoster.find(e => e.slug === "gpt-5.6-luna")?.priority).toBe(3);
+    const backfilledNative = buildCatalogEntries(nativeTemplate(), ["gpt-5.5"], []);
+    expect(mergedNoRoster.find(e => e.slug === "gpt-5.5")?.priority)
+      .toBe(backfilledNative.find(e => e.slug === "gpt-5.5")?.priority);
+  });
+
+  test("repeated merges preserve active native priorities behind the featured roster", () => {
+    const nativeRows = buildCatalogEntries(nativeTemplate(), ROSTER_NATIVE_SLUGS, []);
+    nativeRows.push({
+      ...nativeTemplate(),
+      slug: "gpt-5.3-codex-spark",
+      priority: 447,
+    });
+    const routedEntries = buildCatalogEntries(nativeTemplate(), [], ROSTER_ROUTED_MODELS, FEATURED_ROSTER);
+    const first = mergeCatalogEntriesForSync(
+      nativeRows, routedEntries, new Map(), FEATURED_ROSTER, false,
+    );
+    const activeBaseline = new Map(first.map(entry => [String(entry.slug), Number(entry.priority)]));
+    const second = mergeCatalogEntriesForSync(
+      first, routedEntries, activeBaseline, FEATURED_ROSTER, false,
+    );
+
+    expect(first.find(entry => entry.slug === "gpt-5.3-codex-spark")?.priority).toBe(447);
+    expect(second).toEqual(first);
+    expect(topFiveVisibleSlugs(second)).toEqual(FEATURED_ROSTER);
   });
 
   test("routed entries drop stale native max context with the template window (#992)", () => {

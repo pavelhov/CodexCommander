@@ -231,9 +231,9 @@ export function nativeCatalogEntryPriority(
   const featuredRank = rank.get(slug);
   if (featuredRank !== undefined) return featuredRank;
   if (featuredCount > 0) {
-    // Keep native rows directly behind the featured block. A 100-slot gap
-    // placed every native below a long routed tail in the desktop picker.
-    return featuredCount + Math.max(0, typeof baselinePriority === "number" ? baselinePriority : 9);
+    // The active catalog can supply an already-adjusted baseline on refresh.
+    // Floor it behind the featured block so unchanged rows remain stable.
+    return Math.max(featuredCount, typeof baselinePriority === "number" ? baselinePriority : 9);
   }
   return baselinePriority;
 }
@@ -744,8 +744,11 @@ export function mergeCatalogEntriesForSync(
   for (const slug of resolvedNativeSlugs) {
     if (nativeSlugs.has(slug) || freshBareComboAliases.has(slug) || suppressedBareNativeSlugs.has(slug)) continue;
     nativeSlugs.add(slug);
-    const priority = nativeCatalogEntryPriority(slug, rank, featured.length, 9);
-    native.push(deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", priority, undefined, exactComboSlugs, nativeSourceEntries));
+    const entry = deriveEntry(template ? JSON.parse(JSON.stringify(template)) : null, slug, "OpenAI native model (Codex OAuth passthrough).", 9, undefined, exactComboSlugs, nativeSourceEntries);
+    entry.priority = nativeCatalogEntryPriority(
+      slug, rank, featured.length, typeof entry.priority === "number" ? entry.priority : 9,
+    );
+    native.push(entry);
   }
   }
 
