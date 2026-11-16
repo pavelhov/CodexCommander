@@ -189,6 +189,39 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).toContain("gpt-5.5");
   });
 
+  test("unchanged featured refresh preserves active native priorities and skips catalog writes", async () => {
+    const bundled = bundledCatalogFixture(SYNC_BUNDLED_SLUGS.filter(slug => slug !== "gpt-5.3-codex-spark"));
+    createCodexRuntimeFixture(fixtureDir, {
+      version: "0.146.0",
+      catalog: bundled,
+    });
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [...bundled.models, nativeEntry("gpt-5.3-codex-spark", 447)],
+    }, null, 2) + "\n");
+    const config = {
+      ...getDefaultConfig(),
+      providers: {
+        openai: {
+          ...getDefaultConfig().providers.openai!,
+          liveModels: false,
+        },
+      },
+      subagentModels: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.6-sol", "gpt-5.6-terra"]
+        .map(model => ({ model })),
+    };
+
+    await convergeCatalogForTest(config);
+    const firstBytes = readFileSync(catalogPath, "utf8");
+    const second = await convergeCatalogForTest(config);
+
+    expect(second.catalogWritten).toBe(false);
+    expect(readFileSync(catalogPath, "utf8")).toBe(firstBytes);
+    const rows = JSON.parse(firstBytes).models as Array<{ slug: string; priority: number }>;
+    expect(rows.find(row => row.slug === "gpt-5.3-codex-spark")?.priority).toBe(447);
+  });
+
   test("account rows reconcile idempotently and independently from provider outages", async () => {
     const catalogPath = join(codexHome, "catalog.json");
     const firstCatalogPath = join(codexCommanderHome, "first-catalog.json");

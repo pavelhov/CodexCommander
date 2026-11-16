@@ -302,5 +302,8 @@ reopen it. You can return to the same task and check the refreshed model picker.
 indicates when that restart is pending and provides restart steps. A new task in an already-running
 worker does not reload the catalog.
 
+Repeated refreshes of an unchanged model list preserve the catalog timestamp. After the worker
+reloads the current catalog, refreshing that same list keeps the restart requirement cleared.
+
 CodexCommander rewrites `models_cache.json` with a deliberately stale cache wrapper whenever catalog
 visibility, priority, or metadata changes, so the next Codex model refresh reads the new catalog.
