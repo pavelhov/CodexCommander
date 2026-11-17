@@ -117,14 +117,14 @@ The dashboard's **Sub-agent delegation** controls three related settings:
 
 - `injectionModel` is the preferred worker model named in CodexCommander guidance.
 - `injectionEffort` is the optional `reasoning_effort` to request for that model.
-- `injectionPrompt` replaces the built-in V2 guidance text.
+- `injectionPrompt` customizes the V2 guidance body. When a preferred model or eligible roster resolves, explicit spawn-model instructions are retained.
 
 `multiAgentGuidanceEnabled` defaults to on and is the master switch for CodexCommander-authored guidance
 on both surfaces. Turning it off suppresses both the V2 designation block and V1 proactive text.
 
 These are instructions to the main agent, not a proxy-side spawn router. On V2, a full-history fork
 inherits the parent model and rejects model or effort overrides. Guidance therefore tells Codex to
-use `fork_turns: "none"` (or a positive partial turn count such as `"3"`) when passing `model` or
+use `fork_turns: "none"` when passing `model` or
 `reasoning_effort`, and to make the task message self-contained.
 
 ### Native continuation and caching
@@ -151,7 +151,8 @@ Guidance is optional, sanitized operator text. Empty text is omitted; nonempty t
 Unicode code points. Treat it as untrusted advisory context, not as an effort, quota, role, or
 fallback control. On eligible V2 turns CodexCommander first applies live picker, surface, route, and
 encrypted-task compatibility filters, then adds every surviving row annotation to the built-in
-developer message without an aggregate character budget. Row guidance is not injected on V1 and is
+developer message or custom `{{roster}}` expansion without an aggregate character budget.
+Row guidance is not injected on V1 and is
 never copied into the managed skill or global `AGENTS.md` policy.
 
 Custom `injectionPrompt` text can use all four placeholders:
@@ -160,13 +161,19 @@ Custom `injectionPrompt` text can use all four placeholders:
 | --- | --- |
 | `{{model}}` | The effective preferred model for this request. A bare native `injectionModel` is account-qualified only when the request itself targets an explicit account selector. An unresolved or ambiguous bare value becomes an empty string; an unresolved explicit account-qualified or routed id remains unchanged |
 | `{{effort}}` | The configured `injectionEffort`, or an empty string |
-| `{{roster}}` | The resolved picker-visible, surface-compatible roster |
+| `{{roster}}` | The resolved picker-visible, surface-compatible roster and its eligible per-model guidance |
 | `{{fallback}}` | The configured global fallback guidance |
 
 Built-in V2 guidance includes every accepted roster annotation that survives the compatibility
 filters. Built-in guidance fires only when a preferred model, eligible roster, or fallback chain
-resolves. A configured `injectionModel` is sufficient to render a custom prompt; if a bare value
-cannot resolve uniquely, `{{model}}` expands to an empty string.
+resolves. An eligible `injectionModel` is sufficient to render a custom prompt. If a bare value
+cannot resolve uniquely, `{{model}}` expands to an empty string when another eligible roster or
+fallback keeps the custom prompt active; otherwise guidance stays silent.
+
+When a preferred model or eligible roster resolves, built-in and custom guidance explain that a selected model must be passed explicitly in
+`spawn_agent.model`; leaving it out inherits the native default or parent model. The managed skill
+and `AGENTS.md` policy explicitly request task-fit overrides from the fresh, compatible live roster.
+They contain no fixed model IDs, and native validation remains authoritative.
 
 On V1, CodexCommander injects only the upstream-style proactive delegation guidance at `max` or `ultra`
 effort. It does not add a preferred model, roster, fallback list, or custom prompt on V1.
@@ -326,8 +333,9 @@ main agent still decides whether to delegate.
 
 ### Why did my V2 child use the parent model?
 
-A full-history V2 fork inherits the parent model. Use a spawn that sets `fork_turns` to `"none"` or
-a positive partial count before passing a model or effort override.
+A full-history V2 fork inherits the parent model. Choose an eligible model from the live roster,
+pass its exact ID in `spawn_agent.model`, and set `fork_turns` to `"none"` when using an override.
+Refresh the managed delegation setup so its policy explicitly requests roster selection.
 
 ### Why is a configured model missing from the V2 roster?
 

@@ -214,7 +214,8 @@ than overwritten, so they may continue to override the requested defaults.
 
 Per-row roster guidance is separate live V2 developer text. It is optional sanitized operator text
 (empty omitted, at most 160 Unicode code points), advisory and untrusted rather than an effort, quota,
-role, or fallback control. The built-in developer message includes every accepted annotation that
+role, or fallback control. The built-in developer message and custom `{{roster}}` expansion include
+every accepted annotation that
 survives the live V2 compatibility filters; it is not copied into the managed skill or `AGENTS.md`.
 
 :::caution
@@ -224,10 +225,12 @@ they have been synchronized. See
 [Sub-agent Surface](/guides/sub-agent-surface/) for the canonical V1/base/V2 behavior.
 :::
 
-The spawn override guarantee applies to the **built-in** V2 guidance text. A custom
-`injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}`
-placeholders (and optionally `{{roster}}`) or those values will not appear in the injected
-guidance.
+When a preferred model or eligible roster resolves, built-in and custom V2 guidance explain how to pass the selected model explicitly to
+`spawn_agent.model`; omission inherits the native default or parent model. The managed delegation
+skill and `AGENTS.md` policy explicitly request task-fit overrides when the live catalog is fresh
+and the target is compatible. A custom `injectionPrompt` must still include `{{model}}`, `{{effort}}`,
+or `{{roster}}` to include those configured values. The roster placeholder also includes eligible
+per-model guidance.
 
 The picker offers enabled native and routed models plus the global Codex effort ladder. The API
 validates the selected effort globally; Codex still validates a spawn effort against the target
