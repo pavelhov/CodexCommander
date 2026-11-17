@@ -37,6 +37,14 @@ the rows being merged. This split is required because empty or partial provider 
 preserve routed entries and genuine user-native rows from the file that will be overwritten; a
 bundled catalog never contains those rows.
 
+Production refresh settles the bundled template before catalog admission, including when an active
+catalog already exists. When the selected runtime supplies a bundled catalog, the memo's TTL
+schedules a new runtime read; expiry or a cold proxy process must not silently switch routed entries
+to a template copied from the active catalog. Without an available bundled source, the existing
+active-catalog, backup, and models-cache fallback policy still applies. The gather itself remains
+observe-only. Live native discovery still supplies authoritative native row metadata independently
+of the bundled compatibility template used for routed rows.
+
 Codex App model picker visibility comes from this shared catalog, not from patching the App.
 
 When native OpenAI discovery is unavailable for a signed-in home, catalog convergence
@@ -147,6 +155,9 @@ their existing narrow non-browser flows.
 The desired revision is semantic rather than a filesystem timestamp. Catalog commits are idempotent:
 JSON-semantic equality ignores insignificant whitespace and object-key order while preserving array
 order, so equivalent catalog/cache artifacts are not rewritten merely to manufacture a newer mtime.
+This includes refreshes after bundled-template cache expiry or proxy restart when the bundled source
+is available and the selected runtime, discovered models, and metadata are unchanged. Genuine upstream
+capability or runtime changes can still publish a new catalog and require a worker reload.
 Worker freshness uses the newer of the catalog mtime and a content-scoped Codex boot fence. The boot
 fence hashes only parsed worker boot inputs and persists the time that hash last changed, so desktop-
 owned `config.toml` churn does not manufacture a reload requirement while real boot-setting edits do.
