@@ -54,11 +54,11 @@ const defaultDeps: RefreshDeps = {
   // Existing installations may predate the cooperating generation database.
   // Preparing generation zero is orchestration, not a catalog candidate write.
   prepareConfigGeneration: () => { withConfigMutationLockSync(() => undefined); },
-  // The canonical gather is deliberately observe-only. Settle the runtime and
-  // bundled memo here so a fresh home still has a native template to converge.
+  // The canonical gather is observe-only. Settle the runtime and native discovery
+  // before refreshing the bundled template, then admit that settled source state.
   primeCatalogSource: async () => {
-    primeBundledCatalogForGatherIfNeeded();
     await refreshNativeLiveCatalog();
+    primeBundledCatalogForGatherIfNeeded();
   },
   existsSync,
 };

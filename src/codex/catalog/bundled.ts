@@ -109,7 +109,7 @@ function bundledRuntimeKey(
 function publishBundledCatalogCache(
   key: string,
   expiresAt: number,
-  value: RawCatalog | null,
+  value: ReadonlyRawCatalog | null,
 ): void {
   const epoch = ++bundledCatalogEpoch;
   const runtime = peekCodexRuntimeProcessCache();
@@ -321,11 +321,15 @@ export function loadBundledCodexCatalog(deps: BundledCatalogDeps = {}): Readonly
     } catch { /* try next candidate */ }
   }
   if (useCache && cacheKey) {
+    // A transient probe failure does not change an already-verified runtime's
+    // metadata. Keep its last good template until the runtime identity changes.
+    const retained = bundledCatalogCache?.key === cacheKey ? bundledCatalogCache.value : null;
     publishBundledCatalogCache(
       cacheKey,
       Date.now() + BUNDLED_CATALOG_CACHE_MS,
-      null,
+      retained,
     );
+    return retained === null ? null : cloneAndDeepFreeze(retained);
   }
   return null;
 }
@@ -432,29 +436,9 @@ export function peekCodexRuntimeForCatalogGather(
  * Resolve only already-observed catalog sources. A cold process cache falls
  * through to evidence-owned persisted sources and never becomes probe authority.
  */
-export function resolveCatalogSourceForGather(
+function observedCatalogSourceForGather(
   evidenceSession: CatalogGatherEvidenceSession,
-): CatalogSourceForGather {
-  const bundledMemo = bundledCatalogCache;
-  if (bundledMemo?.value && bundledMemo.expiresAt > Date.now()) {
-    const runtime = peekCodexRuntimeForCatalogGather(evidenceSession);
-    if (runtime.kind === "available" && bundledMemo.key === bundledRuntimeKey(runtime.runtime)) {
-      return cloneAndDeepFreeze({
-        kind: "available" as const,
-        source: "bundled-catalog-template" as const,
-        catalog: bundledMemo.value,
-        processLocal: {
-          runtime: runtime.processLocal,
-          bundledCatalog: {
-            state: "used" as const,
-            epoch: bundledMemo.epoch,
-            valueIdentity: bundledMemo.valueIdentity,
-          },
-        },
-      });
-    }
-  }
-
+): Extract<CatalogSourceForGather, { kind: "available" }> | null {
   const roles = [
     "active-catalog-merge",
     "hashed-backup-fallback",
@@ -479,6 +463,42 @@ export function resolveCatalogSourceForGather(
       },
     });
   }
+  return null;
+}
+
+export function resolveCatalogSourceForGather(
+  evidenceSession: CatalogGatherEvidenceSession,
+  preferBundled = true,
+): CatalogSourceForGather {
+  if (!preferBundled) {
+    const observed = observedCatalogSourceForGather(evidenceSession);
+    if (observed) return observed;
+  }
+  const bundledMemo = bundledCatalogCache;
+  // TTL schedules a refresh in orchestration, rather than changing the source
+  // an admitted gather may use after its runtime identity has been verified.
+  if (bundledMemo?.value) {
+    const runtime = peekCodexRuntimeForCatalogGather(evidenceSession);
+    if (runtime.kind === "available" && bundledMemo.key === bundledRuntimeKey(runtime.runtime)) {
+      return cloneAndDeepFreeze({
+        kind: "available" as const,
+        source: "bundled-catalog-template" as const,
+        catalog: bundledMemo.value,
+        processLocal: {
+          runtime: runtime.processLocal,
+          bundledCatalog: {
+            state: "used" as const,
+            epoch: bundledMemo.epoch,
+            valueIdentity: bundledMemo.valueIdentity,
+          },
+        },
+      });
+    }
+  }
+  if (preferBundled) {
+    const observed = observedCatalogSourceForGather(evidenceSession);
+    if (observed) return observed;
+  }
 
   return Object.freeze({
     kind: "catalog-unavailable" as const,
@@ -490,15 +510,14 @@ export function resolveCatalogSourceForGather(
 }
 
 /**
- * Production orchestration for a cold/fresh home. Existing valid disk sources
- * remain authoritative; only their absence primes the runtime-backed bundled
- * memo that the observe-only gather may subsequently consume.
+ * Settle the default managed catalog's runtime-backed template before admission.
+ * Custom catalogs keep their observed disk sources ahead of the bundled fallback.
  */
 export function primeBundledCatalogForGatherIfNeeded(): void {
   const catalogPath = readCodexCatalogPath();
-  if (readCatalog(catalogPath)
+  if (!isDefaultCatalogPath(catalogPath) && (readCatalog(catalogPath)
     || readCatalog(catalogBackupPathFor(catalogPath))
-    || readCatalog(activeCodexModelsCachePath())) return;
+    || readCatalog(activeCodexModelsCachePath()))) return;
   loadBundledCodexCatalog();
 }
 
