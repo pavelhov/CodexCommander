@@ -101,10 +101,10 @@ export function createManagementConvergeCodex(
       // runtime probe. Priming may add persisted runtime evidence, so discard
       // this preflight and capture the admitted snapshot again afterwards.
       captureCatalogAdmissionSnapshot(retainedConfig);
-      primeBundledCatalogForGatherIfNeeded();
       // The gather carries previously published native rows when this refresh
       // cannot provide an admitted catalog.
       await refreshNativeLiveCatalog();
+      primeBundledCatalogForGatherIfNeeded();
       const snapshot = captureCatalogAdmissionSnapshot(retainedConfig);
       const result = await convergeCodexCatalog(snapshot, request, {
         onCommitBegin: () => { commitBegan = true; },

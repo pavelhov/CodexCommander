@@ -46,6 +46,7 @@ import {
   findNativeTemplate,
   parseCatalogJson,
   retainedRoutedCatalogPath,
+  samePath,
   writeRetainedRoutedCatalogAtPath,
   type RawCatalog,
   type RawEntry,
@@ -568,7 +569,9 @@ export async function gatherCodexCatalogCandidate(
       };
     }
     const paths = bindGatherPaths(session, snapshot);
-    const source = resolveCatalogSourceForGather(session);
+    const source = resolveCatalogSourceForGather(session, samePath(
+      paths.catalog, join(home.canonicalCodexHome, "codexcommander-catalog.json"),
+    ));
     if (source.kind === "catalog-unavailable") {
       return { kind: "disposition", disposition: { status: "skipped", reason: "catalog-unavailable", retryable: false } };
     }

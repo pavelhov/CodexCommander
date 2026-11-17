@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { readCodexCatalogPath, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
@@ -227,25 +227,30 @@ describe("Codex catalog sync hardening", () => {
     const firstCatalogPath = join(codexCommanderHome, "first-catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
     const accountMarker = "account-selector-v1";
+    const customNatives: Record<string, unknown>[] = [
+      {
+        ...nativeEntry("gpt-5.5", 0),
+        comp_hash: "native-5.5-hash",
+        base_instructions: "Native 5.5 instructions",
+        model_messages: { instructions_template: "Native 5.5 instructions" },
+        tool_mode: null,
+        context_window: 128_000,
+        max_context_window: 128_000,
+        auto_compact_token_limit: 115_200,
+        custom_native_capability: { enabled: false },
+      },
+      {
+        ...nativeEntry("gpt-5.4", 1),
+        comp_hash: "native-5.4-hash",
+        base_instructions: "Native 5.4 instructions",
+        model_messages: { instructions_template: "Native 5.4 instructions" },
+        tool_mode: "code_mode_only",
+        custom_native_capability: { enabled: true },
+      },
+    ];
     writeFileSync(catalogPath, JSON.stringify({
       models: [
-        {
-          ...nativeEntry("gpt-5.5", 0),
-          comp_hash: "native-5.5-hash",
-          base_instructions: "Native 5.5 instructions",
-          model_messages: { instructions_template: "Native 5.5 instructions" },
-          tool_mode: null,
-          context_window: 128_000,
-          max_context_window: 128_000,
-          auto_compact_token_limit: 115_200,
-        },
-        {
-          ...nativeEntry("gpt-5.4", 1),
-          comp_hash: "native-5.4-hash",
-          base_instructions: "Native 5.4 instructions",
-          model_messages: { instructions_template: "Native 5.4 instructions" },
-          tool_mode: "code_mode_only",
-        },
+        ...customNatives,
         nativeEntry("gpt-5.4-mini", 2),
         routedEntry("vendor/stable-model", 5),
         { ...routedEntry("foreign/gpt-5.5", 6), description: "Foreign provider description" },
@@ -284,7 +289,9 @@ describe("Codex catalog sync hardening", () => {
     await syncCatalog(config);
     const firstWarnings = await syncCatalog(config);
     writeFileSync(firstCatalogPath, readFileSync(catalogPath));
+    const firstCatalogMtime = statSync(catalogPath).mtimeMs;
     const secondWarnings = await syncCatalog(config);
+    expect(statSync(catalogPath).mtimeMs).toBe(firstCatalogMtime);
     const warnings = `${firstWarnings}\n${secondWarnings}`;
     expect(warnings).toContain("routed model fetch returned empty; preserving 2 existing routed entries");
     expect(warnings).not.toContain("account selector collision");
@@ -305,18 +312,25 @@ describe("Codex catalog sync hardening", () => {
     }>;
     const firstRows = JSON.parse(readFileSync(firstCatalogPath, "utf8")).models as typeof rows;
     expect(rows).toEqual(firstRows);
-    const firstBare = firstRows.find(row => row.slug === "gpt-5.5");
-    const firstTeam = firstRows.find(row => row.slug === "team/gpt-5.5");
-    const source = bundledCatalogFixture(SYNC_BUNDLED_SLUGS).models.find(row => row.slug === "gpt-5.5")!;
-    for (const row of [firstBare, firstTeam]) {
-      expect(row).toBeDefined();
-      for (const key of ["context_window", "max_context_window", "auto_compact_token_limit"]) {
-        expect(row).not.toHaveProperty(key);
+    for (const source of customNatives) {
+      for (const row of [
+        firstRows.find(row => row.slug === source.slug),
+        firstRows.find(row => row.slug === `team/${source.slug}`),
+      ]) {
+        expect(row).toBeDefined();
+        for (const key of ["context_window", "max_context_window", "auto_compact_token_limit"]) {
+          if (key in source) expect(row).toHaveProperty(key, source[key]);
+          else expect(row).not.toHaveProperty(key);
+        }
+        expect(row).toMatchObject({
+          base_instructions: source.base_instructions,
+          supported_reasoning_levels: source.supported_reasoning_levels,
+          comp_hash: source.comp_hash,
+          model_messages: source.model_messages,
+          tool_mode: source.tool_mode,
+          custom_native_capability: source.custom_native_capability,
+        });
       }
-      expect(row).toMatchObject({
-        base_instructions: source.base_instructions,
-        supported_reasoning_levels: source.supported_reasoning_levels,
-      });
     }
     expect(rows.some(row => row.slug === "vendor/stable-model")).toBe(true);
     expect(rows.some(row => row.slug === "foreign/gpt-5.5")).toBe(true);
